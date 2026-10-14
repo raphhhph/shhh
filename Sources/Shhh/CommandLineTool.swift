@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 /// Terminal test modes, to check each part of the pipeline without the app:
 ///
@@ -7,6 +7,7 @@ import Foundation
 ///     Shhh --style <style> "<text>"    apply a writing style: veryFormal, casual, veryCasual
 ///     Shhh --microphones               list microphones and show what Automatic picks
 ///     Shhh --record <seconds>          record from the Automatic microphone and transcribe
+///     Shhh --ask "<request>" […]       ask the assistant (later requests follow up) and show the card
 enum CommandLineTool {
     private static let usage = """
     Usage:
@@ -15,6 +16,7 @@ enum CommandLineTool {
       Shhh --style <veryFormal|casual|veryCasual> "<text>"
       Shhh --microphones
       Shhh --record <seconds>
+      Shhh --ask "<request>" ["<follow-up>" …]
     """
 
     /// Runs a test mode and exits if one was requested; returns otherwise.
@@ -39,6 +41,11 @@ enum CommandLineTool {
         case ("--record", 2):
             guard let seconds = Double(args[1]) else { fail("Usage: Shhh --record <seconds>") }
             run { try await record(seconds: seconds) }
+        case ("--ask", 2...):
+            MainActor.assumeIsolated { ask(Array(args.dropFirst())) }
+            NSApplication.shared.setActivationPolicy(.accessory)
+            NSApplication.shared.run()
+            exit(0)
         default:
             fail(usage)
         }
@@ -76,6 +83,54 @@ enum CommandLineTool {
         let transcriber = Transcriber()
         try await transcriber.load { _ in }
         print("Text:", try await transcriber.transcribe(samples))
+    }
+
+    @MainActor private static let panel = AnswerPanel()
+    @MainActor private static let assistant = Assistant()
+
+    /// Shows the answer card as the app would, and prints its height as the reply streams in.
+    /// Actions that need the user's OK are denied (set SHHH_ALLOW=1 to allow them).
+    @MainActor
+    private static func ask(_ requests: [String]) {
+        var requests = requests
+        let start = Date()
+        var lastHeight: CGFloat = 0
+        panel.onClose = { exit(0) }
+        panel.reset()
+        assistant.prepare(depth: .quick) { event in
+            panel.update(event)
+            switch event {
+            case .status(let status?): print(String(format: "[%.1fs] %@", Date().timeIntervalSince(start), status))
+            case .failed(let message): fail("Error: \(message)")
+            case .approval(let approval?):
+                // Denied unless SHHH_ALLOW=1, so a test can't send or change anything by accident.
+                let allow = ProcessInfo.processInfo.environment["SHHH_ALLOW"] == "1"
+                print("Wants to: \(approval.title)\n\(approval.detail)\n→ \(allow ? "allowed" : "denied")")
+                approval.decide(allow ? .allow : .deny)
+            case .turnFinished where requests.count > 1:
+                requests.removeFirst()
+                print(String(format: "[%.1fs] Reply: %@\n[%.1fs] Follow-up: %@", Date().timeIntervalSince(start),
+                             panel.answer, Date().timeIntervalSince(start), requests[0]))
+                panel.beginTurn(question: requests[0])
+                assistant.ask(requests[0])
+            case .turnFinished:
+                // Give the card a moment to settle before the final measurement.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    MainActor.assumeIsolated {
+                        print(String(format: "[%.1fs] Reply: %@\nDone. Card %.0f pt tall, content needs %.0f pt",
+                                     Date().timeIntervalSince(start), panel.answer, panel.frame.height, panel.contentHeight))
+                        exit(0)
+                    }
+                }
+            default: break
+            }
+            if panel.frame.height != lastHeight {
+                lastHeight = panel.frame.height
+                print(String(format: "[%.1fs] card height %.0f", Date().timeIntervalSince(start), lastHeight))
+            }
+        }
+        panel.beginTurn(question: requests[0])
+        assistant.ask(requests[0])
     }
 
     private static func run(_ work: @escaping () async throws -> Void) -> Never {

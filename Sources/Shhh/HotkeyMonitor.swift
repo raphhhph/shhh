@@ -1,21 +1,44 @@
 import AppKit
 
-/// Watches the right Command key globally.
+/// Watches the right Command and right Option keys globally.
 ///
-/// Holding right ⌘ alone fires `onPress`, letting go fires `onRelease`.
-/// If another key is pressed while right ⌘ is held (a normal shortcut like ⌘C),
+/// Holding one of them alone fires `onPress`, letting go fires `onRelease`.
+/// If another key is pressed while it's held (a normal shortcut like ⌘C),
 /// `onCancel` fires instead and the release is ignored.
 @MainActor
 final class HotkeyMonitor {
-    var onPress: () -> Void = {}
-    var onRelease: () -> Void = {}
-    var onCancel: () -> Void = {}
+    enum Key {
+        case rightCommand, rightOption
 
-    private static let rightCommandKeyCode: UInt16 = 54
-    private static let rightCommandDeviceMask: UInt = 0x10 // NX_DEVICERCMDKEYMASK
+        fileprivate var keyCode: UInt16 {
+            switch self {
+            case .rightCommand: 54
+            case .rightOption: 61
+            }
+        }
+
+        fileprivate var deviceMask: UInt {
+            switch self {
+            case .rightCommand: 0x10 // NX_DEVICERCMDKEYMASK
+            case .rightOption: 0x40 // NX_DEVICERALTKEYMASK
+            }
+        }
+
+        fileprivate var modifier: NSEvent.ModifierFlags {
+            switch self {
+            case .rightCommand: .command
+            case .rightOption: .option
+            }
+        }
+    }
+
+    var onPress: (Key) -> Void = { _ in }
+    var onRelease: (Key) -> Void = { _ in }
+    var onCancel: (Key) -> Void = { _ in }
 
     private var monitors: [Any] = []
-    private var isDown = false
+    /// The key being held, if any.
+    private var held: Key?
     private var cancelled = false
     private var releaseCheck: Timer?
 
@@ -43,30 +66,32 @@ final class HotkeyMonitor {
     func stop() {
         monitors.forEach(NSEvent.removeMonitor)
         monitors = []
-        if isDown, !cancelled {
+        if let held, !cancelled {
             cancelled = true
-            onCancel()
+            onCancel(held)
         }
         release()
     }
 
     private func handle(_ event: NSEvent) {
+        let key = [Key.rightCommand, .rightOption].first { $0.keyCode == event.keyCode }
         switch event.type {
-        case .flagsChanged where event.keyCode == Self.rightCommandKeyCode:
-            let down = event.modifierFlags.rawValue & Self.rightCommandDeviceMask != 0
-            if down, !isDown {
-                isDown = true
+        case .flagsChanged where key != nil && (held == nil || held == key):
+            let key = key!
+            let down = event.modifierFlags.rawValue & key.deviceMask != 0
+            if down, held == nil {
+                held = key
                 cancelled = false
-                watchForMissedRelease()
-                onPress()
+                watchForMissedRelease(of: key)
+                onPress(key)
             } else if !down {
                 release()
             }
         case .flagsChanged, .keyDown:
-            // Any other key while right ⌘ is held means the user is doing a shortcut.
-            if isDown, !cancelled {
+            // Any other key while one is held means the user is doing a shortcut.
+            if let held, !cancelled {
                 cancelled = true
-                onCancel()
+                onCancel(held)
             }
         default:
             break
@@ -76,18 +101,18 @@ final class HotkeyMonitor {
     private func release() {
         releaseCheck?.invalidate()
         releaseCheck = nil
-        guard isDown else { return }
-        isDown = false
-        if !cancelled { onRelease() }
+        guard let key = held else { return }
+        held = nil
+        if !cancelled { onRelease(key) }
     }
 
     /// The release event can go missing (the Mac sleeping mid-hold, the keyboard grabbed by
     /// another app). Without this the microphone would stay on and the next press be ignored.
-    private func watchForMissedRelease() {
+    private func watchForMissedRelease(of key: Key) {
         releaseCheck?.invalidate()
         let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                if !NSEvent.modifierFlags.contains(.command) { self?.release() }
+                if !NSEvent.modifierFlags.contains(key.modifier) { self?.release() }
             }
         }
         RunLoop.main.add(timer, forMode: .common)

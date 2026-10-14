@@ -5,6 +5,8 @@ import ServiceManagement
 
 /// Owns the menu-bar item and runs the dictation flow:
 /// hold right ⌘ → record → transcribe → (cleanup) → writing style → paste.
+/// Holding right ⌥ instead asks the Claude assistant, which replies (and asks before acting) in a
+/// card. While the card is open, right ⌥ follows up in the same conversation.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let hotkey = HotkeyMonitor()
@@ -12,6 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var transcriber = Transcriber()
     private let cleaner = TextCleaner()
     private let panel = RecordingPanel()
+    private let assistant = Assistant()
+    private let answerPanel = AnswerPanel()
 
     private var statusItem: NSStatusItem!
     private var state: State = .idle {
@@ -19,6 +23,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     private var activity: NSObjectProtocol?
     private var pressedAt = Date()
+    /// Which key started the current recording: right ⌘ dictates, right ⌥ asks Claude.
+    private var key = HotkeyMonitor.Key.rightCommand
+    /// Whether the current right ⌥ recording continues the open conversation.
+    private var followingUp = false
     private var showPanelWork: DispatchWorkItem?
     private var startTask: Task<AudioRecorder.Recording?, Never>?
     /// Bumped on every press, so a late result from an earlier dictation can't touch this one.
@@ -55,6 +63,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         set { UserDefaults.standard.set(newValue, forKey: "microphoneUID") }
     }
 
+    private var askDepth: Assistant.Depth {
+        get { Assistant.Depth(rawValue: UserDefaults.standard.string(forKey: "askDepth") ?? "") ?? .quick }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "askDepth") }
+    }
+
     // MARK: - Launch and quit
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -65,9 +78,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         statusItem.menu = menu
 
-        hotkey.onPress = { [weak self] in self?.startRecording() }
-        hotkey.onRelease = { [weak self] in self?.finishRecording() }
-        hotkey.onCancel = { [weak self] in self?.cancelRecording() }
+        hotkey.onPress = { [weak self] in self?.startRecording($0) }
+        hotkey.onRelease = { [weak self] _ in self?.finishRecording() }
+        hotkey.onCancel = { [weak self] _ in self?.cancelRecording() }
+        answerPanel.onClose = { [weak self] in
+            self?.assistant.cancel()
+            self?.answerPanel.hide()
+        }
         recorder.onLevel = { [panel] in panel.push(level: $0) }
 
         AVCaptureDevice.requestAccess(for: .audio) { _ in }
@@ -75,6 +92,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshMicrophones(wait: 0)
         loadSpeechModel()
         if aiCleanup { loadCleanupModel() }
+    }
+
+    /// Opening Shhh again (from Spotlight or Applications) shows its menu at the mouse, since
+    /// the menu-bar icon can end up hidden behind the notch when the menu bar is crowded.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard let menu = statusItem.menu else { return false }
+        NSApp.activate()
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        return false
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -163,7 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - Dictation
 
-    private func startRecording() {
+    private func startRecording(_ key: HotkeyMonitor.Key) {
         guard state == .idle else { return }
         guard speechReady, AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             loadSpeechModel() // retry now if an earlier load failed
@@ -171,9 +197,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         state = .recording
+        self.key = key
         pressedAt = Date()
         dictation += 1
         let current = dictation
+        followingUp = key == .rightOption && answerPanel.isVisible && assistant.isActive
+        if key == .rightOption, !followingUp {
+            // Start Claude Code now: it warms up while the user is still talking.
+            answerPanel.reset()
+            assistant.prepare(depth: askDepth) { [weak self] in self?.answerPanel.update($0) }
+        }
 
         // The microphone starts on a background queue so the app never freezes on Core Audio.
         let preferredUID = microphoneUID
@@ -185,6 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if state == .recording, dictation == current {
                     showPanelWork?.cancel()
                     panel.hide()
+                    dropNewConversation()
                     state = .idle
                 }
                 return nil
@@ -199,6 +233,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         showPanelWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+
+    /// A right ⌥ recording that went nowhere: stop the conversation it started. A failed
+    /// follow-up leaves the open one alone.
+    private func dropNewConversation() {
+        guard key == .rightOption, !followingUp else { return }
+        assistant.cancel()
+        answerPanel.hide()
     }
 
     /// Shhh sits idle with no windows, so macOS puts it in App Nap and lets its timers run late.
@@ -218,6 +260,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard state == .recording else { return }
         showPanelWork?.cancel()
         panel.hide()
+        dropNewConversation()
         state = .idle
         let start = startTask
         Task { if let recording = await start?.value { recorder.cancel(recording) } }
@@ -235,15 +278,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         state = .processing
         panel.showProcessing()
-        let useCleanup = aiCleanup
+        let asking = key == .rightOption
+        let followingUp = self.followingUp
+        let useCleanup = aiCleanup && !asking // Claude copes with "um"s and corrections itself
         let style = writingStyle
         let start = startTask
         let transcriber = self.transcriber
 
         Task {
+            var asked = false
             defer {
                 panel.hide()
                 state = .idle
+                if asking, !asked, !followingUp { dropNewConversation() }
             }
             guard let recording = await start?.value else { return } // already beeped
             let samples = await recorder.stop(recording, covering: heldFor)
@@ -268,6 +315,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 text = (try? await withTimeout(6) { [cleaner] in
                     await cleaner.isReady ? await cleaner.clean(raw, deadline: deadline) : raw
                 }) ?? TextCleaner.removeFillers(raw)
+            }
+            if asking {
+                guard !text.isEmpty else { return }
+                lastTranscript = text
+                answerPanel.beginTurn(question: text)
+                assistant.ask(text)
+                asked = true
+                return
             }
             text = style.apply(text)
             guard !text.isEmpty else { return }
@@ -313,6 +368,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         cleanup.state = aiCleanup ? .on : .off
         menu.addItem(cleanup)
 
+        menu.addItem(askMenu())
+
         let copy = item("Copy last transcript", #selector(copyLastTranscript))
         copy.isEnabled = lastTranscript != nil
         menu.addItem(copy)
@@ -345,6 +402,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             items.append(item)
         }
         return submenu("Microphone", items: items)
+    }
+
+    /// "Assistant": how to use it, how hard it should work, and the user's notes for it.
+    private func askMenu() -> NSMenuItem {
+        let hint = NSMenuItem(title: Assistant.executable == nil ? "Claude Code not found" : "Hold right ⌥ to ask or delegate",
+                              action: nil, keyEquivalent: "")
+        hint.isEnabled = false
+        var items = [hint, .separator()]
+        for depth in Assistant.Depth.allCases {
+            let item = item(depth.title, #selector(selectAskDepth(_:)))
+            item.representedObject = depth.rawValue
+            item.state = depth == askDepth ? .on : .off
+            items.append(item)
+        }
+        items.append(.separator())
+        items.append(item("Edit instructions…", #selector(editAssistantInstructions)))
+        return submenu("Assistant", items: items)
     }
 
     /// Reads the microphone list on a background queue and waits at most `wait` for it, so a
@@ -402,6 +476,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let raw = sender.representedObject as? String, let style = WritingStyle(rawValue: raw) {
             writingStyle = style
         }
+    }
+
+    @objc private func selectAskDepth(_ sender: NSMenuItem) {
+        if let raw = sender.representedObject as? String, let depth = Assistant.Depth(rawValue: raw) {
+            askDepth = depth
+        }
+    }
+
+    @objc private func editAssistantInstructions() {
+        Assistant.openInstructions()
     }
 
     @objc private func selectMicrophone(_ sender: NSMenuItem) {

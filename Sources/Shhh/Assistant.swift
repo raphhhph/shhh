@@ -3,9 +3,9 @@ import AppKit
 /// A voice assistant built on the Claude Code CLI, so it runs on the user's own Claude
 /// subscription (whatever `claude` is signed in with) instead of a paid API key.
 ///
-/// It can search the web, use the user's connected accounts (Gmail, Calendar, Drive…) and drive
-/// their Chrome. Reading is free; anything that sends, changes or submits waits for the user's
-/// OK on the answer card (see `ToolPolicy`).
+/// It can search the web, use the user's connected accounts (Gmail, Calendar, Drive…), drive
+/// their Chrome, and keep its long-term memory in their notes vault. Reading is free; anything
+/// that sends, changes or submits waits for the user's OK on the answer card (see `ToolPolicy`).
 ///
 /// The CLI takes a few seconds to start, so a session is started the moment the key goes down
 /// and only gets its request once the user lets go and the speech is transcribed. The session
@@ -54,9 +54,19 @@ final class Assistant {
     }()
 
     /// The user's own notes for the assistant (who they are, which sites they use, how they like
-    /// things done). Added to its instructions; opened from the menu.
-    static let instructionsURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    /// things done). Added to its instructions; opened from the menu. See `Instructions`.
+    nonisolated static let instructionsURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Shhh/Assistant instructions.md")
+
+    /// The notes vault (e.g. an Obsidian vault) the assistant uses as its long-term memory.
+    static var vaultURL: URL? {
+        get {
+            UserDefaults.standard.string(forKey: "memoryVault")
+                .map { URL(fileURLWithPath: $0, isDirectory: true) }
+                .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+        }
+        set { UserDefaults.standard.set(newValue?.path, forKey: "memoryVault") }
+    }
 
     private var session: Session?
     private var onEvent: @MainActor (Event) -> Void = { _ in }
@@ -100,6 +110,10 @@ final class Assistant {
             For example: your name, the sites you use and where they are, people you email often,
             and how you like things done.
 
+            A line like `@About me.md` pulls in that file from your memory vault, so the assistant
+            starts every conversation with it. A line like `Read-only: Journal, Archive` makes the
+            assistant ask before changing anything in those vault folders.
+
             """.write(to: url, atomically: true, encoding: .utf8)
         }
         NSWorkspace.shared.open(url)
@@ -133,11 +147,15 @@ private final class Session {
     private var pending: [(id: String, action: ToolPolicy.Action, input: [String: Any], description: String?)] = []
     // What the user allowed "for this task" (until the card is closed).
     private var allowedForTask: Set<String> = []
+    private let policy: ToolPolicy
 
     var isRunning: Bool { !stopped && process.isRunning }
 
     init(executable: URL, depth: Assistant.Depth, onEvent: @escaping @MainActor (Assistant.Event) -> Void) {
         self.onEvent = onEvent
+        let vault = Assistant.vaultURL
+        let instructions = Instructions(vault: vault)
+        policy = ToolPolicy(vault: vault, readOnly: instructions.readOnly)
         signal(SIGPIPE, SIG_IGN) // writing to a CLI that just exited must fail, not kill the app
         process.executableURL = executable
         process.arguments = [
@@ -145,19 +163,21 @@ private final class Session {
             "--input-format", "stream-json",
             "--output-format", "stream-json", "--verbose", "--include-partial-messages",
             "--chrome",
-            // Built-in tools: the web, and loading the connectors' tools on demand. No shell, no files.
-            "--tools", "WebSearch,WebFetch,ToolSearch",
+            // Built-in tools: the web, loading the connectors' tools on demand, and with a vault,
+            // reading and writing notes (and commands, which always ask).
+            "--tools", vault == nil ? "WebSearch,WebFetch,ToolSearch" : "WebSearch,WebFetch,ToolSearch,Read,Glob,Grep,Edit,Write,Bash",
             "--setting-sources", "user", // the user's own MCP servers (e.g. a notes vault)
             "--permission-mode", "default",
             "--permission-prompt-tool", "stdio", // permission requests come to us (handleControl)
             "--disable-slash-commands",
             "--no-session-persistence",
             "--effort", depth == .quick ? "low" : "high",
-            "--system-prompt", Self.systemPrompt(depth),
+            "--system-prompt", Self.systemPrompt(depth, instructions: instructions.text, vault: vault),
         ]
         process.environment = Self.environment()
-        // An empty folder, so no project instructions get picked up.
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("shhh-ask", isDirectory: true)
+        // Work in the vault, so note paths are relative to it. Without one, an empty folder, so no
+        // project's instructions get picked up.
+        let folder = vault ?? FileManager.default.temporaryDirectory.appendingPathComponent("shhh-ask", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         process.currentDirectoryURL = folder
         process.standardInput = input
@@ -350,7 +370,7 @@ private final class Session {
             return
         }
         let input = request["input"] as? [String: Any] ?? [:]
-        let action = ToolPolicy.action(tool: request["tool_name"] as? String ?? "", input: input)
+        let action = policy.action(tool: request["tool_name"] as? String ?? "", input: input)
         if action.isSafe || allowedForTask.contains(action.key) {
             allow(id, input)
             return
@@ -410,6 +430,14 @@ private final class Session {
             return (input["url"] as? String).flatMap { URL(string: $0)?.host() }.map { "Reading \($0)" } ?? "Reading a page…"
         case "ToolSearch":
             return "Getting tools ready…"
+        case "Read":
+            return (input["file_path"] as? String).map { "Reading \(Self.noteName($0))" } ?? "Reading your notes…"
+        case "Glob", "Grep":
+            return "Searching your notes…"
+        case "Edit", "Write":
+            return (input["file_path"] as? String).map { "Updating \(Self.noteName($0))" } ?? "Updating your notes…"
+        case "Bash":
+            return "Running a command…"
         default:
             break
         }
@@ -431,6 +459,11 @@ private final class Session {
         return "Using \(ToolPolicy.serverName(parts[1]))…"
     }
 
+    /// "Brain/School/Timetable.md" → "Timetable".
+    private static func noteName(_ path: String) -> String {
+        URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+    }
+
     /// Turns the CLI's errors into something the user can act on.
     private static func explain(_ error: String) -> String {
         let lowered = error.lowercased()
@@ -443,16 +476,26 @@ private final class Session {
         return error.isEmpty ? "Something went wrong." : error
     }
 
-    private static func systemPrompt(_ depth: Assistant.Depth) -> String {
+    private static func systemPrompt(_ depth: Assistant.Depth, instructions: String, vault: URL?) -> String {
         let now = Date().formatted(date: .complete, time: .shortened)
         let zone = TimeZone.current.identifier
         let effort = switch depth {
         case .quick: "Be quick: do the least work that handles the request well."
         case .thorough: "Be thorough: check several sources and double-check your work before replying."
         }
-        let notes = (try? String(contentsOf: Assistant.instructionsURL, encoding: .utf8))
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .flatMap { $0.isEmpty ? nil : "\n\nThe user's own notes for you:\n\n\($0)" } ?? ""
+        let memory = vault.map { vault in """
+
+
+            Your long-term memory is the user's notes vault, \(vault.path), which is your working \
+            folder. Its rules and index are in the user's notes below: follow them exactly.
+            - Use it. Before answering anything about the user's life, people, school, work or plans, \
+            find the right note through the index and read it. Don't guess what you can look up.
+            - Keep it current. When you learn something lasting (a fact, a decision, a person, a \
+            preference, a change of plans), record it in the right note following the vault's rules, \
+            without asking. Skip one-off requests and small talk. Say in one short line what you recorded.
+            - Use Read, Glob, Grep, Edit and Write for the vault, with paths relative to it.
+            """ } ?? ""
+        let notes = instructions.isEmpty ? "" : "\n\nThe user's own notes for you:\n\n\(instructions)"
         return """
         You are the user's assistant on their Mac. They hold a key, say what they want, and see your \
         reply in a small card on screen. It is \(now) (\(zone)).
@@ -466,7 +509,7 @@ private final class Session {
         notes vault if one is connected. Load these tools with ToolSearch.
         - Their Chrome browser (the Claude in Chrome tools), where they're already signed in to their \
         sites. Read pages with get_page_text or find rather than screenshots: it's faster.
-        When a connected account and the browser can both do something, use the account: it's much faster.
+        When a connected account and the browser can both do something, use the account: it's much faster.\(memory)
 
         Reading never needs permission. Anything that sends, changes, deletes or submits pauses for the \
         user's OK on the card, so just make the call: don't ask for confirmation in your reply first. If \
@@ -486,10 +529,48 @@ private final class Session {
     }
 }
 
+/// The user's instructions file, with each `@path` line replaced by that file from the vault and
+/// the `Read-only:` folders picked out for the tool policy.
+private struct Instructions {
+    private(set) var text = ""
+    private(set) var readOnly: [String] = []
+
+    init(vault: URL?) {
+        guard let raw = try? String(contentsOf: Assistant.instructionsURL, encoding: .utf8) else { return }
+        var lines: [String] = []
+        for line in raw.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("@"), trimmed.count > 1 {
+                let path = String(trimmed.dropFirst())
+                let url = path.hasPrefix("/") || path.hasPrefix("~")
+                    ? URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+                    : vault?.appendingPathComponent(path)
+                if let url, let contents = try? String(contentsOf: url, encoding: .utf8) {
+                    lines.append("<file path=\"\(path)\">\n\(contents.prefix(40_000))\n</file>")
+                } else {
+                    lines.append("(\(path) couldn't be read.)")
+                }
+                continue
+            }
+            if trimmed.lowercased().hasPrefix("read-only:") {
+                readOnly = trimmed.dropFirst("read-only:".count).split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+            }
+            lines.append(line)
+        }
+        text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 /// What Claude may do on its own, and what needs the user's OK. Reading is free, and so is
-/// writing Gmail drafts (nothing leaves until the user sends it). Anything that sends, changes,
-/// deletes or submits asks first.
-private enum ToolPolicy {
+/// writing Gmail drafts (nothing leaves until the user sends it) and editing or adding notes in
+/// the vault. Anything that sends, changes, deletes or submits asks first, and so does replacing a
+/// whole note, touching a read-only vault folder, or running a command.
+private struct ToolPolicy {
+    let vault: URL?
+    let readOnly: [String]
+
     struct Action {
         /// What "Allow for this task" remembers.
         let key: String
@@ -497,14 +578,11 @@ private enum ToolPolicy {
         let title: String
     }
 
-    static func action(tool: String, input: [String: Any]) -> Action {
+    func action(tool: String, input: [String: Any]) -> Action {
         let parts = tool.components(separatedBy: "__") // "mcp", server, tool
-        guard parts.count == 3, parts[0] == "mcp" else {
-            // Built-in tools: only the web and tool loading are turned on.
-            return Action(key: tool, isSafe: ["WebSearch", "WebFetch", "ToolSearch"].contains(tool), title: tool)
-        }
+        guard parts.count == 3, parts[0] == "mcp" else { return builtIn(tool, input) }
         if parts[1] == "claude-in-chrome" {
-            switch chromeLevel(parts[2], input) {
+            switch Self.chromeLevel(parts[2], input) {
             case .look: return Action(key: "chrome:look", isSafe: true, title: "Chrome")
             case .click: return Action(key: "chrome:click", isSafe: false, title: "Click in Chrome")
             case .type: return Action(key: "chrome:type", isSafe: false, title: "Type or submit in Chrome")
@@ -514,8 +592,46 @@ private enum ToolPolicy {
         let verb = name.split(separator: "_").first.map(String.init) ?? name
         let reads: Set = ["get", "list", "read", "search", "query", "guide", "suggest", "download", "directory"]
         let safe = reads.contains(verb) || ["create_draft", "update_draft"].contains(name)
-        let title = "\(serverName(parts[1])): \(name.replacingOccurrences(of: "_", with: " "))"
+        let title = "\(Self.serverName(parts[1])): \(name.replacingOccurrences(of: "_", with: " "))"
         return Action(key: tool, isSafe: safe, title: title)
+    }
+
+    private func builtIn(_ tool: String, _ input: [String: Any]) -> Action {
+        switch tool {
+        case "WebSearch", "WebFetch", "ToolSearch":
+            return Action(key: tool, isSafe: true, title: tool)
+        case "Read", "Glob", "Grep":
+            let inVault = notePath(input["file_path"] as? String ?? input["path"] as? String) != nil
+            return Action(key: tool, isSafe: inVault, title: "Read files outside your notes")
+        case "Edit", "Write":
+            let path = input["file_path"] as? String
+            guard let note = notePath(path) else {
+                return Action(key: "\(tool):\(path ?? "")", isSafe: false, title: "Change a file outside your notes")
+            }
+            if let folder = readOnly.first(where: { note == $0 || note.hasPrefix($0 + "/") }) {
+                return Action(key: "\(tool):\(note)", isSafe: false, title: "Change \(note) (\(folder) is read-only)")
+            }
+            if tool == "Write", FileManager.default.fileExists(atPath: vault!.appendingPathComponent(note).path) {
+                return Action(key: "\(tool):\(note)", isSafe: false, title: "Replace all of \(note)")
+            }
+            return Action(key: tool, isSafe: true, title: tool)
+        case "Bash":
+            return Action(key: "Bash:\(input["command"] as? String ?? "")", isSafe: false, title: "Run a command")
+        default:
+            return Action(key: tool, isSafe: false, title: tool)
+        }
+    }
+
+    /// The path relative to the vault, or nil when it's outside it (or there's no vault).
+    /// No path means the working folder, which is the vault.
+    private func notePath(_ path: String?) -> String? {
+        guard let vault else { return nil }
+        let root = vault.standardizedFileURL.resolvingSymlinksInPath().path
+        let expanded = path.map { ($0 as NSString).expandingTildeInPath }
+        let url = expanded.map { $0.hasPrefix("/") ? URL(fileURLWithPath: $0) : vault.appendingPathComponent($0) } ?? vault
+        let full = url.standardizedFileURL.resolvingSymlinksInPath().path
+        if full == root { return "" }
+        return full.hasPrefix(root + "/") ? String(full.dropFirst(root.count + 1)) : nil
     }
 
     private enum ChromeLevel: Int, Comparable {
@@ -559,9 +675,10 @@ private enum ToolPolicy {
         for step in input["actions"] as? [[String: Any]] ?? [] {
             if let summary = (step["input"] as? [String: Any])?["action_summary"] as? String { lines.append("• \(summary)") }
         }
-        let first = ["to", "cc", "bcc", "subject", "summary", "start", "end", "url", "text", "value", "path"]
+        let first = ["to", "cc", "bcc", "subject", "summary", "start", "end", "url", "text", "value",
+                     "command", "file_path", "path", "new_string", "content"]
         // Leave out what only matters to the browser (element references, tab numbers).
-        let keys = input.keys.filter { !["action_summary", "description", "actions", "ref", "tabId"].contains($0) }
+        let keys = input.keys.filter { !["action_summary", "description", "actions", "ref", "tabId", "replace_all"].contains($0) }
             .sorted { (first.firstIndex(of: $0) ?? 99, $0) < (first.firstIndex(of: $1) ?? 99, $1) }
         for key in keys {
             let value: String

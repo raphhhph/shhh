@@ -417,6 +417,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             items.append(item)
         }
         items.append(.separator())
+        items.append(item("Memory: \(Assistant.vaultURL?.lastPathComponent ?? "none")…", #selector(chooseMemoryVault)))
         items.append(item("Edit instructions…", #selector(editAssistantInstructions)))
         return submenu("Assistant", items: items)
     }
@@ -481,6 +482,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func selectAskDepth(_ sender: NSMenuItem) {
         if let raw = sender.representedObject as? String, let depth = Assistant.Depth(rawValue: raw) {
             askDepth = depth
+        }
+    }
+
+    @objc private func chooseMemoryVault() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.prompt = "Use as Memory"
+        panel.message = "Choose the notes vault (for example an Obsidian vault) the assistant keeps its memory in."
+        panel.directoryURL = Assistant.vaultURL
+        NSApp.activate()
+        if panel.runModal() == .OK, let url = panel.url {
+            Assistant.vaultURL = url
         }
     }
 

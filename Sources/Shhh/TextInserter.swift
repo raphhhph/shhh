@@ -1,7 +1,8 @@
 import AppKit
 import Carbon.HIToolbox
 
-/// Types text into the focused app by pasting it, then puts the user's clipboard back.
+/// Types text into the focused app by pasting it, then puts the user's clipboard back. Also copies
+/// the focused app's selection the same way, for the assistant.
 @MainActor
 enum TextInserter {
     static func insert(_ text: String) {
@@ -17,7 +18,7 @@ enum TextInserter {
         pasteboard.writeObjects([item])
         let changeCount = pasteboard.changeCount
 
-        pressCommandV()
+        press(kVK_ANSI_V)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
             MainActor.assumeIsolated {
@@ -28,9 +29,25 @@ enum TextInserter {
         }
     }
 
-    private static func pressCommandV() {
+    /// Copies the front app's selection with ⌘C and returns it, then puts the clipboard back.
+    /// Nil when nothing was copied (the clipboard didn't change).
+    static func copySelection() async -> String? {
+        let pasteboard = NSPasteboard.general
+        let saved = snapshot(of: pasteboard)
+        let before = pasteboard.changeCount
+        press(kVK_ANSI_C)
+        for _ in 0..<20 where pasteboard.changeCount == before {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        guard pasteboard.changeCount != before else { return nil }
+        let text = pasteboard.string(forType: .string)
+        restore(saved, to: pasteboard)
+        return text
+    }
+
+    private static func press(_ keyCode: Int) {
         let source = CGEventSource(stateID: .combinedSessionState)
-        let key = CGKeyCode(kVK_ANSI_V)
+        let key = CGKeyCode(keyCode)
         let down = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true)
         let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false)
         down?.flags = .maskCommand

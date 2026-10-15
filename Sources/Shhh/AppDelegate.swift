@@ -20,8 +20,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let speech = SpeechOutput()
     /// The screenshot sent with the current request, which Claude's point tags refer to.
     private var turnScreenshot: ScreenCapture.Screenshot?
-    /// Whether this conversation is about the screen, so follow-ups get a fresh screenshot too.
+    /// Whether this conversation is about the screen, so visual follow-ups get a fresh screenshot.
     private var screenConversation = false
+    /// The selection sent with the current request, which a `[REPLACE]` reply is pasted over.
+    private var turnSelection: ScreenContext.Text?
+    /// The current reply as Claude wrote it, tags and all.
+    private var turnReply = ""
 
     private var statusItem: NSStatusItem!
     private var state: State = .idle {
@@ -249,11 +253,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func handle(_ event: Assistant.Event) {
         switch event {
         case .answer(let text):
+            turnReply = text
             let (reply, points) = ScreenPointer.split(text)
             if let turnScreenshot { pointer.show(points, on: turnScreenshot) }
-            answerPanel.update(.answer(reply))
-            speech.update(reply)
+            answerPanel.update(.answer(ScreenContext.display(reply)))
+            speech.update(ScreenContext.spoken(reply))
         case .turnFinished:
+            replaceSelection()
             answerPanel.update(event)
             speech.finish()
         case .failed:
@@ -262,6 +268,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         default:
             answerPanel.update(event)
         }
+    }
+
+    /// Pastes Claude's new version of the selection over it, if it wrote one and the user is still
+    /// in the same app. ⌘Z there undoes it.
+    private func replaceSelection() {
+        guard let selection = turnSelection, let replacement = ScreenContext.replacement(in: turnReply) else { return }
+        turnSelection = nil
+        let reply = ScreenContext.display(ScreenPointer.split(turnReply).text)
+        guard ScreenContext.frontPID == selection.pid else {
+            answerPanel.update(.answer(reply + "\n\n*Not pasted: you've left \(selection.app). Copy it from here.*"))
+            return
+        }
+        TextInserter.insert(replacement)
+        answerPanel.update(.answer(reply + "\n\n*Pasted over your selection in \(selection.app). ⌘Z there undoes it.*"))
+    }
+
+    /// The context a request about the screen goes with: the screenshot for anything visual (and
+    /// pointing); otherwise the selection, else the window's text, else the screenshot.
+    private func screenContext(for text: String, screen: Task<ScreenCapture.Screenshot?, Never>?,
+                               followingUp: Bool) async -> (request: String, screenshot: ScreenCapture.Screenshot?) {
+        if !followingUp { screenConversation = false }
+        let picture = ScreenCapture.wantsPicture(text)
+        let explicit = ScreenCapture.isAbout(text)
+        guard explicit || ScreenContext.refersToSelection(text) || (screenConversation && picture) else { return (text, nil) }
+        screenConversation = true
+        // Follow-ups already have the earlier context: they get the window again only if they name
+        // the screen. "Make it even shorter" with nothing selected means Claude's last version.
+        let fresh = explicit || !followingUp
+        if !picture, let selection = await ScreenContext.selection(limit: 40_000) {
+            turnSelection = selection
+            return (text + """
+
+
+                <selected_text app="\(selection.app)">
+                \(selection.text)
+                </selected_text>
+                (That's the text I have selected. If I asked you to change it, put only the new version \
+                between [REPLACE] and [/REPLACE]: Shhh pastes it over my selection.)
+                """, nil)
+        }
+        if !picture, !fresh { return (text, nil) }
+        if !picture, let window = await ScreenContext.windowText(limit: 12_000) {
+            return (text + """
+
+
+                <window_text app="\(window.text.app)" title="\(window.title)">
+                \(window.text.text)
+                </window_text>
+                (That's the text of the window I'm in.)
+                """, nil)
+        }
+        guard let screenshot = await screen?.value else {
+            ScreenCapture.requestAccess()
+            return (text + "\n\n(Shhh couldn't take a screenshot: it needs Screen Recording access in System "
+                + "Settings → Privacy & Security, then Shhh quit and reopened. Tell the user.)", nil)
+        }
+        return (text, screenshot)
     }
 
     /// A right ⌥ recording that went nowhere: stop the conversation it started. A failed
@@ -350,18 +413,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 guard !text.isEmpty else { return }
                 lastTranscript = text
                 answerPanel.beginTurn(question: text)
-                var request = text
-                var screenshot: ScreenCapture.Screenshot?
-                if !followingUp { screenConversation = false }
-                if screenConversation || ScreenCapture.isAbout(text) {
-                    screenConversation = true
-                    screenshot = await screen?.value
-                    if screenshot == nil {
-                        ScreenCapture.requestAccess()
-                        request += "\n\n(Shhh couldn't take a screenshot: it needs Screen Recording access in System "
-                            + "Settings → Privacy & Security, then Shhh quit and reopened. Tell the user.)"
-                    }
-                }
+                turnSelection = nil
+                turnReply = ""
+                let (request, screenshot) = await screenContext(for: text, screen: screen, followingUp: followingUp)
                 turnScreenshot = screenshot
                 assistant.ask(request, screenshot: screenshot?.jpeg)
                 asked = true

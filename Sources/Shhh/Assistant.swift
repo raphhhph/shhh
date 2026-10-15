@@ -608,8 +608,10 @@ private final class Session {
 
             Your long-term memory is the user's notes vault, \(vault.path), which is your working \
             folder. Its rules and index are in the user's notes below: follow them exactly.
-            - Use it. Before answering anything about the user's life, people, school, work or plans, \
-            find the right note through the index and read it. Don't guess what you can look up.
+            - Use it, but only when it's needed. For anything about the user's life, people, school, \
+            work or plans, find the right note through the vault's index (if it isn't below, read it from \
+            the vault) and read that note: don't guess what you can look up. For web research, general \
+            questions and help with the screen, leave the vault closed.
             - Keep it current. When you learn something lasting (a fact, a decision, a person, a \
             preference, a change of plans), record it in the right note following the vault's rules, \
             without asking. Skip one-off requests and small talk. Say in one short line what you recorded.

@@ -16,6 +16,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let panel = RecordingPanel()
     private let assistant = Assistant()
     private let answerPanel = AnswerPanel()
+    private let pointer = ScreenPointer()
+    private let speech = SpeechOutput()
+    /// The screenshot sent with the current request, which Claude's point tags refer to.
+    private var turnScreenshot: ScreenCapture.Screenshot?
+    /// Whether this conversation is about the screen, so follow-ups get a fresh screenshot too.
+    private var screenConversation = false
 
     private var statusItem: NSStatusItem!
     private var state: State = .idle {
@@ -29,6 +35,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var followingUp = false
     private var showPanelWork: DispatchWorkItem?
     private var startTask: Task<AudioRecorder.Recording?, Never>?
+    /// The screen when right ⌥ went down, in case the request turns out to be about it.
+    private var screenTask: Task<ScreenCapture.Screenshot?, Never>?
     /// Bumped on every press, so a late result from an earlier dictation can't touch this one.
     private var dictation = 0
 
@@ -63,10 +71,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         set { UserDefaults.standard.set(newValue, forKey: "microphoneUID") }
     }
 
-    private var askDepth: Assistant.Depth {
-        get { Assistant.Depth(rawValue: UserDefaults.standard.string(forKey: "askDepth") ?? "") ?? .quick }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "askDepth") }
-    }
 
     // MARK: - Launch and quit
 
@@ -84,6 +88,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         answerPanel.onClose = { [weak self] in
             self?.assistant.cancel()
             self?.answerPanel.hide()
+            self?.pointer.hide()
+            self?.speech.stop()
         }
         recorder.onLevel = { [panel] in panel.push(level: $0) }
 
@@ -198,14 +204,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         state = .recording
         self.key = key
+        speech.stop() // never talk into the microphone
         pressedAt = Date()
         dictation += 1
         let current = dictation
         followingUp = key == .rightOption && answerPanel.isVisible && assistant.isActive
+        screenTask = key == .rightOption ? Task { await ScreenCapture.capture() } : nil
+        if key == .rightOption { pointer.hide() }
         if key == .rightOption, !followingUp {
             // Start Claude Code now: it warms up while the user is still talking.
             answerPanel.reset()
-            assistant.prepare(depth: askDepth) { [weak self] in self?.answerPanel.update($0) }
+            assistant.prepare { [weak self] in self?.handle($0) }
         }
 
         // The microphone starts on a background queue so the app never freezes on Core Audio.
@@ -233,6 +242,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         showPanelWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+
+    /// The assistant's events, on their way to the card: point tags come out of the reply and go
+    /// on screen, and the reply is read aloud when that's on.
+    private func handle(_ event: Assistant.Event) {
+        switch event {
+        case .answer(let text):
+            let (reply, points) = ScreenPointer.split(text)
+            if let turnScreenshot { pointer.show(points, on: turnScreenshot) }
+            answerPanel.update(.answer(reply))
+            speech.update(reply)
+        case .turnFinished:
+            answerPanel.update(event)
+            speech.finish()
+        case .failed:
+            answerPanel.update(event)
+            speech.stop()
+        default:
+            answerPanel.update(event)
+        }
     }
 
     /// A right ⌥ recording that went nowhere: stop the conversation it started. A failed
@@ -280,6 +309,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel.showProcessing()
         let asking = key == .rightOption
         let followingUp = self.followingUp
+        let screen = screenTask
         let useCleanup = aiCleanup && !asking // Claude copes with "um"s and corrections itself
         let style = writingStyle
         let start = startTask
@@ -320,7 +350,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 guard !text.isEmpty else { return }
                 lastTranscript = text
                 answerPanel.beginTurn(question: text)
-                assistant.ask(text)
+                var request = text
+                var screenshot: ScreenCapture.Screenshot?
+                if !followingUp { screenConversation = false }
+                if screenConversation || ScreenCapture.isAbout(text) {
+                    screenConversation = true
+                    screenshot = await screen?.value
+                    if screenshot == nil {
+                        ScreenCapture.requestAccess()
+                        request += "\n\n(Shhh couldn't take a screenshot: it needs Screen Recording access in System "
+                            + "Settings → Privacy & Security, then Shhh quit and reopened. Tell the user.)"
+                    }
+                }
+                turnScreenshot = screenshot
+                assistant.ask(request, screenshot: screenshot?.jpeg)
                 asked = true
                 return
             }
@@ -404,18 +447,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return submenu("Microphone", items: items)
     }
 
-    /// "Assistant": how to use it, how hard it should work, and the user's notes for it.
+    /// "Assistant": how to use it, which model and effort, what it may do alone, and its memory.
     private func askMenu() -> NSMenuItem {
         let hint = NSMenuItem(title: Assistant.executable == nil ? "Claude Code not found" : "Hold right ⌥ to ask or delegate",
                               action: nil, keyEquivalent: "")
         hint.isEnabled = false
         var items = [hint, .separator()]
-        for depth in Assistant.Depth.allCases {
-            let item = item(depth.title, #selector(selectAskDepth(_:)))
-            item.representedObject = depth.rawValue
-            item.state = depth == askDepth ? .on : .off
-            items.append(item)
-        }
+        items.append(submenu("Model: \(Assistant.model.name)", items: Assistant.Model.allCases.map { model in
+            let item = item(model.title, #selector(selectModel(_:)))
+            item.representedObject = model.rawValue
+            item.state = model == Assistant.model ? .on : .off
+            return item
+        }))
+        items.append(submenu("Effort: \(Assistant.effort.name)", items: Assistant.Effort.allCases.map { effort in
+            let item = item(effort.name, #selector(selectEffort(_:)))
+            item.representedObject = effort.rawValue
+            item.state = effort == Assistant.effort ? .on : .off
+            return item
+        }))
+        let speak = item("Speak replies", #selector(toggleSpeakReplies))
+        speak.state = SpeechOutput.isEnabled ? .on : .off
+        items.append(speak)
         items.append(.separator())
         for autonomy in Assistant.Autonomy.allCases {
             let item = item(autonomy.title, #selector(selectAutonomy(_:)))
@@ -425,6 +477,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         items.append(.separator())
         items.append(item("Memory: \(Assistant.vaultURL?.lastPathComponent ?? "none")…", #selector(chooseMemoryVault)))
+        if !CGPreflightScreenCaptureAccess() {
+            items.append(item("Allow reading your screen…", #selector(openScreenRecordingSettings)))
+        }
         items.append(item("Edit instructions…", #selector(editAssistantInstructions)))
         return submenu("Assistant", items: items)
     }
@@ -486,9 +541,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc private func selectAskDepth(_ sender: NSMenuItem) {
-        if let raw = sender.representedObject as? String, let depth = Assistant.Depth(rawValue: raw) {
-            askDepth = depth
+    @objc private func toggleSpeakReplies() {
+        SpeechOutput.isEnabled.toggle()
+        if !SpeechOutput.isEnabled { speech.stop() }
+    }
+
+    @objc private func selectModel(_ sender: NSMenuItem) {
+        if let raw = sender.representedObject as? String, let model = Assistant.Model(rawValue: raw) {
+            Assistant.model = model
+        }
+    }
+
+    @objc private func selectEffort(_ sender: NSMenuItem) {
+        if let raw = sender.representedObject as? String, let effort = Assistant.Effort(rawValue: raw) {
+            Assistant.effort = effort
         }
     }
 
@@ -549,6 +615,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openAccessibilitySettings() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+    }
+
+    @objc private func openScreenRecordingSettings() {
+        ScreenCapture.requestAccess()
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
     }
 
     @objc private func openMicrophoneSettings() {

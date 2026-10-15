@@ -97,7 +97,7 @@ enum CommandLineTool {
         var lastHeight: CGFloat = 0
         panel.onClose = { exit(0) }
         panel.reset()
-        assistant.prepare(depth: .quick) { event in
+        assistant.prepare { event in
             panel.update(event)
             switch event {
             case .status(let status?): print(String(format: "[%.1fs] %@", Date().timeIntervalSince(start), status))
@@ -130,7 +130,9 @@ enum CommandLineTool {
             }
         }
         panel.beginTurn(question: requests[0])
-        assistant.ask(requests[0])
+        // SHHH_IMAGE=<jpeg> stands in for the screenshot the app would take.
+        let image = ProcessInfo.processInfo.environment["SHHH_IMAGE"].flatMap { FileManager.default.contents(atPath: $0) }
+        assistant.ask(requests[0], screenshot: ScreenCapture.isAbout(requests[0]) ? image : nil)
     }
 
     private static func run(_ work: @escaping () async throws -> Void) -> Never {

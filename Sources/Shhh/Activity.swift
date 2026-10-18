@@ -43,6 +43,24 @@ enum ActivityLog {
         try? FileManager.default.removeItem(at: url)
     }
 
+    // MARK: - Recap
+
+    /// Today in a few lines, for the night shutdown's recap (`Joe --recap`).
+    static func recap() -> String {
+        let today = load().filter { Calendar.current.isDateInToday($0.date) }
+        let words = today.filter { $0.kind == .dictation }.reduce(0) { $0 + $1.words }
+        let asks = today.filter { $0.kind == .ask }
+        let music = asks.filter { $0.text.range(of: #"\b(play|spotify|song|music|playlist)\b"#, options: [.regularExpression, .caseInsensitive]) != nil }
+        let alarms = asks.filter { $0.text.range(of: #"\b(alarm|timer|remind)\b"#, options: [.regularExpression, .caseInsensitive]) != nil }
+        var lines = ["Today: \(words) words dictated, \(asks.count) requests to Joe."]
+        if !asks.isEmpty {
+            lines.append("Asked: " + asks.suffix(12).map { $0.answer ?? String($0.text.prefix(60)) }.joined(separator: "; "))
+        }
+        if !music.isEmpty { lines.append("Music: " + music.compactMap(\.answer).joined(separator: "; ")) }
+        if !alarms.isEmpty { lines.append("Alarms and timers: " + alarms.compactMap(\.answer).joined(separator: "; ")) }
+        return lines.joined(separator: "\n")
+    }
+
     // MARK: - Stats
 
     struct Stats {

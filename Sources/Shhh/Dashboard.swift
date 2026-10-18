@@ -124,6 +124,7 @@ final class DashboardModel: ObservableObject {
     @Published var focus: String?
     @Published var tasks: [(line: String, text: String, detail: String, done: Bool)] = []
     @Published var today: String?
+    @Published var timeline: [Daybook.Slot] = []
     @Published var alarms: [Alarm] = []
     @Published var routines: [(name: String, trigger: String)] = []
     @Published var notes: [(title: String, kind: String, date: Date, url: URL)] = []
@@ -149,6 +150,7 @@ final class DashboardModel: ObservableObject {
         update(\.alarms, AlarmStore.load())
         update(\.status, actions.status())
         update(\.today, Daybook.today)
+        update(\.timeline, Daybook.timeline())
         update(\.spotifyConnected, Spotify.Account.isConnected)
         loadDaybook()
         loadRoutines()
@@ -429,6 +431,12 @@ private struct HomePage: View {
             stat("\(model.stats.streak) 🔥", "day streak", "flame")
         }
 
+        Card(title: "Timeline", symbol: "calendar.day.timeline.left") {
+            TodayTimeline(slots: model.timeline + model.alarms
+                .filter { Calendar.current.isDateInToday($0.fireAt) }
+                .map { Daybook.Slot(start: $0.fireAt, title: $0.title, kind: .alarm) })
+        }
+
         HStack(alignment: .top, spacing: 16) {
             Card(title: "Today", symbol: "sun.max") {
                 if let focus = model.focus {
@@ -513,6 +521,85 @@ private struct HomePage: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Look.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Look.line))
+    }
+}
+
+/// Today on one line, 7:00 to 22:00 (stretched for anything earlier or later): classes in
+/// grey, calendar events in orange, alarms as pins, and a line for now. Below it, what's next.
+private struct TodayTimeline: View {
+    let slots: [Daybook.Slot]
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            let now = context.date
+            let range = hours(now)
+            VStack(alignment: .leading, spacing: 12) {
+                GeometryReader { geometry in
+                    let width = geometry.size.width
+                    let x = { (date: Date) in width * CGFloat((date.timeIntervalSince(range.lowerBound)) / range.upperBound.timeIntervalSince(range.lowerBound)) }
+                    ZStack(alignment: .topLeading) {
+                        RoundedRectangle(cornerRadius: 6).fill(Look.line).frame(height: 26).offset(y: 8)
+                        ForEach(slots.filter { $0.kind != .alarm }) { slot in
+                            let end = slot.end ?? slot.start.addingTimeInterval(1800)
+                            RoundedRectangle(cornerRadius: 5)
+                                .fill(slot.kind == .event ? Look.accent.opacity(0.85) : Color.secondary.opacity(end < now ? 0.18 : 0.38))
+                                .frame(width: max(3, x(end) - x(slot.start) - 2), height: 26)
+                                .offset(x: x(slot.start) + 1, y: 8)
+                                .help("\(slot.start.formatted(date: .omitted, time: .shortened)) \(slot.title) \(slot.detail)")
+                        }
+                        ForEach(slots.filter { $0.kind == .alarm }) { slot in
+                            Image(systemName: "alarm.fill").font(.system(size: 10)).foregroundStyle(Look.accent)
+                                .offset(x: x(slot.start) - 5, y: -6)
+                                .help("\(slot.start.formatted(date: .omitted, time: .shortened)) \(slot.title)")
+                        }
+                        if range.contains(now) {
+                            Rectangle().fill(Color.red).frame(width: 2, height: 36).offset(x: x(now) - 1, y: 3)
+                        }
+                        ForEach(Array(stride(from: 0, through: hourCount(range), by: 3)), id: \.self) { step in
+                            let hour = range.lowerBound.addingTimeInterval(Double(step) * 3600)
+                            Text(hour.formatted(.dateTime.hour())).font(.system(size: 10)).foregroundStyle(.secondary)
+                                .offset(x: min(x(hour), width - 24), y: 38)
+                        }
+                    }
+                }
+                .frame(height: 52)
+
+                let upcoming = slots.filter { ($0.end ?? $0.start) > now }.prefix(4)
+                if slots.isEmpty {
+                    Text("Nothing on today: no classes, events or alarms.").font(.system(size: 13)).foregroundStyle(.secondary)
+                } else if upcoming.isEmpty {
+                    Text("That's everything for today.").font(.system(size: 13)).foregroundStyle(.secondary)
+                }
+                ForEach(Array(upcoming)) { slot in
+                    HStack(spacing: 10) {
+                        Circle().fill(slot.kind == .lesson ? Color.secondary : Look.accent).frame(width: 7, height: 7)
+                        Text(slot.start.formatted(date: .omitted, time: .shortened)).font(.system(size: 13, weight: .semibold).monospacedDigit()).frame(width: 64, alignment: .leading)
+                        Text(slot.title).font(.system(size: 13)).lineLimit(1)
+                        if !slot.detail.isEmpty { Text(slot.detail).font(.system(size: 12)).foregroundStyle(.secondary) }
+                        Spacer(minLength: 0)
+                        if slot.start <= now { Text("now").font(.system(size: 11, weight: .semibold)).foregroundStyle(Look.accent) }
+                    }
+                }
+            }
+        }
+    }
+
+    /// 7:00–22:00, widened to whole hours around anything outside it.
+    private func hours(_ now: Date) -> ClosedRange<Date> {
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: now)
+        var start = day.addingTimeInterval(7 * 3600), end = day.addingTimeInterval(22 * 3600)
+        for slot in slots {
+            start = min(start, slot.start)
+            end = max(end, slot.end ?? slot.start)
+        }
+        start = calendar.dateInterval(of: .hour, for: start)?.start ?? start
+        end = calendar.dateInterval(of: .hour, for: end.addingTimeInterval(3599))?.start ?? end
+        return start...end
+    }
+
+    private func hourCount(_ range: ClosedRange<Date>) -> Int {
+        Int(range.upperBound.timeIntervalSince(range.lowerBound) / 3600)
     }
 }
 
@@ -845,6 +932,10 @@ private struct SettingsPage: View {
     @AppStorage("microphoneUID") private var microphone = ""
     @AppStorage("morningBriefing") private var morning = true
     @AppStorage("nightShutdown") private var night = true
+    @AppStorage("eveningCheck") private var evening = true
+    @AppStorage("alarmsToReminders") private var toReminders = true
+    @AppStorage("phoneRemote") private var phoneRemote = true
+    @AppStorage("wakeWord") private var wakeWord = false
     @AppStorage("assistantModel") private var assistantModel = Assistant.Model.opus.rawValue
     @AppStorage("assistantEffort") private var effort = Assistant.Effort.low.rawValue
     @AppStorage("assistantAutonomy") private var autonomy = Assistant.Autonomy.careful.rawValue
@@ -854,6 +945,9 @@ private struct SettingsPage: View {
     @AppStorage("expressiveSounds") private var sounds = true
     @AppStorage("speakBriefing") private var speakBriefing = true
     @AppStorage("userName") private var userName = "Raphael"
+    @AppStorage("joeChattiness") private var chattiness = "normal"
+    @AppStorage("joeTone") private var tone = "direct"
+    @AppStorage("joeHype") private var hype = false
     @State private var notch = Notch.isEnabled
     @State private var englishOnly = Transcriber.englishOnly
     @State private var cleanup = UserDefaults.standard.bool(forKey: "aiCleanup")
@@ -892,6 +986,13 @@ private struct SettingsPage: View {
                     .background(Color.primary.opacity(0.06), in: Capsule())
                     .overlay(Capsule().strokeBorder(Look.line))
             }
+            row("Answers", "How much Joe says") {
+                Choice(options: [("brief", "Brief"), ("normal", "Normal"), ("chatty", "Chatty")], selection: $chattiness)
+            }
+            row("Tone", "How Joe puts things") {
+                Choice(options: [("gentle", "Gentle"), ("direct", "Direct"), ("blunt", "Blunt")], selection: $tone)
+            }
+            row("Hype you up", "Joe cheers when you get things done") { switchOn($hype) }
             row("Model", "Smarter, or faster and lighter on your usage") {
                 Choice(options: Assistant.Model.allCases.map { ($0.rawValue, $0.name) }, selection: $assistantModel)
             }
@@ -904,6 +1005,10 @@ private struct SettingsPage: View {
             row("Click and type", "Joe can use your mouse and keyboard") { switchOn($control) { model.actions.setScreenControl($0) } }
             row("Morning briefing", "On your first wake of the day") { switchOn($morning) }
             row("Night shutdown", "21:30 on school nights") { switchOn($night) }
+            row("Evening check", "19:30: new ManageBac tasks and grades into your Daybook") { switchOn($evening) }
+            row("Alarms on iPhone", "Copies alarms into a “Joe” list in Reminders, so your phone rings too") { switchOn($toReminders) }
+            row("Ask from iPhone", "“Hey Siri, add … to Ask Joe”: Joe answers in Reminders while your Mac is awake") { switchOn($phoneRemote) }
+            row("“Hey Joe”", "Talk without a key. Listens on your Mac only; the mic stays on (orange dot)") { switchOn($wakeWord) }
             row("Remember conversations", "A log in your vault") { switchOn($remember) }
             row("Save notes to Obsidian", "When the notepad closes") { switchOn($saveNotes) }
             row("Memory vault", Assistant.vaultURL?.path.replacingOccurrences(of: NSHomeDirectory(), with: "~") ?? "None") {

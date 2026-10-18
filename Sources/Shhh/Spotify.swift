@@ -14,7 +14,7 @@ enum Spotify {
     enum Command {
         case play(String, Kind?)
         /// Their own library (needs `Shhh --spotify-login` once).
-        case likedSongs(shuffle: Bool), myPlaylist(String, shuffle: Bool), like
+        case likedSongs(shuffle: Bool), myPlaylist(String, shuffle: Bool), like, listPlaylists, unlike(String?)
         case resume, pause, next, previous, nowPlaying
         case volume(Int?, change: Int)
         case shuffle(Bool)
@@ -52,6 +52,9 @@ enum Spotify {
             return Int(number).map { .volume(min($0, 100), change: 0) }
         }
         // "play X", "put on X", "play X on spotify", "play the album X", "play some Drake".
+        if text.range(of: #"^(list|show|what are)( me)? (all )?my playlists$|^playlists$"#, options: .regularExpression) != nil { return .listPlaylists }
+        if text.range(of: #"^(unlike|unsave|un-like) (this|the|that) (song|track)$|^remove (this|the|that)( song| track)? from my (liked songs|likes|library)$"#, options: .regularExpression) != nil { return .unlike(nil) }
+        if text.hasPrefix("unlike spotify:track:") { return .unlike(String(request.split(separator: " ").last ?? "")) }
         // Their library: "play my liked songs", "shuffle my gym playlist", "like this song".
         if text.range(of: #"^(like|save|heart) (this|the|that) (song|track)$|^add (this|the|that)( song| track)? to my (liked songs|likes|library|liked)$"#,
                       options: .regularExpression) != nil { return .like }
@@ -98,6 +101,8 @@ enum Spotify {
         case let .likedSongs(shuffle): return Account.playLiked(shuffle: shuffle)
         case let .myPlaylist(name, shuffle): return Account.playPlaylist(named: name, shuffle: shuffle)
         case .like: return Account.likeCurrent()
+        case .listPlaylists: return Account.listPlaylists()
+        case let .unlike(uri): return Account.unlike(uri)
         case let .play(query, kind):
             guard let found = search(query, kind: kind) else {
                 return keys == nil ? "Spotify isn't set up: its developer keys are missing." : "Couldn't find “\(query)” on Spotify."
@@ -426,14 +431,31 @@ enum Spotify {
             return "spotify:playlist:\(id)"
         }
 
-        static func playPlaylist(named name: String, shuffle: Bool) -> String {
-            guard isConnected else { return notConnected }
+        /// Their playlists (up to 300).
+        private static func playlists() -> [[String: Any]] {
             var playlists: [[String: Any]] = []
             var path: String? = "/me/playlists?limit=50"
             while let next = path, playlists.count < 300, let page = api("GET", next) {
                 playlists += page["items"] as? [[String: Any]] ?? []
                 path = (page["next"] as? String).map { $0.replacingOccurrences(of: "https://api.spotify.com/v1", with: "") }
             }
+            return playlists
+        }
+
+        /// "Pick something for studying": their playlists by name and size, for the assistant to choose from.
+        static func listPlaylists() -> String {
+            guard isConnected else { return notConnected }
+            let names = playlists().compactMap { item -> String? in
+                guard let name = item["name"] as? String, name != mirrorName else { return nil }
+                let count = ((item["items"] ?? item["tracks"]) as? [String: Any])?["total"] as? Int
+                return count.map { "\(name) (\($0))" } ?? name
+            }
+            return names.isEmpty ? "No playlists." : "Their playlists (and liked songs): " + names.joined(separator: "; ")
+        }
+
+        static func playPlaylist(named name: String, shuffle: Bool) -> String {
+            guard isConnected else { return notConnected }
+            var playlists = playlists()
             let wanted = name.lowercased().replacingOccurrences(of: #"^the "#, with: "", options: .regularExpression)
             playlists.removeAll { ($0["name"] as? String) == mirrorName }
             let names = playlists.map { (($0["name"] as? String) ?? "").lowercased() }
@@ -449,6 +471,15 @@ enum Spotify {
             return "▶ \(playlists[index]["name"] as? String ?? name)\(shuffle ? ", shuffled" : "")"
         }
 
+        /// Takes a song out of their liked songs (the playing one, or a given spotify:track: URI).
+        static func unlike(_ uri: String?) -> String {
+            guard isConnected else { return notConnected }
+            guard let uri = uri ?? Spotify.script("id of current track"), uri.hasPrefix("spotify:track:") else { return "Nothing to unlike." }
+            var code = 0
+            api("DELETE", "/me/library?uris=\(uri)", status: &code)
+            return (200..<300).contains(code) ? "Removed it from your liked songs" : "Couldn't remove it."
+        }
+
         static func likeCurrent() -> String {
             guard isConnected else { return notConnected }
             guard let uri = Spotify.script("id of current track"), let id = uri.split(separator: ":").last else {
@@ -456,6 +487,7 @@ enum Spotify {
             }
             var code = 0
             api("PUT", "/me/library?uris=spotify:track:\(id)", status: &code) // Spotify's current "save to library"
+            if (200..<300).contains(code) { UndoJournal.add(["liked", "spotify:track:\(id)"]) }
             return (200..<300).contains(code) ? "♥ Saved \(Spotify.script("name of current track") ?? "it") to your liked songs" : "Couldn't save it."
         }
     }

@@ -13,6 +13,36 @@ struct Alarm: Codable, Identifiable, Equatable {
     var fireAt: Date
     var title: String
     var kind: Kind
+    /// Which days it rings again: "daily", "weekdays", "weekends", or days like "mon,wed,fri".
+    var repeats: String? = nil
+
+    /// The weekdays it repeats on (1 = Sunday … 7 = Saturday), or nil for a one-off.
+    var repeatDays: Set<Int>? {
+        guard let repeats = repeats?.lowercased() else { return nil }
+        switch repeats {
+        case "daily", "every day": return Set(1...7)
+        case "weekdays": return [2, 3, 4, 5, 6]
+        case "weekends": return [1, 7]
+        default:
+            let names = ["sun": 1, "mon": 2, "tue": 3, "wed": 4, "thu": 5, "fri": 6, "sat": 7]
+            let days = Set(repeats.split(whereSeparator: { !$0.isLetter }).compactMap { names[String($0.prefix(3))] })
+            return days.isEmpty ? nil : days
+        }
+    }
+
+    /// The next time a repeating alarm rings after `date`.
+    func next(after date: Date) -> Date? {
+        guard let days = repeatDays else { return nil }
+        let calendar = Calendar.current
+        let time = calendar.dateComponents([.hour, .minute], from: fireAt)
+        for offset in 0...8 {
+            guard let day = calendar.date(byAdding: .day, value: offset, to: date),
+                  let candidate = calendar.date(bySettingHour: time.hour ?? 0, minute: time.minute ?? 0, second: 0, of: day),
+                  candidate > date, days.contains(calendar.component(.weekday, from: candidate)) else { continue }
+            return candidate
+        }
+        return nil
+    }
 
     /// "6:30", or "Sat 6:30" when it isn't today.
     var when: String {
@@ -41,6 +71,7 @@ enum AlarmStore {
     }
 
     static func add(_ alarm: Alarm) {
+        UndoJournal.add(["alarm", alarm.id.uuidString, alarm.title]) // for "undo that"
         save(load() + [alarm])
     }
 
@@ -67,7 +98,8 @@ enum AlarmStore {
         guard !alarms.isEmpty else { return "No alarms or timers set." }
         return alarms.prefix(4).map { alarm in
             let left = alarm.kind == .timer ? " (\(remaining(alarm.fireAt)) left)" : ""
-            return "\(alarm.when) \(alarm.title)\(left)"
+            let again = alarm.repeats.map { " (\($0))" } ?? ""
+            return "\(alarm.when) \(alarm.title)\(left)\(again)"
         }.joined(separator: " · ") + (alarms.count > 4 ? " · +\(alarms.count - 4) more" : "")
     }
 
@@ -187,7 +219,19 @@ enum AlarmRequest {
                 fireAt = date
             }
         }
-        guard let fireAt else { return nil } // no time it could read: the assistant works it out
+        guard var fireAt else { return nil } // no time it could read: the assistant works it out
+
+        // "Every weekday", "every day", "on weekends", "every monday and wednesday".
+        var repeats: String?
+        if let range = text.range(of: #"\b(every ?day|daily|each day|every (week)?day|on weekdays|weekdays|every morning|every school day|on weekends|weekends|every weekend|every (mon|tue|wed|thu|fri|sat|sun)\w*( and (mon|tue|wed|thu|fri|sat|sun)\w*)*)\b"#, options: .regularExpression) {
+            let span = String(text[range])
+            repeats = span.contains("weekend") ? "weekends"
+                : span.contains("weekday") || span.contains("school") ? "weekdays"
+                : span.contains("day") && !span.contains("mon") && !span.contains("tue") && !span.contains("wed") && !span.contains("thu") && !span.contains("fri") && !span.contains("sat") && !span.contains("sun") || span.contains("daily") || span.contains("morning") ? "daily"
+                : span
+            spans.append(range)
+        }
+
 
         // The title: "called econ quiz", "remind me to call Ammiel", "…to check the oven", "timer for pasta".
         var rest = text
@@ -211,7 +255,14 @@ enum AlarmRequest {
         // In their own capitals ("Call Ammiel", "the EE form"), when it's word for word in what they said.
         if let original = request.range(of: rest, options: .caseInsensitive) { rest = String(request[original]) }
         let title = rest.isEmpty ? fallback : rest.prefix(1).uppercased() + rest.dropFirst()
-        return .add(Alarm(fireAt: fireAt, title: String(title.prefix(80)), kind: kind))
+        var alarm = Alarm(fireAt: fireAt, title: String(title.prefix(80)), kind: kind, repeats: repeats)
+        // A repeating one starts on its first matching day.
+        if alarm.repeatDays != nil, let days = alarm.repeatDays, !days.contains(Calendar.current.component(.weekday, from: fireAt)),
+           let first = alarm.next(after: fireAt.addingTimeInterval(-1)) {
+            fireAt = first
+            alarm.fireAt = first
+        }
+        return .add(alarm)
     }
 
     /// "five minutes" → "5 minutes", "an hour" → "1 hour", "half an hour" → "30 minutes".
@@ -276,6 +327,9 @@ final class AlarmClock {
     /// The alarms still to come, soonest first.
     var pending: [Alarm] { known }
 
+    /// An alarm stopped by the user (not snoozed, not missed): for a focus timer's wrap-up.
+    var onStopped: (Alarm) -> Void = { _ in }
+
     /// Fires each second while alarms are pending (and once when the last goes), for the side notch.
     var onChange: () -> Void = {}
 
@@ -291,6 +345,7 @@ final class AlarmClock {
             modified = stamp
             known = AlarmStore.load()
             stayAwake(!known.isEmpty)
+            ReminderMirror.sync(known)
         }
         if !known.isEmpty || stamp != modifiedShown {
             modifiedShown = stamp
@@ -298,6 +353,13 @@ final class AlarmClock {
         }
         guard ringing == nil, let due = known.first, due.fireAt <= Date() else { return }
         known.removeFirst()
+        // A repeating one goes back in for its next day.
+        if let next = due.next(after: Date()) {
+            var again = due
+            again.fireAt = next
+            known.append(again)
+            known.sort { $0.fireAt < $1.fireAt }
+        }
         AlarmStore.save(known)
         modified = (try? AlarmStore.url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
         stayAwake(!known.isEmpty)
@@ -368,12 +430,17 @@ final class AlarmClock {
         resumeSpotify = false
         // A reminder that rang out stays on screen as a toast; an alarm nobody stopped says so.
         if missed { onNotice(alarm.kind == .reminder ? "⏰ \(alarm.title)" : "⏰ Missed: \(alarm.title) (\(alarm.when))") }
+        else if !snoozing { onStopped(alarm) }
         tick() // the next one, if it's due too
     }
 
+    private var snoozing = false
+
     func snooze(minutes: Int) {
         guard var alarm = ringing else { return }
+        snoozing = true
         stop()
+        snoozing = false
         alarm.id = UUID()
         alarm.fireAt = Date().addingTimeInterval(Double(minutes) * 60)
         AlarmStore.add(alarm)

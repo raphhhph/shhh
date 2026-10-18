@@ -63,6 +63,8 @@ final class NoteSaver {
         didSet { if let data = try? JSONEncoder().encode(session) { UserDefaults.standard.set(data, forKey: "notepadSession") } }
     }
     private var titling = false
+    /// A note saved and titled: its file, kind and text (the app has lectures and meetings structured).
+    var onTitled: (URL, Kind, String) -> Void = { _, _, _ in }
 
     init() {
         session = UserDefaults.standard.data(forKey: "notepadSession")
@@ -145,6 +147,7 @@ final class NoteSaver {
                 session.kind = kind.rawValue
                 write(body, to: renamed, title: found.title, summary: found.summary)
                 announce("Saved to Obsidian: \(found.title)")
+                onTitled(renamed, kind, body)
             }
             Self.rebuildIndex(root)
         }

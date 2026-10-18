@@ -84,6 +84,39 @@ final class Assistant {
         set { UserDefaults.standard.set(newValue, forKey: "assistantName") }
     }
 
+    // MARK: Personality (Settings → Joe)
+
+    /// How much Joe says: "brief", "normal" or "chatty".
+    static var chattiness: String {
+        get { UserDefaults.standard.string(forKey: "joeChattiness") ?? "normal" }
+        set { UserDefaults.standard.set(newValue, forKey: "joeChattiness") }
+    }
+    /// How Joe puts things: "gentle", "direct" or "blunt".
+    static var tone: String {
+        get { UserDefaults.standard.string(forKey: "joeTone") ?? "direct" }
+        set { UserDefaults.standard.set(newValue, forKey: "joeTone") }
+    }
+    /// Whether Joe cheers the user on.
+    static var hype: Bool {
+        get { UserDefaults.standard.bool(forKey: "joeHype") }
+        set { UserDefaults.standard.set(newValue, forKey: "joeHype") }
+    }
+
+    nonisolated static var personality: String {
+        let length = switch UserDefaults.standard.string(forKey: "joeChattiness") ?? "normal" {
+        case "brief": "Keep every answer as short as it can be: a line or two, no extras."
+        case "chatty": "You can be conversational and a little longer, with some personality."
+        default: "Keep answers short and to the point."
+        }
+        let manner = switch UserDefaults.standard.string(forKey: "joeTone") ?? "direct" {
+        case "gentle": "Be warm and encouraging; soften bad news."
+        case "blunt": "Be blunt: say it straight, push back hard on bad ideas, no cushioning."
+        default: "Be direct: say what you think and push back when something's off."
+        }
+        let hype = UserDefaults.standard.bool(forKey: "joeHype") ? " Hype them up when they get something done." : ""
+        return "\n\nYour personality: \(length) \(manner)\(hype)"
+    }
+
     static var autonomy: Autonomy {
         get { Autonomy(rawValue: UserDefaults.standard.string(forKey: "assistantAutonomy") ?? "") ?? .careful }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "assistantAutonomy") }
@@ -654,6 +687,10 @@ private final class Session {
     }
 
     private func allow(_ id: String, _ input: [String: Any]) {
+        // An edit or a new file: a backup first, for "undo that".
+        if let path = input["file_path"] as? String, input["content"] != nil || input["old_string"] != nil {
+            UndoJournal.beforeChanging(path)
+        }
         // File changes are logged, so they can be undone.
         if let command = input["command"] as? String,
            FileCommands.judge(command, cwd: Assistant.vaultURL ?? FileManager.default.temporaryDirectory) == .change {
@@ -798,6 +835,22 @@ private final class Session {
             lecture, class or meeting, look there.
             """ : "")\(Daybook.instructions)
             """ } ?? ""
+        let habits = vault == nil ? "" : """
+
+
+            Habits:
+            - Writing as them (an email, a message, a post): first read Brain/Me/Voice Vault.md (§2 registers, \
+            §4 hard rules) and write in their voice: their register for that person, not yours.
+            - People: Brain/People/ has a note per person (see People.md). Before messaging or emailing \
+            someone, read their note. When someone new comes up, or something changes for someone, add it \
+            there without asking (who, contact, what's going on, dated).
+            - "Undo that" / "put it back": read the end of \(UndoJournal.log.path) and the File changes.log beside \
+            it (Shhh's folder) for what your last request changed, and reverse exactly that: restore a file from \
+            its backup (cp "<backup>" "<path>"), move a new file to ~/.Trash, move moved files back, --spotify \
+            "unlike <uri>", --alarm "cancel <title>", delete calendar events you created. Then say what you put back.
+            - When you finish something that's on today's Daybook (sent that email, booked that time, did \
+            the task), tick it there ([x]) without asking, and say so in a few words.
+            """
         let music = """
 
 
@@ -805,8 +858,9 @@ private final class Session {
             artist, album or playlist>" (also "play the album …", "play the playlist …", "play some <artist>"), \
             "play my liked songs", "shuffle my liked songs", "play my <name> playlist", "like this song", \
             pause, resume, next, previous, "volume 40", "shuffle on", "what's playing". It finds and starts the \
-            music in about a second: never click around the Spotify app. For a mood ("something chill"), pick \
-            a specific playlist or song yourself and play that.
+            music in about a second: never click around the Spotify app. For a mood ("something chill", "music to \
+            study to"), first run --spotify "list my playlists" and play the one of theirs that fits best \
+            (play my <name> playlist, shuffled); only if none fits, pick an artist or album yourself.
             """
         let exe = Bundle.main.executablePath ?? "Joe"
         let skill = Slides.designSkill
@@ -855,7 +909,9 @@ private final class Session {
 
             For alarms, timers and reminders on the Mac (they ring loudly at the time, with Stop and Snooze), \
             use "\(Bundle.main.executablePath ?? "Joe")" --alarm at <YYYY-MM-DDTHH:MM | HH:MM | +minutes> "<title>" \
-            [alarm|timer|reminder], --alarm list, or --alarm "cancel all" / "cancel <title>". Work out the exact time \
+            [alarm|timer|reminder] [daily|weekdays|weekends|mon,wed,fri] (the last part makes it repeat), \
+            --alarm list, or --alarm "cancel all" / "cancel <title>". Never say an alarm repeats unless you set it \
+            to. Work out the exact time \
             yourself (from their calendar or Daybook if they say "before my econ class"). Use this, not Google \
             Calendar, unless they ask for a calendar event. They ring only while the Mac is awake (lid open).
             """
@@ -909,7 +965,7 @@ private final class Session {
         notes vault if one is connected. Load these tools with ToolSearch.
         - Their Chrome browser (the Claude in Chrome tools), where they're already signed in to their \
         sites. Read pages with get_page_text or find rather than screenshots: it's faster.
-        When a connected account and the browser can both do something, use the account: it's much faster.\(ScreenControl.isEnabled ? Assistant.controlRules : "")\(music)\(alarms)\(messages)\(slides)\(files)\(memory)
+        When a connected account and the browser can both do something, use the account: it's much faster.\(ScreenControl.isEnabled ? Assistant.controlRules : "")\(music)\(alarms)\(messages)\(slides)\(files)\(memory)\(habits)\(Assistant.personality)
 
         \(permissions) If they decline, don't retry it. Write emails as Gmail drafts unless they clearly \
         ask you to send, and say the draft is in Gmail. Never spend money: no buying, paying, \
@@ -1105,7 +1161,7 @@ struct ToolPolicy {
             return words[2] == "draft" ? Action(key: "message:draft", verdict: .allow, title: "Draft a message")
                 : Action(key: "message:send:\(input["command"] as? String ?? "")", verdict: .ask, title: "Send a message")
         case "Bash" where Self.shellWords(input["command"] as? String ?? "").map({
-            $0.count >= 2 && $0[0] == Bundle.main.executablePath && ["--pdf-find", "--pdf-text", "--prereading", "--workspace", "--workspace-reset", "--spotify", "--alarm", "--slides"].contains($0[1]) }) == true:
+            $0.count >= 2 && $0[0] == Bundle.main.executablePath && ["--pdf-find", "--pdf-text", "--prereading", "--workspace", "--workspace-reset", "--spotify", "--alarm", "--slides", "--recap"].contains($0[1]) }) == true:
             return Action(key: "shhh-tools", verdict: .allow, title: "Use Joe's tools")
         case "Bash" where FileCommands.judge(input["command"] as? String ?? "",
                                              cwd: vault ?? FileManager.default.temporaryDirectory) != nil:

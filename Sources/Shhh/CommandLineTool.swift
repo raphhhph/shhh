@@ -106,9 +106,11 @@ enum CommandLineTool {
                 }
                 guard let date else { print("Couldn't read the time “\(when)”: use YYYY-MM-DDTHH:MM, HH:MM or +minutes."); exit(1) }
                 let kind = Alarm.Kind(rawValue: args.count > 4 ? args[4] : "alarm") ?? .alarm
-                let alarm = Alarm(fireAt: date, title: args[3], kind: kind)
+                var alarm = Alarm(fireAt: date, title: args[3], kind: kind, repeats: args.count > 5 ? args[5] : nil)
+                if alarm.repeatDays != nil, !(alarm.repeatDays!.contains(Calendar.current.component(.weekday, from: date))),
+                   let first = alarm.next(after: date.addingTimeInterval(-1)) { alarm.fireAt = first }
                 AlarmStore.add(alarm)
-                print("Set: \(kind.rawValue) at \(alarm.when) (\(date.formatted(.dateTime.weekday(.wide).day().month()))): \(alarm.title). Joe rings it, if the Mac is awake.")
+                print("Set: \(kind.rawValue) at \(alarm.when) (\(alarm.fireAt.formatted(.dateTime.weekday(.wide).day().month())))\(alarm.repeats.map { ", repeating \($0)" } ?? ""): \(alarm.title). Joe rings it, if the Mac is awake.")
                 exit(0)
             }
             let text = args.dropFirst().joined(separator: " ")
@@ -153,6 +155,9 @@ enum CommandLineTool {
             exit(0)
         case ("--workspace-reset", 1):
             print(Workspace.reset())
+            exit(0)
+        case ("--recap", 1):
+            print(ActivityLog.recap())
             exit(0)
         case ("--message", 5...):
             // Joe --message draft|send whatsapp|wechat "<chat>" "<text>"

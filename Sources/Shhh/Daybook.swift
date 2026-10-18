@@ -136,6 +136,54 @@ enum Daybook {
         return "Day \(rotation) · Cycle \(cycle): " + periods.joined(separator: ", ")
     }
 
+    /// One thing on today's timeline: a class, a calendar event or an alarm.
+    struct Slot: Hashable, Identifiable {
+        enum Kind: Hashable { case lesson, event, alarm }
+        var start: Date
+        var end: Date?
+        var title: String
+        var detail = ""
+        var kind: Kind
+        var id: String { "\(start.timeIntervalSince1970) \(title)" }
+    }
+
+    /// Today's classes (from the timetable) and the Daybook's "Rest of today" events, in order.
+    static func timeline(_ date: Date = Date()) -> [Slot] {
+        func at(_ time: String) -> Date? {
+            let parts = time.split(separator: ":").compactMap { Int($0) }
+            guard parts.count == 2 else { return nil }
+            return Calendar.current.date(bySettingHour: parts[0], minute: parts[1], second: 0, of: date)
+        }
+        var slots: [Slot] = []
+        if let timetable, let entry = timetable.days.first(where: { $0.first?.text == day(date) }), entry.count >= 3 {
+            let grid = timetable.grids[entry[1].text + entry[2].text] ?? []
+            for row in timetable.rows {
+                guard let start = at(row.start) else { continue }
+                if row.kind == "class", let index = row.idx, index < grid.count, grid[index] != "—" {
+                    let parts = grid[index].components(separatedBy: " · ")
+                    slots.append(Slot(start: start, end: at(row.end), title: parts[0], detail: parts.count > 1 ? parts[1] : "", kind: .lesson))
+                } else if row.kind == "advisory" {
+                    slots.append(Slot(start: start, end: at(row.end), title: "Advisory", kind: .lesson))
+                }
+            }
+        }
+        // "- 15:00–16:00 Call with Giorgos" lines, if the Daybook is today's.
+        if let url, let text = try? String(contentsOf: url, encoding: .utf8), text.contains("date: \(day(date))") {
+            var inRest = false
+            for line in text.components(separatedBy: .newlines) {
+                if line.hasPrefix("## ") { inRest = line.lowercased().contains("rest of today"); continue }
+                guard inRest, let range = line.range(of: #"\d{1,2}:\d{2}(\s*[–-]\s*\d{1,2}:\d{2})?"#, options: .regularExpression) else { continue }
+                let times = line[range].components(separatedBy: CharacterSet(charactersIn: "–-")).map { $0.trimmingCharacters(in: .whitespaces) }
+                guard let start = at(times[0]) else { continue }
+                let title = line.replacingCharacters(in: range, with: "")
+                    .replacingOccurrences(of: #"^[\s\-*·:|]+|\[[^\]]*\]\([^)]*\)|\*\*"#, with: "", options: .regularExpression)
+                    .trimmingCharacters(in: .whitespaces)
+                slots.append(Slot(start: start, end: times.count > 1 ? at(times[1]) : nil, title: title.isEmpty ? "Event" : title, kind: .event))
+            }
+        }
+        return slots.sorted { $0.start < $1.start }
+    }
+
     /// Whether there's school on a day (in the saved timetable).
     static func isSchoolDay(_ date: Date) -> Bool {
         guard let timetable else { return !Calendar.current.isDateInWeekend(date) }

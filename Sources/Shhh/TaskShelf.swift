@@ -27,6 +27,9 @@ final class AssistantTask {
     var screenConversation = false
     /// Finished, failed or waiting for an OK while in the background, and not looked at yet.
     var unseen = false
+    /// Called once with the answer (or what went wrong) when the request finishes: for requests
+    /// from the phone.
+    var onFinished: ((String) -> Void)?
 
     var isWorking: Bool { !isDone }
     var subject: String? { Subject.split(reply).subject }

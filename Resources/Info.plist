@@ -30,6 +30,12 @@
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Joe plays, pauses and skips music in Spotify when you ask.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Joe copies your alarms into a “Joe” list in Reminders, so they ring on your iPhone too.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>Joe copies your alarms into a “Joe” list in Reminders, so they ring on your iPhone too.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>With “Hey Joe” on, your Mac listens for those words on-device, so you can talk to Joe without a key.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Joe listens only while you hold the right ⌘ key, and turns your speech into text on your Mac.</string>
 </dict>

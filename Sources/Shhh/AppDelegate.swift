@@ -22,6 +22,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let notepad = Notepad()
     private let noteSaver = NoteSaver()
     private let alarms = AlarmClock()
+    private let phone = PhoneRemote()
+    private let wake = WakeWord()
+    /// Recording because of "Hey Joe": it ends by itself when they stop talking.
+    private var handsFree = false
+    private var heardSpeech = false
+    private var quietSince: Date?
     private lazy var dashboard = Dashboard(actions: DashboardModel.Actions(
         ask: { [weak self] in self?.askTyped($0) },
         status: { [weak self] in self?.speechStatus ?? "" },
@@ -114,6 +120,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - Launch and quit
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        phone.run = { [weak self] request, done in self?.startInBackground(request, onFinished: done) }
+        wake.canListen = { [weak self] in
+            guard let self else { return false }
+            return self.state == .idle && !self.speech.isSpeaking && !self.notepad.isListening && !self.alarms.isRinging
+        }
+        wake.onWake = { [weak self] in self?.startHandsFree() }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "sparkle", accessibilityDescription: "Joe")
         // Click: the dashboard. Right-click (or ⌃-click): the quick menu.
@@ -135,9 +147,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         speech.prepare()
         alarms.onNotice = { [weak self] text in self?.toast.show(text, symbol: "alarm.fill", tint: .orange) }
         alarms.onChange = { [weak self] in self?.refreshShelf() }
+        // A focus session over: Joe asks what got done, to tick it off.
+        alarms.onStopped = { [weak self] alarm in
+            guard alarm.title.hasPrefix("Focus"), Assistant.vaultURL != nil else { return }
+            self?.startInBackground("[Focus session over: \(alarm.title).] In one or two short lines: well done, and ask me what I finished so you can tick it in my Daybook.")
+        }
         let alarmTicks = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.alarms.tick()
+                self?.phone.check()
+                self?.wake.update()
                 self?.resumeMusicIfDone()
                 self?.resting.keepInPlace() // the notch band stays at the notch
                 self?.unstickProcessing()
@@ -148,6 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             MainActor.assumeIsolated {
                 self?.clearOldTasks()
                 self?.shutDownIfNight()
+                self?.eveningCheckIfTime()
             }
         }
         RunLoop.main.add(clearing, forMode: .common)
@@ -160,6 +180,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.notepad.show(kind: nil)
         }
         notepad.onKind = { [weak self] kind in self?.noteSaver.kind = kind }
+        // A lecture or meeting note, once saved: Joe adds a summary, key terms and recall questions.
+        noteSaver.onTitled = { [weak self] url, kind, body in
+            guard kind != .notes, body.split(whereSeparator: \.isWhitespace).count >= 120 else { return }
+            self?.startInBackground("""
+                [My \(kind == .lecture ? "lecture" : "meeting") notes were just saved: \(url.path).] Structure that note, keeping \
+                every word of my notes: under the title add ## Summary (3–5 bullets), ## Key terms (term: one-line \
+                meaning), \(kind == .lecture ? "## Recall questions (5, for revising)" : "## Actions (who does what, by when)"), then \
+                ## Notes with my original notes unchanged. Fix obvious speech-recognition mistakes in the summary only. \
+                \(kind == .meeting ? "Add the actions that are mine to my Daybook. " : "")Reply in one line.
+                """)
+        }
         notepad.listen = { [weak self] in
             guard let self, self.speechReady else { return nil }
             return (self.recorder, self.transcriber, self.microphoneUID)
@@ -174,7 +205,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let task = self.tasks.first(where: { $0.id == id }) else { return }
             self.end(task)
         }
-        recorder.onLevel = { [panel] in panel.push(level: $0) }
+        recorder.onLevel = { [panel, weak self] level in
+            panel.push(level: level)
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.handsFreeLevel(level) } }
+        }
 
         AVCaptureDevice.requestAccess(for: .audio) { _ in }
         watchAccessibility()
@@ -374,8 +408,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - Dictation
 
+    /// "Hey Joe": an Ask, as if right ⌥ were held.
+    private func startHandsFree() {
+        guard state == .idle else { return }
+        startRecording(.rightOption)
+        guard state == .recording else { return }
+        handsFree = true
+        heardSpeech = false
+        quietSince = nil
+        // The pill now, rather than after the usual hold delay.
+        showPanelWork?.perform()
+    }
+
+    /// Ends a hands-free recording 1.3 seconds after they stop talking (or after 5 silent seconds,
+    /// or 40 seconds in all).
+    private func handsFreeLevel(_ level: Float) {
+        guard handsFree, state == .recording else { return }
+        let elapsed = Date().timeIntervalSince(pressedAt)
+        if level > 0.15 {
+            heardSpeech = true
+            quietSince = nil
+        } else if quietSince == nil {
+            quietSince = Date()
+        }
+        let quiet = quietSince.map { Date().timeIntervalSince($0) } ?? 0
+        if !heardSpeech, elapsed > 5 {
+            handsFree = false
+            cancelRecording()
+        } else if (heardSpeech && quiet > 1.3) || elapsed > 40 {
+            handsFree = false
+            finishRecording()
+        }
+    }
+
     private func startRecording(_ key: HotkeyMonitor.Key) {
         guard state == .idle else { return }
+        handsFree = false
         guard speechReady, AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             loadSpeechModel() // retry now if an earlier load failed
             NSSound.beep() // the menu explains what's missing
@@ -447,7 +515,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             task.canFollowUp = true
             Daybook.log(question: task.question, reply: task.reply) // memory across days
             ActivityLog.record(.ask, task.question, answer: task.subject) // the dashboard's history
+            if let finished = task.onFinished {
+                task.onFinished = nil
+                let parts = Subject.split(task.reply)
+                let body = parts.body.replacingOccurrences(of: #"\[[A-Z_]+[^\]]*\]"#, with: "", options: .regularExpression)
+                finished([parts.subject ?? "Done", body].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines))
+            }
         case .failed(let message):
+            task.onFinished?("Couldn't do it: \(message)")
+            task.onFinished = nil
             task.error = message
             task.status = nil
             task.approval = nil
@@ -516,9 +592,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     /// One of several jobs given at once: straight to the side notch, working in parallel.
-    private func startInBackground(_ request: String) {
+    private func startInBackground(_ request: String, onFinished: ((String) -> Void)? = nil) {
         let task = newTask()
         task.beginTurn(request)
+        task.onFinished = onFinished
         task.assistant.ask(request)
         refreshShelf()
     }
@@ -551,7 +628,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let calendar = Calendar.current
         let today = now.formatted(.iso8601.year().month().day())
         guard morningBriefing, Assistant.executable != nil,
-              (5..<12).contains(calendar.component(.hour, from: now)),
+              // School days from 5:00; a day off from 7:00 (a lie-in shouldn't wake to a briefing).
+              (Daybook.isSchoolDay(now) ? 5..<12 : 7..<13).contains(calendar.component(.hour, from: now)),
               UserDefaults.standard.string(forKey: "lastMorningBriefing") != today,
               state == .idle, !answerPanel.isVisible else { return }
         UserDefaults.standard.set(today, forKey: "lastMorningBriefing")
@@ -573,7 +651,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             built for today (how: your instructions). Then greet me by name: "Good morning, <my name>." and in a \
             few short lines: my first period (subject, time, room) or that there's no school today, my top three \
             tasks, anything due today or tomorrow, the emails that need me, and today's regular meetings from my \
-            patterns. On a day off, keep it to tasks and plans.
+            patterns.
+            On a day off (a weekend or holiday) it's a lighter brief instead, in a relaxed tone: what's due when \
+            school is back (and later this week), anything on today's calendar, the one WellPrepped thing that \
+            matters most, and one thing from my backlog worth doing today. No classes.
             """)
     }
 
@@ -657,6 +738,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         for app in pausedMusic { NSAppleScript(source: "tell application \"\(app)\" to play")?.executeAndReturnError(nil) }
         pausedMusic = []
+    }
+
+    // MARK: - Evening check
+
+    private var eveningCheck: Bool {
+        get { UserDefaults.standard.object(forKey: "eveningCheck") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "eveningCheck") }
+    }
+
+    /// At 19:30, once a day, while the Mac is in use: the Evening check routine (ManageBac and
+    /// school mail into tomorrow's Daybook), quietly, in the side notch.
+    private func eveningCheckIfTime() {
+        let now = Date()
+        let calendar = Calendar.current
+        let today = now.formatted(.iso8601.year().month().day())
+        let minutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
+        guard eveningCheck, Assistant.executable != nil, Assistant.vaultURL != nil,
+              (19 * 60 + 30..<23 * 60).contains(minutes),
+              UserDefaults.standard.string(forKey: "lastEveningCheck") != today,
+              state == .idle,
+              CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!) < 300
+        else { return }
+        UserDefaults.standard.set(today, forKey: "lastEveningCheck")
+        startInBackground("[Evening check, \(now.formatted(date: .omitted, time: .shortened)).] Run my Evening check routine.")
     }
 
     @objc private func toggleNightShutdown() {
@@ -835,7 +940,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// "Help me take notes", "open a notepad".
     private static func isNotepadRequest(_ text: String) -> Bool {
-        text.range(of: #"\b((take|taking|start|make) (some |my )?notes|note ?pad|(open|show) (a |my |the )?notes)\b"#,
+        text.range(of: #"\b((take|taking|start|make) (some |my )?notes|note ?pad|(open|show) (a |my |the )?notes|(record|transcribe) (this|the|my) (lecture|class|lesson|meeting|call|seminar))\b"#,
                    options: [.regularExpression, .caseInsensitive]) != nil
     }
 
@@ -1062,8 +1167,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     }
                     notepad.show(kind: noteSaver.kind)
                     notepad.show()
-                    toast.show("\(noteSaver.kind?.label ?? "Notepad") open: hold right ⌘ to dictate, or press Listen",
-                               symbol: "note.text", tint: .orange)
+                    // "Record this lecture": listening hands-free straight away.
+                    if text.range(of: #"\b(record|transcribe)\b"#, options: [.regularExpression, .caseInsensitive]) != nil {
+                        notepad.startListening()
+                        toast.show("Recording the \(noteSaver.kind == .meeting ? "meeting" : "lecture"). Close the notepad when it's over.",
+                                   symbol: "record.circle", tint: .red)
+                    } else {
+                        toast.show("\(noteSaver.kind?.label ?? "Notepad") open: hold right ⌘ to dictate, or press Listen",
+                                   symbol: "note.text", tint: .orange)
+                    }
                     return
                 }
                 // "This is a meeting": what the notes are, for their title and folder in the vault.

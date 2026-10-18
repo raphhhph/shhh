@@ -137,7 +137,7 @@ final class TaskShelf {
 
     private func collapsedSize(notch: NSRect) -> NSSize {
         let onlyAlarms = model.items.allSatisfy { $0.state == .alarm }
-        return NSSize(width: onlyAlarms ? 92 : model.items.count > 1 ? 66 : 50, height: notch.height)
+        return NSSize(width: onlyAlarms && !TaskShelf.alarmIconOnly ? 92 : model.items.count > 1 ? 66 : 50, height: notch.height)
     }
 
     private func size(notch: NSRect) -> NSSize {
@@ -199,6 +199,16 @@ final class TaskShelf {
     }
 }
 
+extension TaskShelf {
+    /// How alarms show beside the notch: "full" (the time), "icon", "soon" (only in their last
+    /// hour, and timers) or "off". They ring the same either way.
+    nonisolated static var alarmStyle: String {
+        get { UserDefaults.standard.string(forKey: "alarmsAtNotch") ?? "full" }
+        set { UserDefaults.standard.set(newValue, forKey: "alarmsAtNotch") }
+    }
+    nonisolated static var alarmIconOnly: Bool { alarmStyle == "icon" }
+}
+
 final class ShelfModel: ObservableObject {
     @Published var items: [TaskShelf.Item] = []
     @Published var expanded = false
@@ -218,7 +228,7 @@ private struct ShelfView: View {
             Group {
                 HStack(spacing: 5) {
                     summaryIcon
-                    if model.items.allSatisfy({ $0.state == .alarm }), let next = model.items.first {
+                    if model.items.allSatisfy({ $0.state == .alarm }), !TaskShelf.alarmIconOnly, let next = model.items.first {
                         // The next alarm's time, or a timer's countdown.
                         Text(next.question.components(separatedBy: " · ").first ?? "")
                             .font(.caption.weight(.bold).monospacedDigit()).foregroundStyle(.white)
@@ -254,11 +264,35 @@ private struct ShelfView: View {
                     .contentShape(Rectangle())
                     .onTapGesture { model.onOpen(item.id) }
                 }
+                if model.items.contains(where: { $0.state == .alarm }) {
+                    // Less of the capsule: just the icon, or nothing until an alarm is under an hour away.
+                    HStack(spacing: 6) {
+                        shelfButton(TaskShelf.alarmIconOnly ? "Show the time" : "Icon only") {
+                            TaskShelf.alarmStyle = TaskShelf.alarmIconOnly ? "full" : "icon"
+                            model.onToggle()
+                        }
+                        shelfButton("Hide until close") {
+                            TaskShelf.alarmStyle = "soon"
+                            model.onToggle()
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color.black, in: UnevenRoundedRectangle(bottomLeadingRadius: 14, bottomTrailingRadius: 14, style: .continuous))
         .environment(\.colorScheme, .dark)
+    }
+
+    private func shelfButton(_ title: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).font(.caption.weight(.medium)).foregroundStyle(.white.opacity(0.8))
+                .padding(.horizontal, 9).frame(height: 22)
+                .background(Color.white.opacity(0.12), in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     /// The one that matters most: an OK to give, then work going on, then done.

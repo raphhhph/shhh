@@ -826,7 +826,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// task, the one on the card too, by its subject (or the request, until there is one).
     private func refreshShelf() {
         // Alarms and timers to come: the next time, or a timer's countdown.
-        let alarmItems = alarms.pending.map { alarm in
+        let style = TaskShelf.alarmStyle
+        let shown = alarms.pending.filter { alarm in
+            style == "off" ? false : style == "soon" ? alarm.kind == .timer || alarm.fireAt.timeIntervalSinceNow < 3600 : true
+        }
+        let alarmItems = shown.map { alarm in
             let seconds = Int(alarm.fireAt.timeIntervalSinceNow.rounded())
             let label = alarm.kind == .alarm || seconds >= 3600 ? alarm.when
                 : String(format: "%d:%02d", max(0, seconds) / 60, max(0, seconds) % 60)

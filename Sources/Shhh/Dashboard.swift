@@ -31,7 +31,7 @@ final class Dashboard: NSObject, NSWindowDelegate {
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
             window.isMovableByWindowBackground = true
-            window.minSize = NSSize(width: 860, height: 560)
+            window.minSize = NSSize(width: 720, height: 520)
             window.isReleasedWhenClosed = false
             window.delegate = self
             window.contentView = NSHostingView(rootView: DashboardView(model: model))
@@ -320,75 +320,100 @@ private struct DashboardView: View {
     @ObservedObject var model: DashboardModel
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-            Rectangle().fill(Look.line).frame(width: 1)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    switch model.page {
-                    case .home: HomePage(model: model)
-                    case .history: HistoryPage(model: model)
-                    case .routines: RoutinesPage(model: model)
-                    case .alarms: AlarmsPage(model: model)
-                    case .notes: NotesPage(model: model)
-                    case .dictionary: DictionaryPage()
-                    case .music: MusicPage(model: model)
-                    case .settings: SettingsPage(model: model)
+        GeometryReader { geometry in
+            // Narrow window: the sidebar shrinks to icons. Wide or full screen: the page stays a
+            // readable width, centred.
+            let compact = geometry.size.width < 1000
+            let content = geometry.size.width - (compact ? 68 : 220)
+            HStack(spacing: 0) {
+                sidebar(compact: compact)
+                Rectangle().fill(Look.line).frame(width: 1)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        switch model.page {
+                        case .home: HomePage(model: model)
+                        case .history: HistoryPage(model: model)
+                        case .routines: RoutinesPage(model: model)
+                        case .alarms: AlarmsPage(model: model)
+                        case .notes: NotesPage(model: model)
+                        case .dictionary: DictionaryPage()
+                        case .music: MusicPage(model: model)
+                        case .settings: SettingsPage(model: model)
+                        }
                     }
+                    .environment(\.narrow, content < 820)
+                    .padding(.horizontal, content < 820 ? 24 : 40)
+                    .padding(.top, 44)
+                    .padding(.bottom, 36)
+                    .frame(maxWidth: 1060, alignment: .leading)
+                    .frame(maxWidth: .infinity)
                 }
-                .padding(.horizontal, 36)
-                .padding(.top, 44)
-                .padding(.bottom, 36)
-                .frame(maxWidth: 860, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
             }
-            .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
         }
-        .frame(minWidth: 860, minHeight: 560)
+        .frame(minWidth: 720, minHeight: 520)
         .tint(Look.accent)
     }
 
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 2) {
+    private func sidebar(compact: Bool) -> some View {
+        VStack(alignment: compact ? .center : .leading, spacing: 2) {
             HStack(spacing: 8) {
                 Image(systemName: "sparkle").font(.system(size: 18, weight: .semibold)).foregroundStyle(Look.accent)
-                Text("Joe").font(.system(size: 20, weight: .bold))
+                if !compact { Text("Joe").font(.system(size: 20, weight: .bold)) }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, compact ? 0 : 12)
             .padding(.top, 44)
             .padding(.bottom, 18)
             ForEach(DashboardModel.Page.allCases) { page in
                 Button { model.page = page; model.reload() } label: {
                     HStack(spacing: 10) {
                         Image(systemName: page.symbol).frame(width: 18)
-                        Text(page.title)
-                        Spacer()
-                        if page == .alarms, !model.alarms.isEmpty {
-                            Text("\(model.alarms.count)").font(.caption.weight(.bold)).foregroundStyle(.secondary)
+                        if !compact {
+                            Text(page.title)
+                            Spacer()
+                            if page == .alarms, !model.alarms.isEmpty {
+                                Text("\(model.alarms.count)").font(.caption.weight(.bold)).foregroundStyle(.secondary)
+                            }
                         }
                     }
                     .font(.system(size: 14, weight: model.page == page ? .semibold : .regular))
-                    .padding(.horizontal, 12)
-                    .frame(height: 34)
+                    .padding(.horizontal, compact ? 0 : 12)
+                    .frame(width: compact ? 40 : nil, height: 34)
+                    .frame(maxWidth: compact ? nil : .infinity, alignment: .leading)
                     .background(model.page == page ? Color.primary.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 8))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .help(page.title)
             }
             Spacer()
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    let trouble = model.status.range(of: #"loading|no microphone|blocking|failed|couldn"#, options: [.regularExpression, .caseInsensitive]) != nil
-                    Circle().fill(trouble ? Color.orange : Color.green).frame(width: 7, height: 7)
-                    Text(trouble ? model.status : "Ready").font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
+            let trouble = model.status.range(of: #"loading|no microphone|blocking|failed|couldn"#, options: [.regularExpression, .caseInsensitive]) != nil
+            if compact {
+                Circle().fill(trouble ? Color.orange : Color.green).frame(width: 8, height: 8).padding(.bottom, 16)
+                    .help(trouble ? model.status : "Ready")
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Circle().fill(trouble ? Color.orange : Color.green).frame(width: 7, height: 7)
+                        Text(trouble ? model.status : "Ready").font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                    Text("Right ⌘ to dictate · right ⌥ to ask Joe").font(.system(size: 11)).foregroundStyle(.tertiary)
                 }
-                Text("Right ⌘ to dictate · right ⌥ to ask Joe").font(.system(size: 11)).foregroundStyle(.tertiary)
+                .padding(12)
             }
-            .padding(12)
         }
-        .padding(.horizontal, 10)
-        .frame(width: 220)
+        .padding(.horizontal, compact ? 12 : 10)
+        .frame(width: compact ? 68 : 220)
         .background(Look.sidebar)
+    }
+}
+
+private struct NarrowKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues {
+    /// The page has little width: side-by-side cards stack.
+    var narrow: Bool {
+        get { self[NarrowKey.self] }
+        set { self[NarrowKey.self] = newValue }
     }
 }
 
@@ -396,6 +421,7 @@ private struct DashboardView: View {
 
 private struct HomePage: View {
     @ObservedObject var model: DashboardModel
+    @Environment(\.narrow) private var narrow
     @State private var request = ""
 
     private var greeting: String {
@@ -426,7 +452,7 @@ private struct HomePage: View {
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Look.line))
 
         // Stats, like VoiceOS.
-        HStack(spacing: 12) {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: narrow ? 2 : 4), spacing: 12) {
             stat("\(model.stats.wordsToday)", "words dictated today", "waveform")
             stat("\(model.stats.minutesSaved) min", "saved this week", "bolt")
             stat("\(model.stats.asksThisWeek)", "requests to Joe this week", "sparkle")
@@ -439,7 +465,8 @@ private struct HomePage: View {
                 .map { Daybook.Slot(start: $0.fireAt, title: $0.title, kind: .alarm) })
         }
 
-        HStack(alignment: .top, spacing: 16) {
+        let layout = narrow ? AnyLayout(VStackLayout(alignment: .leading, spacing: 16)) : AnyLayout(HStackLayout(alignment: .top, spacing: 16))
+        layout {
             Card(title: "Today", symbol: "sun.max") {
                 if let focus = model.focus {
                     Text(focus).font(.system(size: 14, weight: .medium))
@@ -465,10 +492,6 @@ private struct HomePage: View {
                     }
                     .buttonStyle(.plain)
                 }
-                if let today = model.today {
-                    Divider()
-                    Text(today).font(.system(size: 12)).foregroundStyle(.secondary)
-                }
             }
             VStack(spacing: 16) {
                 Card(title: "Alarms", symbol: "alarm") {
@@ -493,7 +516,7 @@ private struct HomePage: View {
                     .font(.system(size: 15))
                 }
             }
-            .frame(width: 280)
+            .frame(width: narrow ? nil : 300)
         }
 
         Card(title: "Recent", symbol: "clock") {
@@ -526,71 +549,177 @@ private struct HomePage: View {
     }
 }
 
-/// Today on one line, 7:00 to 22:00 (stretched for anything earlier or later): classes in
-/// grey, calendar events in orange, alarms as pins, and a line for now. Below it, what's next.
+/// Today as blocks on one line: classes in the school colour, other events in the personal one
+/// (both can be changed), alarms as pins and a red line for now. Click a block for its details;
+/// below, what's on now and next.
 private struct TodayTimeline: View {
     let slots: [Daybook.Slot]
+    @AppStorage("timelineSchool") private var schoolHex = "#5B7CFA"
+    @AppStorage("timelinePersonal") private var personalHex = "#FF9420"
+    @State private var selected: String?
+    @State private var hovered: String?
+
+    private var school: Color { Color(hex: schoolHex) }
+    private var personal: Color { Color(hex: personalHex) }
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 60)) { context in
+        TimelineView(.periodic(from: .now, by: 30)) { context in
             let now = context.date
             let range = hours(now)
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 14) {
+                legend
                 GeometryReader { geometry in
                     let width = geometry.size.width
-                    let x = { (date: Date) in width * CGFloat((date.timeIntervalSince(range.lowerBound)) / range.upperBound.timeIntervalSince(range.lowerBound)) }
+                    let span = range.upperBound.timeIntervalSince(range.lowerBound)
+                    let x = { (date: Date) -> CGFloat in width * CGFloat(date.timeIntervalSince(range.lowerBound) / span) }
+                    let hourCount = Int(span / 3600)
+                    let step = width / CGFloat(max(hourCount, 1)) < 44 ? 2 : 1
                     ZStack(alignment: .topLeading) {
-                        RoundedRectangle(cornerRadius: 6).fill(Look.line).frame(height: 26).offset(y: 8)
-                        ForEach(slots.filter { $0.kind != .alarm }) { slot in
-                            let end = slot.end ?? slot.start.addingTimeInterval(1800)
-                            RoundedRectangle(cornerRadius: 5)
-                                .fill(slot.kind == .event ? Look.accent.opacity(0.85) : Color.secondary.opacity(end < now ? 0.18 : 0.38))
-                                .frame(width: max(3, x(end) - x(slot.start) - 2), height: 26)
-                                .offset(x: x(slot.start) + 1, y: 8)
-                                .help("\(slot.start.formatted(date: .omitted, time: .shortened)) \(slot.title) \(slot.detail)")
+                        ForEach(Array(stride(from: 0, through: hourCount, by: step)), id: \.self) { index in
+                            let hour = range.lowerBound.addingTimeInterval(Double(index) * 3600)
+                            Rectangle().fill(Look.line).frame(width: 1, height: 64).offset(x: x(hour), y: 14)
+                            Text(hour.formatted(.dateTime.hour(.twoDigits(amPM: .omitted))))
+                                .font(.system(size: 10).monospacedDigit()).foregroundStyle(.tertiary)
+                                .offset(x: min(x(hour) + 3, width - 16), y: 82)
                         }
+                        ForEach(slots.filter { $0.kind != .alarm }) { slot in block(slot, x: x, now: now) }
                         ForEach(slots.filter { $0.kind == .alarm }) { slot in
                             Image(systemName: "alarm.fill").font(.system(size: 10)).foregroundStyle(Look.accent)
-                                .offset(x: x(slot.start) - 5, y: -6)
+                                .offset(x: x(slot.start) - 5, y: 0)
                                 .help("\(slot.start.formatted(date: .omitted, time: .shortened)) \(slot.title)")
                         }
                         if range.contains(now) {
-                            Rectangle().fill(Color.red).frame(width: 2, height: 36).offset(x: x(now) - 1, y: 3)
-                        }
-                        ForEach(Array(stride(from: 0, through: hourCount(range), by: 3)), id: \.self) { step in
-                            let hour = range.lowerBound.addingTimeInterval(Double(step) * 3600)
-                            Text(hour.formatted(.dateTime.hour())).font(.system(size: 10)).foregroundStyle(.secondary)
-                                .offset(x: min(x(hour), width - 24), y: 38)
+                            Rectangle().fill(Color.red).frame(width: 2, height: 66).offset(x: x(now) - 1, y: 13)
+                            Circle().fill(Color.red).frame(width: 7, height: 7).offset(x: x(now) - 3.5, y: 10)
                         }
                     }
                 }
-                .frame(height: 52)
+                .frame(height: 96)
+                details(now)
+            }
+        }
+    }
 
-                let upcoming = slots.filter { ($0.end ?? $0.start) > now }.prefix(4)
-                if slots.isEmpty {
-                    Text("Nothing on today: no classes, events or alarms.").font(.system(size: 13)).foregroundStyle(.secondary)
-                } else if upcoming.isEmpty {
-                    Text("That's everything for today.").font(.system(size: 13)).foregroundStyle(.secondary)
+    private var legend: some View {
+        HStack(spacing: 16) {
+            swatch("School", $schoolHex)
+            swatch("Personal", $personalHex)
+            HStack(spacing: 5) {
+                Image(systemName: "alarm.fill").font(.system(size: 10)).foregroundStyle(Look.accent)
+                Text("Alarms").font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            Spacer()
+            let lessons = slots.filter { $0.kind == .lesson && $0.title != "Advisory" }
+            if let last = lessons.last?.end {
+                Text("\(lessons.count) classes · done at \(last.formatted(date: .omitted, time: .shortened))")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+            } else {
+                Text("No school today").font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// A colour dot that opens the colour picker.
+    private func swatch(_ title: String, _ hex: Binding<String>) -> some View {
+        HStack(spacing: 5) {
+            ColorPicker("", selection: Binding(get: { Color(hex: hex.wrappedValue) }, set: { hex.wrappedValue = $0.hex }), supportsOpacity: false)
+                .labelsHidden()
+                .scaleEffect(0.7)
+                .frame(width: 22, height: 18)
+            Text(title).font(.system(size: 12)).foregroundStyle(.secondary)
+        }
+        .help("Click the colour to change it")
+    }
+
+    private func block(_ slot: Daybook.Slot, x: (Date) -> CGFloat, now: Date) -> some View {
+        let end = slot.end ?? slot.start.addingTimeInterval(1800)
+        let width = max(4, x(end) - x(slot.start) - 3)
+        let color = slot.kind == .lesson ? school : personal
+        let past = end < now
+        let lit = selected == slot.id || hovered == slot.id
+        return VStack(alignment: .leading, spacing: 1) {
+            if width > 30 {
+                Text(Self.short(slot.title)).font(.system(size: 11, weight: .semibold)).lineLimit(1)
+            }
+            if width > 44, !slot.detail.isEmpty {
+                Text(slot.detail).font(.system(size: 9.5, weight: .medium)).opacity(0.8).lineLimit(1)
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 6)
+        .frame(width: width, height: 60, alignment: .leading)
+        .background(color.opacity(past ? 0.35 : lit ? 1 : 0.82), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.white.opacity(selected == slot.id ? 0.9 : 0), lineWidth: 2))
+        .offset(x: x(slot.start) + 1.5, y: 16)
+        .onHover { inside in hovered = inside ? slot.id : (hovered == slot.id ? nil : hovered) }
+        .onTapGesture { withAnimation(.easeOut(duration: 0.12)) { selected = selected == slot.id ? nil : slot.id } }
+        .help("\(Self.times(slot)) · \(slot.title) \(slot.detail)")
+    }
+
+    /// The clicked block, or what's on now and the next few.
+    @ViewBuilder
+    private func details(_ now: Date) -> some View {
+        if let slot = slots.first(where: { $0.id == selected }) {
+            HStack(spacing: 12) {
+                RoundedRectangle(cornerRadius: 3).fill(slot.kind == .lesson ? school : slot.kind == .alarm ? Look.accent : personal).frame(width: 5, height: 38)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(slot.title).font(.system(size: 15, weight: .semibold))
+                    Text([Self.times(slot), slot.detail].filter { !$0.isEmpty }.joined(separator: " · "))
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
                 }
+                Spacer()
+                Text(Self.relative(slot, now)).font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+            }
+            .padding(12)
+            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        } else {
+            let upcoming = slots.filter { ($0.end ?? $0.start) > now }.prefix(4)
+            if slots.isEmpty {
+                Text("Nothing on today: no classes, events or alarms.").font(.system(size: 13)).foregroundStyle(.secondary)
+            } else if upcoming.isEmpty {
+                Text("That's everything for today.").font(.system(size: 13)).foregroundStyle(.secondary)
+            }
+            VStack(spacing: 0) {
                 ForEach(Array(upcoming)) { slot in
                     HStack(spacing: 10) {
-                        Circle().fill(slot.kind == .lesson ? Color.secondary : Look.accent).frame(width: 7, height: 7)
-                        Text(slot.start.formatted(date: .omitted, time: .shortened)).font(.system(size: 13, weight: .semibold).monospacedDigit()).frame(width: 64, alignment: .leading)
+                        RoundedRectangle(cornerRadius: 2).fill(slot.kind == .lesson ? school : slot.kind == .alarm ? Look.accent : personal).frame(width: 4, height: 18)
+                        Text(slot.start.formatted(date: .omitted, time: .shortened)).font(.system(size: 13, weight: .semibold).monospacedDigit()).frame(width: 52, alignment: .leading)
                         Text(slot.title).font(.system(size: 13)).lineLimit(1)
                         if !slot.detail.isEmpty { Text(slot.detail).font(.system(size: 12)).foregroundStyle(.secondary) }
                         Spacer(minLength: 0)
-                        if slot.start <= now { Text("now").font(.system(size: 11, weight: .semibold)).foregroundStyle(Look.accent) }
+                        Text(Self.relative(slot, now)).font(.system(size: 11, weight: slot.start <= now ? .semibold : .regular))
+                            .foregroundStyle(slot.start <= now ? Look.accent : .secondary)
                     }
+                    .frame(height: 28)
+                    .contentShape(Rectangle())
+                    .onTapGesture { selected = slot.id }
                 }
             }
         }
     }
 
-    /// 7:00–22:00, widened to whole hours around anything outside it.
+    /// "Maths AI HL" → "Maths", "Chinese B" → "Chinese": what fits in a block.
+    private static func short(_ title: String) -> String {
+        title.count <= 7 ? title : String(title.split(separator: " ").first ?? Substring(title))
+    }
+
+    private static func times(_ slot: Daybook.Slot) -> String {
+        let start = slot.start.formatted(date: .omitted, time: .shortened)
+        return slot.end.map { "\(start)–\($0.formatted(date: .omitted, time: .shortened))" } ?? start
+    }
+
+    private static func relative(_ slot: Daybook.Slot, _ now: Date) -> String {
+        if let end = slot.end, end < now { return "Done" }
+        if slot.start <= now { return slot.end == nil ? "Now" : "Now · until \(slot.end!.formatted(date: .omitted, time: .shortened))" }
+        let minutes = Int(slot.start.timeIntervalSince(now) / 60)
+        return minutes < 60 ? "in \(minutes) min" : "in \(minutes / 60) h \(minutes % 60) min"
+    }
+
+    /// 7:00–19:00, widened to whole hours around anything outside it.
     private func hours(_ now: Date) -> ClosedRange<Date> {
         let calendar = Calendar.current
         let day = calendar.startOfDay(for: now)
-        var start = day.addingTimeInterval(7 * 3600), end = day.addingTimeInterval(22 * 3600)
+        var start = day.addingTimeInterval(7 * 3600), end = day.addingTimeInterval(19 * 3600)
         for slot in slots {
             start = min(start, slot.start)
             end = max(end, slot.end ?? slot.start)
@@ -599,9 +728,17 @@ private struct TodayTimeline: View {
         end = calendar.dateInterval(of: .hour, for: end.addingTimeInterval(3599))?.start ?? end
         return start...end
     }
+}
 
-    private func hourCount(_ range: ClosedRange<Date>) -> Int {
-        Int(range.upperBound.timeIntervalSince(range.lowerBound) / 3600)
+private extension Color {
+    init(hex: String) {
+        let value = UInt64(hex.replacingOccurrences(of: "#", with: ""), radix: 16) ?? 0x5B7CFA
+        self.init(red: Double((value >> 16) & 255) / 255, green: Double((value >> 8) & 255) / 255, blue: Double(value & 255) / 255)
+    }
+
+    var hex: String {
+        let color = NSColor(self).usingColorSpace(.sRGB) ?? .gray
+        return String(format: "#%02X%02X%02X", Int(color.redComponent * 255), Int(color.greenComponent * 255), Int(color.blueComponent * 255))
     }
 }
 
@@ -644,29 +781,119 @@ private struct HistoryPage: View {
     @State private var kind = "all"
 
     var body: some View {
-        PageTitle(title: "History", subtitle: "Everything you've dictated and asked, kept on this Mac only.")
-        HStack {
+        PageTitle(title: "History", subtitle: "Everything you've dictated and asked · on this Mac only")
+        HStack(spacing: 10) {
             Picker("", selection: $kind) {
                 Text("All").tag("all")
                 Text("Dictation").tag("dictation")
                 Text("Joe").tag("ask")
             }
             .pickerStyle(.segmented)
-            .frame(width: 260)
+            .labelsHidden()
+            .frame(width: 240)
             Spacer()
-            TextField("Search", text: $search).textFieldStyle(.roundedBorder).frame(width: 220)
+            SearchField(text: $search)
         }
-        Card {
-            let shown = model.activity.filter { entry in
-                (kind == "all" || entry.kind.rawValue == kind)
-                    && (search.isEmpty || entry.text.localizedCaseInsensitiveContains(search) || (entry.answer ?? "").localizedCaseInsensitiveContains(search))
-            }
-            if shown.isEmpty { Text("Nothing here yet.").foregroundStyle(.secondary).font(.system(size: 13)) }
-            ForEach(shown.prefix(200)) { entry in
-                ActivityRow(entry: entry)
-                Divider().opacity(0.5)
+        let shown = model.activity.filter { entry in
+            (kind == "all" || entry.kind.rawValue == kind)
+                && (search.isEmpty || entry.text.localizedCaseInsensitiveContains(search) || (entry.answer ?? "").localizedCaseInsensitiveContains(search))
+        }.prefix(300)
+        if shown.isEmpty {
+            Card { Text(search.isEmpty ? "Nothing here yet." : "Nothing matches “\(search)”.").foregroundStyle(.secondary).font(.system(size: 13)) }
+        }
+        let days = Dictionary(grouping: shown) { Calendar.current.startOfDay(for: $0.date) }.sorted { $0.key > $1.key }
+        ForEach(days, id: \.key) { day, entries in
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text(Self.title(day)).font(.system(size: 13, weight: .semibold))
+                    Text("\(entries.count)").font(.system(size: 12)).foregroundStyle(.tertiary)
+                }
+                .padding(.leading, 4)
+                VStack(spacing: 0) {
+                    ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                        HistoryRow(entry: entry)
+                        if index < entries.count - 1 { Rectangle().fill(Look.line).frame(height: 1).padding(.leading, 62) }
+                    }
+                }
+                .background(Look.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Look.line))
             }
         }
+    }
+
+    private static func title(_ day: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(day) { return "Today" }
+        if calendar.isDateInYesterday(day) { return "Yesterday" }
+        return day.formatted(.dateTime.weekday(.wide).day().month(.wide))
+    }
+}
+
+/// One thing said: the time, what was said, and for a request Joe's answer. Click to see it all;
+/// the copy button shows on hover.
+private struct HistoryRow: View {
+    let entry: Activity
+    @State private var open = false
+    @State private var hovering = false
+    @State private var copied = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(entry.date.formatted(date: .omitted, time: .shortened))
+                .font(.system(size: 11.5, weight: .medium).monospacedDigit())
+                .foregroundStyle(.tertiary)
+                .frame(width: 40, alignment: .trailing)
+                .padding(.top, 2)
+            Image(systemName: entry.kind == .ask ? "sparkle" : "waveform")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(entry.kind == .ask ? Look.accent : .secondary)
+                .frame(width: 22, height: 22)
+                .background((entry.kind == .ask ? Look.accent : Color.secondary).opacity(0.12), in: Circle())
+            VStack(alignment: .leading, spacing: 5) {
+                Text(entry.text).font(.system(size: 13.5)).lineLimit(open ? nil : 2).textSelection(.enabled)
+                if let answer = entry.answer {
+                    Text(answer).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(open ? nil : 1)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
+                }
+            }
+            Spacer(minLength: 8)
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(entry.text, forType: .string)
+                copied = true
+            } label: { Image(systemName: copied ? "checkmark" : "doc.on.doc").font(.system(size: 12)) }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .opacity(hovering || copied ? 1 : 0)
+                .help("Copy")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .background(hovering ? Color.primary.opacity(0.03) : .clear)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture { withAnimation(.easeOut(duration: 0.12)) { open.toggle() } }
+    }
+}
+
+/// A search box in the dashboard's style.
+private struct SearchField: View {
+    @Binding var text: String
+    var prompt = "Search"
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(.secondary)
+            TextField(prompt, text: $text).textFieldStyle(.plain).font(.system(size: 13))
+            if !text.isEmpty {
+                Button { text = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(width: 240, height: 30)
+        .background(Look.card, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Look.line))
     }
 }
 
@@ -715,36 +942,166 @@ private struct RoutinesPage: View {
 
 private struct AlarmsPage: View {
     @ObservedObject var model: DashboardModel
+    @State private var kind: Alarm.Kind = .alarm
+    @State private var time = Calendar.current.date(bySettingHour: 7, minute: 0, second: 0, of: Date()) ?? Date()
+    @State private var label = ""
+    @State private var days: Set<Int> = []
+    @State private var minutes = 25
     @State private var request = ""
     @State private var problem: String?
+    @State private var done: String?
+
+    private static let dayLetters = [(2, "M"), (3, "T"), (4, "W"), (5, "T"), (6, "F"), (7, "S"), (1, "S")]
 
     var body: some View {
-        PageTitle(title: "Alarms", subtitle: "They ring loudly on this Mac (lid open), with Stop and Snooze.")
-        Card(title: "Set one", symbol: "plus") {
+        PageTitle(title: "Alarms", subtitle: "They ring loudly on this Mac (lid open), with Stop and Snooze, and on your iPhone through Reminders.")
+        Card(title: "New", symbol: "plus") {
+            Picker("", selection: $kind) {
+                Label("Alarm", systemImage: "alarm").tag(Alarm.Kind.alarm)
+                Label("Timer", systemImage: "timer").tag(Alarm.Kind.timer)
+                Label("Reminder", systemImage: "bell").tag(Alarm.Kind.reminder)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 320)
+
+            if kind == .timer {
+                HStack(spacing: 6) {
+                    ForEach([5, 10, 15, 25, 30, 45, 60], id: \.self) { value in
+                        Button("\(value) min") { minutes = value }.buttonStyle(PillButton(prominent: minutes == value))
+                    }
+                }
+                Stepper(value: $minutes, in: 1...720) {
+                    Text("\(minutes) minutes").font(.system(size: 13, weight: .medium).monospacedDigit())
+                }
+            } else {
+                HStack(alignment: .center, spacing: 22) {
+                    DatePicker("", selection: $time, displayedComponents: .hourAndMinute)
+                        .datePickerStyle(.stepperField)
+                        .labelsHidden()
+                        .controlSize(.large)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 5) {
+                            ForEach(Self.dayLetters, id: \.0) { day, letter in
+                                Button { if days.contains(day) { days.remove(day) } else { days.insert(day) } } label: {
+                                    Text(letter).font(.system(size: 12, weight: .semibold))
+                                        .frame(width: 26, height: 26)
+                                        .foregroundStyle(days.contains(day) ? Color.white : .secondary)
+                                        .background(days.contains(day) ? Look.accent : Color.primary.opacity(0.06), in: Circle())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        HStack(spacing: 10) {
+                            preset("Once", [])
+                            preset("Weekdays", [2, 3, 4, 5, 6])
+                            preset("Weekends", [1, 7])
+                            preset("Every day", Set(1...7))
+                        }
+                    }
+                }
+            }
+            HStack(spacing: 10) {
+                TextField(kind == .timer ? "Label: pasta, focus…" : kind == .reminder ? "What to remind you about" : "Label: Go to school, gym…", text: $label)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(set)
+                Button(kind == .timer ? "Start timer" : "Set \(kind.rawValue)", action: set)
+                    .buttonStyle(PillButton(prominent: true))
+            }
+            Text(done ?? preview).font(.system(size: 12)).foregroundStyle(done == nil ? Color.secondary : Color.green)
+        }
+
+        Card(title: "Coming up", symbol: "alarm") {
+            if model.alarms.isEmpty { Text("Nothing set.").foregroundStyle(.secondary).font(.system(size: 13)) }
+            ForEach(Array(model.alarms.enumerated()), id: \.element.id) { index, alarm in
+                HStack(spacing: 14) {
+                    Image(systemName: alarm.kind == .timer ? "timer" : alarm.kind == .reminder ? "bell.fill" : "alarm.fill")
+                        .foregroundStyle(Look.accent)
+                        .frame(width: 34, height: 34)
+                        .background(Look.accent.opacity(0.13), in: Circle())
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(alarm.when).font(.system(size: 20, weight: .semibold).monospacedDigit())
+                        Text([alarm.title, alarm.repeats.map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
+                            .font(.system(size: 12)).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Text(Self.countdown(alarm.fireAt)).font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary)
+                    Button { model.actions.cancelAlarm(alarm.id); model.reload() } label: { Image(systemName: "xmark") }
+                        .buttonStyle(PillButton())
+                        .help("Cancel")
+                }
+                .padding(.vertical, 6)
+                if index < model.alarms.count - 1 { Rectangle().fill(Look.line).frame(height: 1) }
+            }
+        }
+
+        Card(title: "Or type it", symbol: "text.cursor") {
             HStack {
-                TextField("Timer for 25 minutes · alarm at 6:30 called econ quiz · remind me at 3pm to submit the form", text: $request)
+                TextField("Timer for 25 minutes · alarm at 6:30 every weekday · remind me at 3pm to submit the form", text: $request)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit(add)
-                Button("Set", action: add).disabled(request.isEmpty)
+                Button("Set", action: add).buttonStyle(PillButton()).disabled(request.isEmpty)
             }
             if let problem { Text(problem).font(.system(size: 12)).foregroundStyle(.orange) }
         }
-        Card(title: "Coming up", symbol: "alarm") {
-            if model.alarms.isEmpty { Text("Nothing set.").foregroundStyle(.secondary).font(.system(size: 13)) }
-            ForEach(model.alarms) { alarm in
-                HStack(spacing: 12) {
-                    Image(systemName: alarm.kind == .timer ? "timer" : alarm.kind == .reminder ? "bell" : "alarm")
-                        .foregroundStyle(Look.accent).frame(width: 20)
-                    Text(alarm.when).font(.system(size: 16, weight: .semibold).monospacedDigit()).frame(width: 90, alignment: .leading)
-                    Text(alarm.title).font(.system(size: 14))
-                    Spacer()
-                    Text(alarm.kind.rawValue.capitalized).font(.system(size: 12)).foregroundStyle(.secondary)
-                    Button { model.actions.cancelAlarm(alarm.id); model.reload() } label: { Image(systemName: "xmark.circle.fill") }
-                        .buttonStyle(.plain).foregroundStyle(.secondary).help("Cancel")
-                }
-                .padding(.vertical, 4)
-            }
+    }
+
+    private func preset(_ title: String, _ value: Set<Int>) -> some View {
+        Button(title) { days = value }
+            .buttonStyle(.plain)
+            .font(.system(size: 12, weight: days == value ? .semibold : .regular))
+            .foregroundStyle(days == value ? Look.accent : .secondary)
+    }
+
+    /// The alarm as set from the controls.
+    private var draft: Alarm {
+        let now = Date()
+        let name = label.trimmingCharacters(in: .whitespaces)
+        if kind == .timer {
+            return Alarm(fireAt: now.addingTimeInterval(Double(minutes) * 60), title: name.isEmpty ? "\(minutes)-minute timer" : name, kind: .timer)
         }
+        let calendar = Calendar.current
+        let parts = calendar.dateComponents([.hour, .minute], from: time)
+        var fire = calendar.date(bySettingHour: parts.hour ?? 7, minute: parts.minute ?? 0, second: 0, of: now) ?? now
+        if fire <= now { fire = calendar.date(byAdding: .day, value: 1, to: fire) ?? fire }
+        var alarm = Alarm(fireAt: fire, title: name.isEmpty ? (kind == .reminder ? "Reminder" : "Alarm") : name, kind: kind, repeats: repeats)
+        if let next = alarm.next(after: now) { alarm.fireAt = next }
+        return alarm
+    }
+
+    private var repeats: String? {
+        switch days {
+        case []: return nil
+        case Set(1...7): return "daily"
+        case [2, 3, 4, 5, 6]: return "weekdays"
+        case [1, 7]: return "weekends"
+        default:
+            let names = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
+            return days.sorted { ($0 + 5) % 7 < ($1 + 5) % 7 }.map { names[$0 - 1] }.joined(separator: ",")
+        }
+    }
+
+    private var preview: String {
+        let alarm = draft
+        let when = Calendar.current.isDateInToday(alarm.fireAt) ? "today" : Calendar.current.isDateInTomorrow(alarm.fireAt) ? "tomorrow" : alarm.fireAt.formatted(.dateTime.weekday(.wide))
+        return kind == .timer ? "Rings at \(alarm.fireAt.formatted(date: .omitted, time: .shortened))."
+            : "Rings \(when) at \(alarm.fireAt.formatted(date: .omitted, time: .shortened)), \(Self.countdown(alarm.fireAt))" + (repeats.map { ", then \($0)." } ?? ".")
+    }
+
+    private func set() {
+        let alarm = draft
+        model.actions.addAlarm(.add(alarm))
+        done = "Set: \(alarm.title), \(alarm.when)."
+        label = ""
+        model.reload()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { done = nil }
+    }
+
+    private static func countdown(_ date: Date) -> String {
+        let minutes = max(0, Int(date.timeIntervalSinceNow / 60))
+        if minutes < 60 { return "in \(minutes) min" }
+        if minutes < 24 * 60 { return "in \(minutes / 60) h \(minutes % 60) min" }
+        return "in \(minutes / (24 * 60)) d \(minutes / 60 % 24) h"
     }
 
     private func add() {
@@ -798,34 +1155,172 @@ private struct NotesPage: View {
 
 // MARK: - Dictionary
 
+/// The dictionary as a list: words and names spelled their way (fixed when they sound close) and
+/// exact swaps ("manage back" → ManageBac). Same file as before, so Joe and the old format still work.
+private struct DotLabel: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 5) {
+            configuration.icon.font(.system(size: 6))
+            configuration.title.foregroundStyle(.secondary)
+        }
+    }
+}
+
 private struct DictionaryPage: View {
-    @State private var text = ""
-    @State private var saved = true
+    @Environment(\.narrow) private var narrow
+    struct Entry: Identifiable, Hashable {
+        var written: String
+        var heard: String // empty: fixed by sound
+        var id: String { heard + "→" + written }
+        var line: String { heard.isEmpty ? written : "\(heard) -> \(written)" }
+    }
+
+    @State private var entries: [Entry] = []
+    @State private var header: [String] = []
+    @State private var word = ""
+    @State private var heardAs = ""
+    @State private var search = ""
+    @State private var trial = ""
+    @State private var editingText = false
+    @State private var raw = ""
 
     var body: some View {
-        PageTitle(title: "Dictionary", subtitle: "Names and words Joe should spell your way. One per line; “heard -> Written” for a fixed swap.")
-        Card {
-            TextEditor(text: $text)
-                .font(.system(size: 14, design: .monospaced))
-                .scrollContentBackground(.hidden)
-                .frame(minHeight: 340)
-                .onChange(of: text) { saved = false }
-            HStack {
-                Text(saved ? "Saved" : "Not saved").font(.system(size: 12)).foregroundStyle(.secondary)
-                Spacer()
-                Button("Save") {
-                    try? FileManager.default.createDirectory(at: Vocabulary.url.deletingLastPathComponent(), withIntermediateDirectories: true)
-                    try? text.write(to: Vocabulary.url, atomically: true, encoding: .utf8)
-                    saved = true
+        PageTitle(title: "Dictionary", subtitle: "Names and words Joe always spells your way, in dictation and when you ask him things.")
+
+        HStack(spacing: 12) {
+            count("\(entries.filter { $0.heard.isEmpty }.count)", "words and names", "textformat")
+            count("\(entries.filter { !$0.heard.isEmpty }.count)", "exact swaps", "arrow.left.arrow.right")
+        }
+
+        Card(title: "Add", symbol: "plus") {
+            HStack(spacing: 10) {
+                TextField("Spelled: Ammiel, ManageBac, WellPrepped", text: $word).textFieldStyle(.roundedBorder).onSubmit(add)
+                TextField("Joe hears (optional): manage back", text: $heardAs).textFieldStyle(.roundedBorder).onSubmit(add)
+                Button("Add", action: add).buttonStyle(PillButton(prominent: true)).disabled(word.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            Text("Leave “Joe hears” empty and he fixes anything that sounds close. Fill it in and he swaps those exact words every time.")
+                .font(.system(size: 11.5)).foregroundStyle(.secondary)
+        }
+
+        Card(title: "Try it", symbol: "wand.and.stars") {
+            TextField("Type a sentence the way Joe might mishear it…", text: $trial).textFieldStyle(.roundedBorder)
+            if !trial.isEmpty {
+                let fixed = Vocabulary.apply(trial)
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: fixed == trial ? "equal.circle" : "checkmark.circle.fill").foregroundStyle(fixed == trial ? Color.secondary : Color.green)
+                    Text(fixed == trial ? "No changes." : fixed).font(.system(size: 13)).textSelection(.enabled)
                 }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut("s")
             }
         }
-        .onAppear {
-            text = (try? String(contentsOf: Vocabulary.url, encoding: .utf8)) ?? ""
-            DispatchQueue.main.async { saved = true }
+
+        Card(title: "Your words", symbol: "character.book.closed") {
+            HStack {
+                SearchField(text: $search, prompt: "Search your words")
+                Spacer()
+                Button(editingText ? "Done" : "Edit as text") {
+                    if editingText { saveRaw() } else { raw = (try? String(contentsOf: Vocabulary.url, encoding: .utf8)) ?? "" }
+                    editingText.toggle()
+                }
+                .buttonStyle(PillButton())
+            }
+            if editingText {
+                TextEditor(text: $raw)
+                    .font(.system(size: 13, design: .monospaced))
+                    .scrollContentBackground(.hidden)
+                    .frame(minHeight: 260)
+                    .padding(8)
+                    .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+            } else {
+                let shown = entries.filter { search.isEmpty || $0.written.localizedCaseInsensitiveContains(search) || $0.heard.localizedCaseInsensitiveContains(search) }
+                if shown.isEmpty {
+                    Text(entries.isEmpty ? "No words yet. Add names Joe gets wrong: teachers, friends, products." : "Nothing matches.")
+                        .font(.system(size: 13)).foregroundStyle(.secondary)
+                }
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: narrow ? 1 : 2), spacing: 10) {
+                    ForEach(shown) { entry in
+                        HStack(spacing: 10) {
+                            Circle().fill(entry.heard.isEmpty ? Look.accent : Color.blue).frame(width: 7, height: 7)
+                                .help(entry.heard.isEmpty ? "Fixed when it sounds close" : "Exact swap")
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(entry.written).font(.system(size: 13.5, weight: .medium)).lineLimit(1)
+                                if !entry.heard.isEmpty {
+                                    Text("heard as “\(entry.heard)”").font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                            }
+                            Spacer(minLength: 4)
+                            Button { remove(entry) } label: { Image(systemName: "xmark").font(.system(size: 10, weight: .bold)) }
+                                .buttonStyle(.plain).foregroundStyle(.tertiary).help("Remove")
+                        }
+                        .padding(.horizontal, 12)
+                        .frame(height: 42)
+                        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    }
+                }
+                HStack(spacing: 14) {
+                    Label("Sounds like", systemImage: "circle.fill").foregroundStyle(Look.accent)
+                    Label("Exact swap", systemImage: "circle.fill").foregroundStyle(.blue)
+                }
+                .font(.system(size: 11))
+                .labelStyle(DotLabel())
+            }
         }
+        .onAppear(perform: load)
+    }
+
+    private func count(_ value: String, _ label: String, _ symbol: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol).foregroundStyle(Look.accent).frame(width: 32, height: 32).background(Look.accent.opacity(0.12), in: Circle())
+            VStack(alignment: .leading, spacing: 1) {
+                Text(value).font(.system(size: 20, weight: .bold).monospacedDigit())
+                Text(label).font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity)
+        .background(Look.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Look.line))
+    }
+
+    private func load() {
+        let text = (try? String(contentsOf: Vocabulary.url, encoding: .utf8)) ?? ""
+        header = []
+        entries = []
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("#") { header.append(line); continue }
+            guard !trimmed.isEmpty else { continue }
+            let parts = trimmed.components(separatedBy: "->").map { $0.trimmingCharacters(in: .whitespaces) }
+            entries.append(parts.count == 2 ? Entry(written: parts[1], heard: parts[0]) : Entry(written: trimmed, heard: ""))
+        }
+    }
+
+    private func save() {
+        if header.isEmpty { header = ["# Your dictionary (edited in Joe → Dictionary). A word per line; “heard -> Written” for an exact swap."] }
+        let text = (header + [""] + entries.map(\.line)).joined(separator: "\n") + "\n"
+        try? FileManager.default.createDirectory(at: Vocabulary.url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? text.write(to: Vocabulary.url, atomically: true, encoding: .utf8)
+    }
+
+    private func saveRaw() {
+        try? raw.write(to: Vocabulary.url, atomically: true, encoding: .utf8)
+        load()
+    }
+
+    private func add() {
+        let written = word.trimmingCharacters(in: .whitespaces), heard = heardAs.trimmingCharacters(in: .whitespaces)
+        guard !written.isEmpty else { return }
+        let entry = Entry(written: written, heard: heard)
+        entries.removeAll { $0.id == entry.id }
+        entries.insert(entry, at: 0)
+        save()
+        word = ""
+        heardAs = ""
+    }
+
+    private func remove(_ entry: Entry) {
+        entries.removeAll { $0.id == entry.id }
+        save()
     }
 }
 
@@ -959,26 +1454,50 @@ private struct SettingsPage: View {
     @State private var naturalVoice = SpeechOutput.naturalVoice
     @State private var login = false // read on appear: asking macOS is slow, too slow for every redraw
 
+    @AppStorage("settingsTab") private var tab = "general"
+    @AppStorage("alarmsAtNotch") private var alarmsAtNotch = "full"
+
+    private static let tabs: [(id: String, title: String, symbol: String)] = [
+        ("general", "General", "gearshape"),
+        ("personality", "Personality", "face.smiling"),
+        ("automations", "Automations", "clock.badge.checkmark"),
+        ("privacy", "Privacy", "lock"),
+        ("advanced", "Advanced", "slider.horizontal.3"),
+    ]
+
     var body: some View {
         PageTitle(title: "Settings")
             .onAppear { login = SMAppService.mainApp.status == .enabled }
 
-        section("Dictation", "waveform") {
-            row("Writing style", "How your dictation is punctuated") {
-                Choice(options: WritingStyle.allCases.map { ($0.rawValue, $0.title) }, selection: $writingStyle)
+        HStack(spacing: 4) {
+            ForEach(Self.tabs, id: \.id) { item in
+                Button { withAnimation(.easeOut(duration: 0.15)) { tab = item.id } } label: {
+                    Label(item.title, systemImage: item.symbol)
+                        .font(.system(size: 13, weight: tab == item.id ? .semibold : .medium))
+                        .padding(.horizontal, 12)
+                        .frame(height: 30)
+                        .background(tab == item.id ? Look.card : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(tab == item.id ? Look.line : .clear))
+                        .foregroundStyle(tab == item.id ? .primary : .secondary)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
-            row("Microphone") {
-                Choice(options: [("", "Automatic")] + model.actions.microphones().map { ($0.uid, $0.name) }, selection: $microphone)
-            }
-            row("Languages", "English only stops it mishearing you as Russian") {
-                Choice(options: [(true, "English only"), (false, "25 languages")], selection: $englishOnly)
-                    .onChange(of: englishOnly) { model.actions.setEnglishOnly(englishOnly) }
-            }
-            row("AI cleanup", "Removes filler words, on this Mac") { switchOn($cleanup) { model.actions.setCleanup($0) } }
-            row("Show at the notch", "Answers drop down from the notch", last: true) { switchOn($notch) { model.actions.setNotch($0) } }
         }
+        .padding(4)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
 
-        section("Joe", "sparkle") {
+        switch tab {
+        case "personality": personality
+        case "automations": automations
+        case "privacy": privacy
+        case "advanced": advanced
+        default: general
+        }
+    }
+
+    @ViewBuilder private var general: some View {
+        section("You", "person.crop.circle") {
             row("Your name", "What Joe calls you") {
                 TextField("", text: $userName)
                     .textFieldStyle(.plain)
@@ -989,39 +1508,47 @@ private struct SettingsPage: View {
                     .background(Color.primary.opacity(0.06), in: Capsule())
                     .overlay(Capsule().strokeBorder(Look.line))
             }
+            row("Open Joe at login", last: true) {
+                switchOn($login) { on in
+                    do { if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() } } catch { NSSound.beep() }
+                }
+            }
+        }
+        section("Dictation", "waveform") {
+            row("Writing style", "How your dictation is punctuated") {
+                Choice(options: WritingStyle.allCases.map { ($0.rawValue, $0.title) }, selection: $writingStyle)
+            }
+            row("Microphone") {
+                Choice(options: [("", "Automatic")] + model.actions.microphones().map { ($0.uid, $0.name) }, selection: $microphone)
+            }
+            row("Languages", "English only stops it mishearing you as Russian", last: true) {
+                Choice(options: [(true, "English only"), (false, "25 languages")], selection: $englishOnly)
+                    .onChange(of: englishOnly) { model.actions.setEnglishOnly(englishOnly) }
+            }
+        }
+        section("Notch", "rectangle.topthird.inset.filled") {
+            row("Answers at the notch", "Answers drop down from the notch") { switchOn($notch) { model.actions.setNotch($0) } }
+            row("Alarms at the notch", "The capsule beside the notch", last: true) {
+                Choice(options: [("full", "Time"), ("icon", "Icon only"), ("soon", "Last hour only"), ("off", "Hidden")], selection: $alarmsAtNotch)
+            }
+        }
+        section("Joe", "power") {
+            row("Quit Joe", "Dictation and the notch stop until you open Joe again", last: true) {
+                Button("Quit") { NSApp.terminate(nil) }.buttonStyle(PillButton())
+            }
+        }
+    }
+
+    @ViewBuilder private var personality: some View {
+        section("How Joe talks", "bubble.left.and.text.bubble.right") {
             row("Answers", "How much Joe says") {
                 Choice(options: [("brief", "Brief"), ("normal", "Normal"), ("chatty", "Chatty")], selection: $chattiness)
             }
             row("Tone", "How Joe puts things") {
                 Choice(options: [("gentle", "Gentle"), ("direct", "Direct"), ("blunt", "Blunt")], selection: $tone)
             }
-            row("Hype you up", "Joe cheers when you get things done") { switchOn($hype) }
-            row("Model", "Smarter, or faster and lighter on your usage") {
-                Choice(options: Assistant.Model.allCases.map { ($0.rawValue, $0.name) }, selection: $assistantModel)
-            }
-            row("Effort", "How hard Joe thinks before answering") {
-                Choice(options: Assistant.Effort.allCases.map { ($0.rawValue, $0.name) }, selection: $effort)
-            }
-            row("Permissions", (Assistant.Autonomy(rawValue: autonomy)?.title.components(separatedBy: ": ").dropFirst().first).map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? "What Joe may do without asking") {
-                Choice(options: Assistant.Autonomy.allCases.map { ($0.rawValue, $0.title.components(separatedBy: ":")[0]) }, selection: $autonomy)
-            }
-            row("Click and type", "Joe can use your mouse and keyboard") { switchOn($control) { model.actions.setScreenControl($0) } }
-            row("Morning briefing", "On your first wake of the day") { switchOn($morning) }
-            row("Night shutdown", "21:30 on school nights") { switchOn($night) }
-            row("Evening check", "19:30: new ManageBac tasks and grades into your Daybook") { switchOn($evening) }
-            row("Alarms on iPhone", "Copies alarms into a “Joe” list in Reminders, so your phone rings too") { switchOn($toReminders) }
-            row("Ask from iPhone", "“Hey Siri, add … to Ask Joe”: Joe answers in Reminders while your Mac is awake") { switchOn($phoneRemote) }
-            row("“Hey Joe”", "Talk without a key. Listens on your Mac only; the mic stays on (orange dot)") { switchOn($wakeWord) }
-            row("Remember conversations", "A log in your vault") { switchOn($remember) }
-            row("Save notes to Obsidian", "When the notepad closes") { switchOn($saveNotes) }
-            row("Memory vault", Assistant.vaultURL?.path.replacingOccurrences(of: NSHomeDirectory(), with: "~") ?? "None") {
-                Button("Choose…") { model.actions.chooseVault() }.buttonStyle(PillButton())
-            }
-            row("Instructions", "Your standing notes for Joe", last: true) {
-                Button("Edit…") { Assistant.openInstructions() }.buttonStyle(PillButton())
-            }
+            row("Hype you up", "Joe cheers when you get things done", last: true) { switchOn($hype) }
         }
-
         section("Voice", "speaker.wave.2") {
             row("Joe's voice", "Off, or how Joe sounds when he answers") {
                 Choice(options: SpeechOutput.Engine.allCases.map { ($0, $0.title.components(separatedBy: ":")[0]) }, selection: $voice)
@@ -1034,14 +1561,32 @@ private struct SettingsPage: View {
             row("Laughs and sighs", "In the Expressive voice") { switchOn($sounds) }
             row("Read briefings aloud", last: true) { switchOn($speakBriefing) }
         }
+    }
 
-        section("Privacy", "lock") {
+    @ViewBuilder private var automations: some View {
+        section("Every day", "sun.horizon") {
+            row("Morning briefing", "On your first wake of the day") { switchOn($morning) }
+            row("Evening check", "19:30: new ManageBac tasks and grades into your Daybook") { switchOn($evening) }
+            row("Night shutdown", "21:30 on school nights", last: true) { switchOn($night) }
+        }
+        section("iPhone", "iphone") {
+            row("Alarms on iPhone", "Copies alarms to a “Joe” list in Reminders") { switchOn($toReminders) }
+            row("Ask from iPhone", "“Hey Siri, add … to Ask Joe”", last: true) { switchOn($phoneRemote) }
+        }
+        section("Hands-free", "ear") {
+            row("“Hey Joe”", "Talk without a key. On your Mac only; the mic stays on", last: true) { switchOn($wakeWord) }
+        }
+    }
+
+    @ViewBuilder private var privacy: some View {
+        section("What Joe keeps", "tray.full") {
             row("Keep history", "What you dictate and ask, on this Mac only") { switchOn($keepHistory) }
+            row("Remember conversations", "A log in your vault, Joe's memory of past days") { switchOn($remember) }
+            row("Save notes to Obsidian", "When the notepad closes") { switchOn($saveNotes) }
             row("Clear history", last: true) {
                 Button("Clear") { ActivityLog.clear(); model.reload() }.buttonStyle(PillButton(destructive: true))
             }
         }
-
         section("Permissions", "checkmark.shield") {
             permission("Accessibility", "Typing and shortcuts", AXIsProcessTrusted(), "Privacy_Accessibility")
             permission("Microphone", "Hearing you", AVCaptureDevice.authorizationStatus(for: .audio) == .authorized, "Privacy_Microphone")
@@ -1054,15 +1599,30 @@ private struct SettingsPage: View {
                        ask: speech == .notDetermined ? { done in SFSpeechRecognizer.requestAuthorization { _ in done() } } : nil)
                 .id(permissionsSeen)
         }
+    }
 
-        section("General", "gearshape") {
-            row("Open Joe at login") {
-                switchOn($login) { on in
-                    do { if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() } } catch { NSSound.beep() }
-                }
+    @ViewBuilder private var advanced: some View {
+        section("Brain", "cpu") {
+            row("Model", "Smarter, or faster and lighter on your usage") {
+                Choice(options: Assistant.Model.allCases.map { ($0.rawValue, $0.name) }, selection: $assistantModel)
             }
-            row("Quit Joe", "Dictation and the notch stop until you open Joe again", last: true) {
-                Button("Quit") { NSApp.terminate(nil) }.buttonStyle(PillButton())
+            row("Effort", "How hard Joe thinks before answering", last: true) {
+                Choice(options: Assistant.Effort.allCases.map { ($0.rawValue, $0.name) }, selection: $effort)
+            }
+        }
+        section("Control", "hand.raised") {
+            row("Permissions", (Assistant.Autonomy(rawValue: autonomy)?.title.components(separatedBy: ": ").dropFirst().first).map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? "What Joe may do without asking") {
+                Choice(options: Assistant.Autonomy.allCases.map { ($0.rawValue, $0.title.components(separatedBy: ":")[0]) }, selection: $autonomy)
+            }
+            row("Click and type", "Joe can use your mouse and keyboard") { switchOn($control) { model.actions.setScreenControl($0) } }
+            row("AI cleanup", "Removes filler words from dictation, on this Mac", last: true) { switchOn($cleanup) { model.actions.setCleanup($0) } }
+        }
+        section("Memory", "brain") {
+            row("Memory vault", Assistant.vaultURL?.path.replacingOccurrences(of: NSHomeDirectory(), with: "~") ?? "None") {
+                Button("Choose…") { model.actions.chooseVault() }.buttonStyle(PillButton())
+            }
+            row("Instructions", "Your standing notes for Joe", last: true) {
+                Button("Edit…") { Assistant.openInstructions() }.buttonStyle(PillButton())
             }
         }
     }

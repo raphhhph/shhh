@@ -1,3 +1,5 @@
+import EventKit
+import Speech
 import AppKit
 import AVFoundation
 import ServiceManagement
@@ -936,6 +938,7 @@ private struct SettingsPage: View {
     @AppStorage("alarmsToReminders") private var toReminders = true
     @AppStorage("phoneRemote") private var phoneRemote = true
     @AppStorage("wakeWord") private var wakeWord = false
+    @State private var permissionsSeen = 0
     @AppStorage("assistantModel") private var assistantModel = Assistant.Model.opus.rawValue
     @AppStorage("assistantEffort") private var effort = Assistant.Effort.low.rawValue
     @AppStorage("assistantAutonomy") private var autonomy = Assistant.Autonomy.careful.rawValue
@@ -1042,7 +1045,14 @@ private struct SettingsPage: View {
         section("Permissions", "checkmark.shield") {
             permission("Accessibility", "Typing and shortcuts", AXIsProcessTrusted(), "Privacy_Accessibility")
             permission("Microphone", "Hearing you", AVCaptureDevice.authorizationStatus(for: .audio) == .authorized, "Privacy_Microphone")
-            permission("Screen Recording", "Reading your screen", CGPreflightScreenCaptureAccess(), "Privacy_ScreenCapture", last: true)
+            permission("Screen Recording", "Reading your screen", CGPreflightScreenCaptureAccess(), "Privacy_ScreenCapture")
+            let reminders = EKEventStore.authorizationStatus(for: .reminder)
+            permission("Reminders", "Alarms on iPhone, Ask from iPhone", reminders == .fullAccess, "Privacy_Reminders",
+                       ask: reminders == .notDetermined ? { done in ReminderMirror.store.requestFullAccessToReminders { _, _ in done() } } : nil)
+            let speech = SFSpeechRecognizer.authorizationStatus()
+            permission("Speech Recognition", "“Hey Joe”", speech == .authorized, "Privacy_SpeechRecognition", last: true,
+                       ask: speech == .notDetermined ? { done in SFSpeechRecognizer.requestAuthorization { _ in done() } } : nil)
+                .id(permissionsSeen)
         }
 
         section("General", "gearshape") {
@@ -1086,7 +1096,8 @@ private struct SettingsPage: View {
             .controlSize(.small)
     }
 
-    private func permission(_ label: String, _ detail: String, _ granted: Bool, _ pane: String, last: Bool = false) -> some View {
+    private func permission(_ label: String, _ detail: String, _ granted: Bool, _ pane: String, last: Bool = false,
+                            ask: ((@escaping () -> Void) -> Void)? = nil) -> some View {
         row(label, detail, last: last) {
             if granted {
                 Label("Allowed", systemImage: "checkmark.circle.fill")
@@ -1094,6 +1105,8 @@ private struct SettingsPage: View {
                     .foregroundStyle(.green)
             } else {
                 Button("Allow…") {
+                    // Not asked yet: macOS's own prompt. Asked and refused: the pane in System Settings.
+                    if let ask { ask { DispatchQueue.main.async { permissionsSeen += 1 } }; return }
                     NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")!)
                 }
                 .buttonStyle(PillButton(prominent: true))

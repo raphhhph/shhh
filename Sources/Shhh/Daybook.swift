@@ -39,7 +39,7 @@ enum Daybook {
     }
 
     private static func day(_ date: Date) -> String {
-        date.formatted(.iso8601.year().month().day())
+        date.formatted(.localDay)
     }
 
     // MARK: - Today's note
@@ -280,7 +280,7 @@ enum Daybook {
     // MARK: - Memory: the conversation log
 
     private static func logURL(for date: Date) -> URL? {
-        history?.appendingPathComponent("Log \(date.formatted(.iso8601.year().month())).md")
+        history?.appendingPathComponent("Log \(date.formatted(Date.ISO8601FormatStyle(timeZone: .current).year().month())).md")
     }
 
     /// One line per request: when, what was asked, and the answer's subject.
@@ -321,4 +321,10 @@ enum Daybook {
             .flatMap { $0.components(separatedBy: "\n").filter { $0.hasPrefix("- ") } }
         return Array(lines.suffix(limit))
     }
+}
+
+extension FormatStyle where Self == Date.ISO8601FormatStyle {
+    /// "2026-10-19" in the Mac's time zone (plain `.iso8601` is UTC: before 08:00 in Shenzhen it
+    /// would still be yesterday).
+    static var localDay: Date.ISO8601FormatStyle { Date.ISO8601FormatStyle(timeZone: .current).year().month().day() }
 }

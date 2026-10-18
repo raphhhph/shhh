@@ -2,6 +2,28 @@
 
 Ranked by how much they'd change your day, with a rough size for each (S = an hour or two, M = an evening, L = a weekend). Tell Joe or me the numbers you want.
 
+**Status, Monday 19 October:** everything except 15, 16 and 17 is built. How to use each:
+
+| # | What | Try it |
+|---|---|---|
+| 1 | Ask from iPhone | "Hey Siri, add *what's due tomorrow* to Ask Joe". The answer arrives as a "Joe: …" reminder (Mac must be awake). |
+| 2 | ManageBac watch | Automatic at 19:30 (Settings → Evening check). |
+| 3 | Lecture recorder | "Joe, record this lecture", then close the notepad at the end. |
+| 4 | Study plan | "Plan my study" routine. |
+| 5 | Email replies | "Reply to Ms Marquardt saying Tuesday works": approval card first. |
+| 6 | Focus mode | "Lock in for 50 minutes": wrap-up when the timer rings. |
+| 7 | "Hey Joe" | Settings → "Hey Joe" (off by default). |
+| 8 | People | Brain/People/People.md, updated as you mention people. |
+| 9 | Mood picks | "Play something for studying" uses your own playlists. |
+| 10 | Alarms on iPhone | Automatic: a "Joe" list in Reminders (Settings → Alarms on iPhone). |
+| 11 | Weekend brief | Automatic on non-school mornings. |
+| 12 | Daybook ticks | Automatic when Joe finishes a Daybook task. |
+| 13 | Undo | "Joe, undo that." |
+| 14 | Today timeline | Dashboard home page. |
+| 18 | Backup | Pushed to GitHub; the Weekly review routine pushes every week. |
+| 19 | Personality | Settings → Answers / Tone / Hype. |
+| 20 | Daily recap | Night shutdown routine ends with today's recap. |
+
 ## Big wins
 
 1. **Ask Joe from your iPhone (L).** A tiny iOS Shortcut or Telegram bot that forwards to Joe on your Mac: "add this to my daybook", "what's due tomorrow" from anywhere. Your Mac does the work; the phone is just a remote.

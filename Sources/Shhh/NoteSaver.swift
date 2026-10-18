@@ -187,7 +187,7 @@ final class NoteSaver {
     }
 
     private static func day(_ date: Date) -> String {
-        date.formatted(.iso8601.year().month().day())
+        date.formatted(.localDay)
     }
 
     /// Obsidian can't link to names with these in them.

@@ -626,7 +626,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func greetIfMorning() {
         let now = Date()
         let calendar = Calendar.current
-        let today = now.formatted(.iso8601.year().month().day())
+        let today = now.formatted(.localDay)
         guard morningBriefing, Assistant.executable != nil,
               // School days from 5:00; a day off from 7:00 (a lie-in shouldn't wake to a briefing).
               (Daybook.isSchoolDay(now) ? 5..<12 : 7..<13).contains(calendar.component(.hour, from: now)),
@@ -669,7 +669,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func shutDownIfNight() {
         let now = Date()
         let calendar = Calendar.current
-        let today = now.formatted(.iso8601.year().month().day())
+        let today = now.formatted(.localDay)
         let minutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
         guard nightShutdown, Assistant.executable != nil, Assistant.vaultURL != nil,
               minutes >= 21 * 60 + 30,
@@ -752,7 +752,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func eveningCheckIfTime() {
         let now = Date()
         let calendar = Calendar.current
-        let today = now.formatted(.iso8601.year().month().day())
+        let today = now.formatted(.localDay)
         let minutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
         guard eveningCheck, Assistant.executable != nil, Assistant.vaultURL != nil,
               (19 * 60 + 30..<23 * 60).contains(minutes),

@@ -8,10 +8,34 @@ import ScreenCaptureKit
 enum ScreenCapture {
     struct Screenshot {
         let jpeg: Data
+        let image: CGImage
         /// Where the captured display is, in screen coordinates.
         let screenFrame: NSRect
         /// The image's size in pixels, which Claude's coordinates refer to.
         let pixelSize: CGSize
+        /// Where the mouse pointer was, in the image's pixels (from the top left).
+        let cursor: CGPoint?
+
+        /// The area around the pointer with a red ring on it: what "this", "him" or "her" means
+        /// when the user is pointing at something. About a sixth of the tokens of the whole screen.
+        func cursorCrop() -> Data? {
+            guard let cursor else { return nil }
+            let size = CGSize(width: min(640, pixelSize.width), height: min(400, pixelSize.height))
+            let origin = CGPoint(x: min(max(cursor.x - size.width / 2, 0), pixelSize.width - size.width),
+                                 y: min(max(cursor.y - size.height / 2, 0), pixelSize.height - size.height))
+            guard let crop = image.cropping(to: CGRect(origin: origin, size: size)),
+                  let context = CGContext(data: nil, width: crop.width, height: crop.height, bitsPerComponent: 8,
+                                          bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+            context.draw(crop, in: CGRect(x: 0, y: 0, width: crop.width, height: crop.height))
+            // CGContext's origin is the bottom left.
+            let ring = CGPoint(x: cursor.x - origin.x, y: CGFloat(crop.height) - (cursor.y - origin.y))
+            context.setStrokeColor(CGColor(red: 1, green: 0.15, blue: 0.1, alpha: 1))
+            context.setLineWidth(3)
+            context.strokeEllipse(in: CGRect(x: ring.x - 14, y: ring.y - 14, width: 28, height: 28))
+            guard let marked = context.makeImage() else { return nil }
+            return NSBitmapImageRep(cgImage: marked).representation(using: .jpeg, properties: [.compressionFactor: 0.8])
+        }
     }
 
     /// The display under the mouse as JPEG, at most 1568 px on its long side (the size Claude
@@ -24,7 +48,10 @@ enum ScreenCapture {
             let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
             let id = screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
             guard let screen, let display = content.displays.first(where: { $0.displayID == id }) else { return nil }
-            let shhh = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
+            // Shhh's own windows (the app's, also when this is `Shhh --look` running for it).
+            let shhh = content.applications.filter {
+                $0.processID == ProcessInfo.processInfo.processIdentifier || $0.bundleIdentifier == Bundle.main.bundleIdentifier
+            }
             let filter = SCContentFilter(display: display, excludingApplications: shhh, exceptingWindows: [])
             let config = SCStreamConfiguration()
             let scale = min(1, 1568 / CGFloat(max(display.width, display.height)))
@@ -35,7 +62,15 @@ enum ScreenCapture {
             guard let jpeg = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else {
                 return nil
             }
-            return Screenshot(jpeg: jpeg, screenFrame: screen.frame, pixelSize: CGSize(width: image.width, height: image.height))
+            let frame = screen.frame
+            let cursor = NSMouseInRect(mouse, frame, false)
+                ? CGPoint(x: (mouse.x - frame.minX) / frame.width * CGFloat(image.width),
+                          y: (frame.maxY - mouse.y) / frame.height * CGFloat(image.height))
+                : nil
+            let shot = Screenshot(jpeg: jpeg, image: image, screenFrame: frame,
+                                  pixelSize: CGSize(width: image.width, height: image.height), cursor: cursor)
+            ScreenControl.record(shot) // clicks given in its pixels land right
+            return shot
         } catch {
             return nil
         }
@@ -68,6 +103,21 @@ enum ScreenCapture {
             #"\bwhere (do|can|should|would) i (\#(actions))\b"#,             // "where do I click"
             #"\b(where'?s|where is|where are|which) (the |a |an )?(\w+ ){0,2}(\#(controls))\b"#,
             #"\bwhat (do|should) i (click|press|tap|select)\b"#,
+        ]
+        return patterns.contains { request.range(of: $0, options: [.regularExpression, .caseInsensitive]) != nil }
+    }
+
+    /// Whether a request is about something the user is pointing at with the mouse: "find his
+    /// LinkedIn", "what does this word mean", "who's that person".
+    static func pointsAtSomething(_ request: String) -> Bool {
+        let things = "guy|girl|person|one|thing|word|name|link|company|product|place|app|logo|brand|book|song|movie|show"
+        // "Him" and "her" alone usually mean someone from the conversation ("email her that I'm
+        // late"); with a look-up word they mean someone on screen.
+        let patterns = [
+            #"\b(this|that) (\#(things))\b"#,
+            #"\b(over here|right here|i'?m pointing at|my (mouse|cursor|pointer))\b"#,
+            #"\b(find|look up|lookup|search( for)?|google|who|what)\b[^.?!]{0,30}\b(him|her|his|hers)\b"#,
+            #"\bwho('?s| is)? (he|she)\b"#,
         ]
         return patterns.contains { request.range(of: $0, options: [.regularExpression, .caseInsensitive]) != nil }
     }

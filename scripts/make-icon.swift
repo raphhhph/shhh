@@ -1,4 +1,4 @@
-// Renders Resources/AppIcon.icns: a white waveform on a black rounded square.
+// Renders Resources/AppIcon.icns: Joe's orange ✦ on a near-black rounded square.
 // Usage: swift scripts/make-icon.swift
 import AppKit
 
@@ -18,17 +18,18 @@ func render(_ size: Int) -> Data {
     let rect = NSRect(x: inset, y: inset, width: s - inset * 2, height: s - inset * 2)
     NSColor(white: 0.08, alpha: 1).setFill()
     NSBezierPath(roundedRect: rect, xRadius: rect.width * 0.225, yRadius: rect.width * 0.225).fill()
-    let heights: [CGFloat] = [0.18, 0.36, 0.58, 0.36, 0.72, 0.44, 0.24]
-    let barWidth = rect.width * 0.065
-    let gap = rect.width * 0.045
-    let total = CGFloat(heights.count) * barWidth + CGFloat(heights.count - 1) * gap
-    var x = rect.midX - total / 2
-    NSColor.white.setFill()
-    for h in heights {
-        let height = rect.height * h
-        NSBezierPath(roundedRect: NSRect(x: x, y: rect.midY - height / 2, width: barWidth, height: height),
-                     xRadius: barWidth / 2, yRadius: barWidth / 2).fill()
-        x += barWidth + gap
+    // A soft orange glow fading out, then the ✦ itself: the same "sparkle" symbol as at the notch.
+    NSGraphicsContext.saveGraphicsState()
+    NSBezierPath(roundedRect: rect, xRadius: rect.width * 0.225, yRadius: rect.width * 0.225).addClip()
+    NSGradient(colors: [NSColor(red: 1, green: 0.55, blue: 0.1, alpha: 0.32), NSColor(red: 1, green: 0.55, blue: 0.1, alpha: 0)])!
+        .draw(fromCenter: NSPoint(x: rect.midX, y: rect.midY), radius: 0,
+              toCenter: NSPoint(x: rect.midX, y: rect.midY), radius: rect.width * 0.5, options: [])
+    NSGraphicsContext.restoreGraphicsState()
+    let configuration = NSImage.SymbolConfiguration(pointSize: rect.width * 0.56, weight: .semibold)
+        .applying(NSImage.SymbolConfiguration(paletteColors: [NSColor(red: 1, green: 0.62, blue: 0.12, alpha: 1)]))
+    if let symbol = NSImage(systemSymbolName: "sparkle", accessibilityDescription: nil)?.withSymbolConfiguration(configuration) {
+        let size = symbol.size
+        symbol.draw(in: NSRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2, width: size.width, height: size.height))
     }
     NSGraphicsContext.restoreGraphicsState()
     return rep.representation(using: .png, properties: [:])!

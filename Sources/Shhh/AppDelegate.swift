@@ -14,22 +14,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var transcriber = Transcriber()
     private let cleaner = TextCleaner()
     private let panel = RecordingPanel()
-    private let assistant = Assistant()
     private let answerPanel = AnswerPanel()
     private let pointer = ScreenPointer()
     private let speech = SpeechOutput()
-    /// The screenshot sent with the current request, which Claude's point tags refer to.
-    private var turnScreenshot: ScreenCapture.Screenshot?
-    /// Whether this conversation is about the screen, so visual follow-ups get a fresh screenshot.
-    private var screenConversation = false
-    /// The selection sent with the current request, which a `[REPLACE]` reply is pasted over.
-    private var turnSelection: ScreenContext.Text?
-    /// The current reply as Claude wrote it, tags and all.
-    private var turnReply = ""
+    private let toast = Toast()
+    private let shelf = TaskShelf()
+    private let notepad = Notepad()
+    private let noteSaver = NoteSaver()
+    private let alarms = AlarmClock()
+    private lazy var dashboard = Dashboard(actions: DashboardModel.Actions(
+        ask: { [weak self] in self?.askTyped($0) },
+        status: { [weak self] in self?.speechStatus ?? "" },
+        setVoice: { [weak self] engine in
+            self?.speech.stop()
+            SpeechOutput.engine = engine
+            self?.speech.prepare()
+        },
+        setNaturalVoice: { [weak self] voice in
+            SpeechOutput.naturalVoice = voice
+            if SpeechOutput.engine == .natural { self?.speech.prepare() }
+        },
+        setNotch: { [weak self] on in
+            Notch.isEnabled = on
+            self?.refreshResting()
+        },
+        setCleanup: { [weak self] on in if self?.aiCleanup != on { self?.toggleCleanup() } },
+        setScreenControl: { [weak self] on in if ScreenControl.isEnabled != on { self?.toggleScreenControl() } },
+        chooseVault: { [weak self] in self?.chooseMemoryVault() },
+        openNotepad: { [weak self] in self?.notepad.show() },
+        microphones: { [weak self] in self?.microphones.inputs.map { ($0.uid, $0.name) } ?? [] },
+        setEnglishOnly: { [weak self] on in
+            guard Transcriber.englishOnly != on else { return }
+            Transcriber.englishOnly = on
+            self?.reloadSpeechModel() // downloads the other model the first time
+        },
+        cancelAlarm: { [weak self] id in self?.alarms.cancel(id: id) },
+        addAlarm: { [weak self] request in self?.alarms.handle(request) }
+    ))
+    private let resting = RestingNotch()
+    /// Every conversation with the assistant: the one on the card (`focused`) and the ones carrying
+    /// on in the side notch.
+    private var tasks: [AssistantTask] = []
+    private var focused: AssistantTask?
+    /// The morning briefing's conversation, held open for a moment when it's ready.
+    private var briefing: AssistantTask?
 
     private var statusItem: NSStatusItem!
     private var state: State = .idle {
-        didSet { stayAwake(state != .idle) }
+        didSet {
+            stayAwake(state != .idle)
+            refreshResting()
+        }
     }
     private var activity: NSObjectProtocol?
     private var pressedAt = Date()
@@ -80,20 +115,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Shhh")
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        menu.delegate = self
-        statusItem.menu = menu
+        statusItem.button?.image = NSImage(systemSymbolName: "sparkle", accessibilityDescription: "Joe")
+        // Click: the dashboard. Right-click (or ⌃-click): the quick menu.
+        quickMenu.autoenablesItems = false
+        quickMenu.delegate = self
+        statusItem.button?.target = self
+        statusItem.button?.action = #selector(statusItemClicked)
+        statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        NSApp.mainMenu = Self.mainMenu(target: self)
+        if !launchedAtLogin { dashboard.show() } // first, before the models and the rest load
+        dashboard.onModeChange = { [weak self] in if Notch.isEnabled { self?.resting.reseat() } }
+        // Opened by the person (Finder, Spotlight, the Dock): the dashboard. At login: quietly.
 
         hotkey.onPress = { [weak self] in self?.startRecording($0) }
         hotkey.onRelease = { [weak self] _ in self?.finishRecording() }
         hotkey.onCancel = { [weak self] _ in self?.cancelRecording() }
-        answerPanel.onClose = { [weak self] in
-            self?.assistant.cancel()
-            self?.answerPanel.hide()
-            self?.pointer.hide()
-            self?.speech.stop()
+        answerPanel.onClose = { [weak self] in self?.closeCard() }
+        watchForMorning()
+        speech.prepare()
+        alarms.onNotice = { [weak self] text in self?.toast.show(text, symbol: "alarm.fill", tint: .orange) }
+        alarms.onChange = { [weak self] in self?.refreshShelf() }
+        let alarmTicks = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.alarms.tick()
+                self?.resumeMusicIfDone()
+                self?.resting.keepInPlace() // the notch band stays at the notch
+                self?.unstickProcessing()
+            }
+        }
+        RunLoop.main.add(alarmTicks, forMode: .common)
+        let clearing = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.clearOldTasks()
+                self?.shutDownIfNight()
+            }
+        }
+        RunLoop.main.add(clearing, forMode: .common)
+        notepad.show(kind: noteSaver.kind)
+        notepad.onHidden = { [weak self] in self?.saveNotes() }
+        notepad.onCleared = { [weak self] in
+            // Cleared after it was saved: what comes next is a new note, not a change to that one.
+            guard let self, self.noteSaver.isSaved else { return }
+            self.noteSaver.begin(nil)
+            self.notepad.show(kind: nil)
+        }
+        notepad.onKind = { [weak self] kind in self?.noteSaver.kind = kind }
+        notepad.listen = { [weak self] in
+            guard let self, self.speechReady else { return nil }
+            return (self.recorder, self.transcriber, self.microphoneUID)
+        }
+        shelf.onOpen = { [weak self] id in
+            guard let self, let task = self.tasks.first(where: { $0.id == id }) else { return }
+            self.focus(task)
+        }
+        shelf.onStop = { [weak self] id in
+            guard let self else { return }
+            if self.alarms.pending.contains(where: { $0.id == id }) { self.alarms.cancel(id: id); return }
+            guard let task = self.tasks.first(where: { $0.id == id }) else { return }
+            self.end(task)
         }
         recorder.onLevel = { [panel] in panel.push(level: $0) }
 
@@ -102,15 +181,111 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshMicrophones(wait: 0)
         loadSpeechModel()
         if aiCleanup { loadCleanupModel() }
+        refreshResting()
     }
 
-    /// Opening Shhh again (from Spotlight or Applications) shows its menu at the mouse, since
-    /// the menu-bar icon can end up hidden behind the notch when the menu bar is crowded.
+    /// Opening Joe again (from Spotlight, Applications or the Dock) shows the dashboard.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        guard let menu = statusItem.menu else { return false }
-        NSApp.activate()
-        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        dashboard.show()
         return false
+    }
+
+    private let quickMenu = NSMenu()
+    private var launchedAtLogin = false
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        let event = NSAppleEventManager.shared().currentAppleEvent
+        launchedAtLogin = event?.eventID == kAEOpenApplication
+            && event?.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
+        // Opened by the person: a proper app (Dock icon, "Joe" at the top left) from the first
+        // moment, not once everything else has loaded.
+        if !launchedAtLogin { NSApp.setActivationPolicy(.regular) }
+    }
+
+    @objc private func statusItemClicked() {
+        let event = NSApp.currentEvent
+        if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
+            statusItem.menu = quickMenu
+            statusItem.button?.performClick(nil) // shows the menu
+            statusItem.menu = nil
+        } else {
+            dashboard.show()
+        }
+    }
+
+    @objc private func openDashboard() {
+        dashboard.show()
+    }
+
+    @objc private func openSettings() {
+        dashboard.show(.settings)
+    }
+
+    /// Joe's own menu bar, shown while the dashboard is in front: "Joe" at the top left, and the
+    /// Edit menu that gives text boxes ⌘A, ⌘C, ⌘V and ⌘Z.
+    private static func mainMenu(target: AppDelegate) -> NSMenu {
+        let bar = NSMenu()
+        func menu(_ title: String, _ items: [NSMenuItem]) {
+            let holder = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            let submenu = NSMenu(title: title)
+            items.forEach(submenu.addItem)
+            holder.submenu = submenu
+            bar.addItem(holder)
+        }
+        func item(_ title: String, _ action: Selector, _ key: String, _ modifiers: NSEvent.ModifierFlags = .command, to: AnyObject? = nil) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            item.keyEquivalentModifierMask = modifiers
+            item.target = to
+            return item
+        }
+        menu("Joe", [
+            item("About Joe", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), "", to: NSApp),
+            .separator(),
+            item("Settings…", #selector(openSettings), ",", to: target),
+            .separator(),
+            item("Hide Joe", #selector(NSApplication.hide(_:)), "h", to: NSApp),
+            item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option], to: NSApp),
+            .separator(),
+            item("Quit Joe", #selector(NSApplication.terminate(_:)), "q", to: NSApp),
+        ])
+        // No target: these go to whatever text box has focus.
+        menu("Edit", [
+            item("Undo", Selector(("undo:")), "z"),
+            item("Redo", Selector(("redo:")), "z", [.command, .shift]),
+            .separator(),
+            item("Cut", #selector(NSText.cut(_:)), "x"),
+            item("Copy", #selector(NSText.copy(_:)), "c"),
+            item("Paste", #selector(NSText.paste(_:)), "v"),
+            item("Select All", #selector(NSText.selectAll(_:)), "a"),
+        ])
+        menu("Window", [
+            item("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"),
+            item("Close", #selector(NSWindow.performClose(_:)), "w"),
+            .separator(),
+            item("Joe", #selector(openDashboard), "0", to: target),
+        ])
+        return bar
+    }
+
+    /// A request typed in the dashboard: like one said with right ⌥ (alarms and music at once,
+    /// anything else to Joe, with its card at the notch).
+    private func askTyped(_ text: String) {
+        if let request = AlarmRequest.parse(text) { alarms.handle(request); return }
+        if let music = Spotify.command(in: text) {
+            Task.detached { [weak self] in
+                let result = Spotify.run(music)
+                await MainActor.run { self?.toast.show(result, symbol: "music.note", tint: .green) }
+            }
+            return
+        }
+        if let current = focused { sendToBackground(current) }
+        let task = newTask()
+        focused = task
+        answerPanel.reset()
+        task.beginTurn(text)
+        answerPanel.beginTurn(question: text)
+        if Assistant.needsStrongModel(text) { task.assistant.useStrongModel() }
+        task.assistant.ask(text)
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -209,16 +384,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         state = .recording
         self.key = key
         speech.stop() // never talk into the microphone
+        pauseMusic() // nor over music
+        if notepad.isListening { notepad.stopListening() } // one recording at a time
         pressedAt = Date()
         dictation += 1
         let current = dictation
-        followingUp = key == .rightOption && answerPanel.isVisible && assistant.isActive
+        followingUp = key == .rightOption && answerPanel.isVisible && focused?.assistant.isActive == true
+        if followingUp { answerPanel.setListening(true) } // folds into the notch at once, under the pill to come
         screenTask = key == .rightOption ? Task { await ScreenCapture.capture() } : nil
         if key == .rightOption { pointer.hide() }
         if key == .rightOption, !followingUp {
-            // Start Claude Code now: it warms up while the user is still talking.
+            // A new conversation. Start Claude Code now: it warms up while the user is still talking.
+            // One still working on the card carries on in the side notch.
+            if let current = focused { sendToBackground(current) }
+            // Each one keeps a Claude Code process: past five, the oldest finished one goes.
+            focused = newTask()
             answerPanel.reset()
-            assistant.prepare { [weak self] in self?.handle($0) }
         }
 
         // The microphone starts on a background queue so the app never freezes on Core Audio.
@@ -231,6 +412,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if state == .recording, dictation == current {
                     showPanelWork?.cancel()
                     panel.hide()
+            answerPanel.setListening(false)
                     dropNewConversation()
                     state = .idle
                 }
@@ -241,27 +423,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.state == .recording else { return }
-                self.panel.showRecording()
+                self.answerPanel.setListening(true)
+                self.panel.showRecording(assistant: self.key == .rightOption)
             }
         }
         showPanelWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+        // A follow-up shows it at once: the answer has just folded into the notch beneath it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + (followingUp ? 0 : 0.15), execute: work)
     }
 
-    /// The assistant's events, on their way to the card: point tags come out of the reply and go
-    /// on screen, and the reply is read aloud when that's on.
-    private func handle(_ event: Assistant.Event) {
+    /// A task's events. Its state is kept either way; the focused one's also go to the card (point
+    /// tags on screen, the reply read aloud when that's on), and a background one says when it's
+    /// done or needs an OK.
+    private func handle(_ event: Assistant.Event, for task: AssistantTask) {
+        switch event {
+        case .status(let status): task.status = status
+        case .answer(let text): task.reply = text
+        case .approval(let approval): task.approval = approval
+        case .didAct: break
+        case .turnFinished:
+            task.isDone = true
+            task.doneAt = Date()
+            task.canFollowUp = true
+            Daybook.log(question: task.question, reply: task.reply) // memory across days
+            ActivityLog.record(.ask, task.question, answer: task.subject) // the dashboard's history
+        case .failed(let message):
+            task.error = message
+            task.status = nil
+            task.approval = nil
+            task.isDone = true
+            task.canFollowUp = false
+        }
+
+        guard task === focused else {
+            switch event {
+            case .didAct(let action):
+                toast.show(action)
+            case .approval(let approval?):
+                task.unseen = true
+                toast.show("Needs your OK: " + approval.title, symbol: "hand.raised.fill", tint: .orange)
+            case .turnFinished:
+                task.unseen = true
+                NSSound(named: "Glass")?.play()
+                toast.show("Ready: " + task.question)
+            case .failed:
+                task.unseen = true
+            default:
+                break
+            }
+            refreshShelf()
+            return
+        }
         switch event {
         case .answer(let text):
-            turnReply = text
-            let (reply, points) = ScreenPointer.split(text)
-            if let turnScreenshot { pointer.show(points, on: turnScreenshot) }
-            answerPanel.update(.answer(ScreenContext.display(reply)))
+            let (subject, body) = Subject.split(text)
+            let (reply, points) = ScreenPointer.split(body)
+            if let screenshot = task.screenshot { pointer.show(points, on: screenshot) }
+            answerPanel.setSubject(subject)
+            answerPanel.update(.answer(SpeechOutput.withoutSounds(ScreenContext.display(reply))))
             speech.update(ScreenContext.spoken(reply))
+        case .didAct(let action):
+            toast.show(action)
         case .turnFinished:
-            replaceSelection()
+            replaceSelection(for: task)
             answerPanel.update(event)
             speech.finish()
+            if task === briefing {
+                briefing = nil
+                answerPanel.holdOpen(for: 10)
+            }
         case .failed:
             answerPanel.update(event)
             speech.stop()
@@ -270,34 +500,310 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    // MARK: - Tasks
+
+    /// A new conversation with its Claude Code process started. Each keeps one, so past six the
+    /// oldest finished one goes.
+    private func newTask() -> AssistantTask {
+        if tasks.count >= 6, let oldest = tasks.first(where: { !$0.isWorking && $0 !== focused }) { end(oldest) }
+        let task = AssistantTask()
+        tasks.append(task)
+        task.assistant.prepare { [weak self, weak task] event in
+            guard let self, let task else { return }
+            self.handle(event, for: task)
+        }
+        return task
+    }
+
+    /// One of several jobs given at once: straight to the side notch, working in parallel.
+    private func startInBackground(_ request: String) {
+        let task = newTask()
+        task.beginTurn(request)
+        task.assistant.ask(request)
+        refreshShelf()
+    }
+
+    // MARK: - Morning briefing
+
+    private var morningBriefing: Bool {
+        get { UserDefaults.standard.object(forKey: "morningBriefing") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "morningBriefing") }
+    }
+
+    /// The first time the Mac is opened or unlocked on a school-day morning, the assistant greets
+    /// the user with the start of their day. Checked a few seconds after waking (so the network is
+    /// back) and at launch, for when Shhh opens at login.
+    private func watchForMorning() {
+        let check = { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+                MainActor.assumeIsolated { self?.greetIfMorning() }
+            }
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.screensDidWakeNotification,
+                                                          object: nil, queue: .main) { _ in check() }
+        DistributedNotificationCenter.default().addObserver(forName: .init("com.apple.screenIsUnlocked"),
+                                                            object: nil, queue: .main) { _ in check() }
+        check()
+    }
+
+    private func greetIfMorning() {
+        let now = Date()
+        let calendar = Calendar.current
+        let today = now.formatted(.iso8601.year().month().day())
+        guard morningBriefing, Assistant.executable != nil,
+              (5..<12).contains(calendar.component(.hour, from: now)),
+              UserDefaults.standard.string(forKey: "lastMorningBriefing") != today,
+              state == .idle, !answerPanel.isVisible else { return }
+        UserDefaults.standard.set(today, forKey: "lastMorningBriefing")
+        let task = newTask()
+        focused = task
+        briefing = task
+        answerPanel.reset()
+        task.beginTurn("Good morning")
+        answerPanel.beginTurn(question: "Good morning")
+        if SpeechOutput.speakBriefing, SpeechOutput.engine == .off { speech.useForThisReply(.natural) }
+        Daybook.archiveIfOld()
+        task.assistant.ask(Assistant.vaultURL == nil ? """
+            [Morning briefing: I've just opened my Mac.] Greet me by name: "Good morning, <my name>." Then, \
+            from my calendars, in a few short lines: my first period today (subject, time, room), anything \
+            due today or tomorrow on ManageBac, and anything else on my calendar today besides classes. If \
+            I have no classes today, just say good morning and that there's no school today.
+            """ : """
+            [Morning briefing: I've just opened my Mac.] First build today's Daybook, unless it's already \
+            built for today (how: your instructions). Then greet me by name: "Good morning, <my name>." and in a \
+            few short lines: my first period (subject, time, room) or that there's no school today, my top three \
+            tasks, anything due today or tomorrow, the emails that need me, and today's regular meetings from my \
+            patterns. On a day off, keep it to tasks and plans.
+            """)
+    }
+
+    // MARK: - Night shutdown
+
+    private var nightShutdown: Bool {
+        get { UserDefaults.standard.object(forKey: "nightShutdown") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "nightShutdown") }
+    }
+
+    /// At 21:30 on a school night, while the user is at the Mac: the night shutdown routine, once.
+    private func shutDownIfNight() {
+        let now = Date()
+        let calendar = Calendar.current
+        let today = now.formatted(.iso8601.year().month().day())
+        let minutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
+        guard nightShutdown, Assistant.executable != nil, Assistant.vaultURL != nil,
+              minutes >= 21 * 60 + 30,
+              let tomorrow = calendar.date(byAdding: .day, value: 1, to: now), Daybook.isSchoolDay(tomorrow),
+              UserDefaults.standard.string(forKey: "lastNightShutdown") != today,
+              state == .idle, !answerPanel.isVisible,
+              // Only while they're actually using the Mac.
+              CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!) < 90
+        else { return }
+        UserDefaults.standard.set(today, forKey: "lastNightShutdown")
+        let task = newTask()
+        focused = task
+        briefing = task
+        answerPanel.reset()
+        task.beginTurn("Night shutdown")
+        answerPanel.beginTurn(question: "Night shutdown")
+        if SpeechOutput.speakBriefing, SpeechOutput.engine == .off { speech.useForThisReply(.natural) }
+        task.assistant.ask("[Night shutdown: it's \(now.formatted(date: .omitted, time: .shortened)).] Run my Night shutdown routine.")
+    }
+
+    // MARK: - Never stuck
+
+    private var processingSince: Date?
+
+    /// A request that never finished turning into text (a hung microphone, model or screenshot)
+    /// left Joe "busy" for good, ignoring every key press after it. Past 45 seconds, let it go.
+    private func unstickProcessing() {
+        guard state == .processing, let since = processingSince, Date().timeIntervalSince(since) > 45 else { return }
+        processingSince = nil
+        panel.hide()
+        answerPanel.setListening(false)
+        state = .idle
+        NSSound.beep()
+        toast.show("That one got stuck, so I let it go. Try again.", symbol: "exclamationmark.triangle.fill", tint: .yellow)
+    }
+
+    // MARK: - Music while talking
+
+    /// The players paused for this recording, to start again once it's over.
+    private var pausedMusic: [String] = []
+    private var pausedMusicAt = Date.distantPast
+
+    /// Pauses Spotify and Apple Music if they're playing, when the user starts talking.
+    private func pauseMusic() {
+        for (id, app) in [("com.spotify.client", "Spotify"), ("com.apple.Music", "Music")]
+        where NSRunningApplication.runningApplications(withBundleIdentifier: id).first != nil && !pausedMusic.contains(app) {
+            var error: NSDictionary?
+            let playing = NSAppleScript(source: "tell application \"\(app)\" to player state as string")?.executeAndReturnError(&error).stringValue
+            guard error == nil, playing == "playing" else { continue }
+            NSAppleScript(source: "tell application \"\(app)\" to pause")?.executeAndReturnError(nil)
+            pausedMusic.append(app)
+            pausedMusicAt = Date()
+        }
+    }
+
+    /// Plays it again once the user has finished: dictation typed, or the assistant done answering
+    /// (and done reading the answer aloud). Checked every second.
+    private func resumeMusicIfDone() {
+        guard !pausedMusic.isEmpty, state == .idle, !(focused?.isWorking ?? false), !speech.isSpeaking, !alarms.isRinging else { return }
+        // The music was steered on purpose meanwhile ("pause it", "play my liked songs"), by the
+        // shortcut or by the assistant: leave it as it is.
+        UserDefaults.standard.synchronize()
+        if Spotify.lastCommand > pausedMusicAt {
+            pausedMusic = []
+            return
+        }
+        for app in pausedMusic { NSAppleScript(source: "tell application \"\(app)\" to play")?.executeAndReturnError(nil) }
+        pausedMusic = []
+    }
+
+    @objc private func toggleNightShutdown() {
+        nightShutdown.toggle()
+    }
+
+    @objc private func toggleMorningBriefing() {
+        morningBriefing.toggle()
+    }
+
+    /// The card's ×: a task that's still working carries on in the side notch; a finished one ends.
+    private func closeCard() {
+        if let task = focused {
+            if task.isWorking { sendToBackground(task) } else { end(task) }
+        }
+        answerPanel.hide()
+        pointer.hide()
+        speech.stop()
+        refreshResting()
+    }
+
+    private func sendToBackground(_ task: AssistantTask) {
+        guard task === focused else { return }
+        focused = nil
+        if !task.isWorking { end(task) } // a finished one has nothing left to do
+        refreshShelf()
+    }
+
+    /// Brings a task from the side notch back onto the card. The one there now steps aside.
+    private func focus(_ task: AssistantTask) {
+        if let current = focused, current !== task {
+            if current.isWorking { focused = nil } else { end(current) }
+        }
+        focused = task
+        task.unseen = false
+        let (reply, _) = ScreenPointer.split(Subject.split(task.reply).body)
+        answerPanel.show(question: task.question, subject: task.subject,
+                         reply: SpeechOutput.withoutSounds(ScreenContext.display(reply)), status: task.status,
+                         error: task.error, approval: task.approval, isDone: task.isDone, canFollowUp: task.canFollowUp)
+        refreshShelf()
+    }
+
+    /// Stops a task (if it's still going) and forgets it.
+    /// The notch's resting band: always there in notch mode, under the listening band and the
+    /// answer island (which cover it exactly while they're up).
+    private func refreshResting() {
+        if Notch.isEnabled { resting.show() } else { resting.hide() }
+    }
+
+    private func end(_ task: AssistantTask) {
+        task.assistant.cancel()
+        tasks.removeAll { $0 === task }
+        if focused === task {
+            focused = nil
+            answerPanel.hide()
+        }
+        refreshShelf()
+        refreshResting()
+    }
+
+    /// The side notch shows up once something is carrying on in the background, and then lists every
+    /// task, the one on the card too, by its subject (or the request, until there is one).
+    private func refreshShelf() {
+        // Alarms and timers to come: the next time, or a timer's countdown.
+        let alarmItems = alarms.pending.map { alarm in
+            let seconds = Int(alarm.fireAt.timeIntervalSinceNow.rounded())
+            let label = alarm.kind == .alarm || seconds >= 3600 ? alarm.when
+                : String(format: "%d:%02d", max(0, seconds) / 60, max(0, seconds) % 60)
+            return TaskShelf.Item(id: alarm.id, question: "\(label) · \(alarm.title)", state: .alarm)
+        }
+        guard tasks.contains(where: { $0 !== focused }) else {
+            shelf.update(alarmItems)
+            return
+        }
+        shelf.update(alarmItems + tasks.map { task in
+            let state: TaskShelf.Item.State = task.approval != nil ? .needsOK
+                : task.error != nil ? .failed
+                : task.isWorking ? .working : .done
+            let label = task.subject ?? (task.question.isEmpty ? "Listening…" : task.question)
+            return TaskShelf.Item(id: task.id, question: label, state: state)
+        })
+    }
+
+    /// Answers clear themselves: the one on the card two minutes after it's done, counting from the
+    /// last time the pointer was over it; done ones in the side notch after ten (they may not have
+    /// been seen yet).
+    private func clearOldTasks() {
+        guard state == .idle else { return } // not in the middle of a follow-up
+        let now = Date()
+        if let task = focused, task.isDone, task.approval == nil, let done = task.doneAt, !answerPanel.isHovering,
+           now.timeIntervalSince(max(done, answerPanel.lastHover)) > 300 {
+            end(task)
+            pointer.hide()
+            speech.stop()
+        }
+        for task in tasks where task !== focused && task.isDone && now.timeIntervalSince(task.doneAt ?? now) > 600 {
+            end(task)
+        }
+    }
+
     /// Pastes Claude's new version of the selection over it, if it wrote one and the user is still
     /// in the same app. ⌘Z there undoes it.
-    private func replaceSelection() {
-        guard let selection = turnSelection, let replacement = ScreenContext.replacement(in: turnReply) else { return }
-        turnSelection = nil
-        let reply = ScreenContext.display(ScreenPointer.split(turnReply).text)
+    private func replaceSelection(for task: AssistantTask) {
+        if task.notepadTarget, let replacement = ScreenContext.replacement(in: task.reply) {
+            task.notepadTarget = false
+            notepad.replace(with: replacement)
+            toast.show("Notes updated")
+            return
+        }
+        guard let selection = task.selection, let replacement = ScreenContext.replacement(in: task.reply) else { return }
+        task.selection = nil
+        let reply = ScreenContext.display(ScreenPointer.split(Subject.split(task.reply).body).text)
         guard ScreenContext.frontPID == selection.pid else {
             answerPanel.update(.answer(reply + "\n\n*Not pasted: you've left \(selection.app). Copy it from here.*"))
             return
         }
         TextInserter.insert(replacement)
+        toast.show("Pasted over your selection")
         answerPanel.update(.answer(reply + "\n\n*Pasted over your selection in \(selection.app). ⌘Z there undoes it.*"))
     }
 
     /// The context a request about the screen goes with: the screenshot for anything visual (and
     /// pointing); otherwise the selection, else the window's text, else the screenshot.
-    private func screenContext(for text: String, screen: Task<ScreenCapture.Screenshot?, Never>?,
-                               followingUp: Bool) async -> (request: String, screenshot: ScreenCapture.Screenshot?) {
-        if !followingUp { screenConversation = false }
+    /// `image` is what goes along: the screenshot, or just the area around the pointer.
+    private func screenContext(for text: String, screen: Task<ScreenCapture.Screenshot?, Never>?, followingUp: Bool,
+                               task: AssistantTask) async -> (request: String, image: Data?, screenshot: ScreenCapture.Screenshot?) {
+        if !followingUp { task.screenConversation = false }
         let picture = ScreenCapture.wantsPicture(text)
         let explicit = ScreenCapture.isAbout(text)
-        guard explicit || ScreenContext.refersToSelection(text) || (screenConversation && picture) else { return (text, nil) }
-        screenConversation = true
+        let aboutSelection = ScreenContext.refersToSelection(text)
+        let pointing = ScreenCapture.pointsAtSomething(text)
+        guard explicit || aboutSelection || pointing || (task.screenConversation && picture) else { return (text, nil, nil) }
+        task.screenConversation = true
+        // "Find his LinkedIn": just the area around the pointer, a sixth of a screenshot's tokens.
+        if pointing, !explicit, !picture, !aboutSelection {
+            guard let crop = await screen?.value?.cursorCrop() else {
+                ScreenCapture.requestAccess()
+                return (text + Self.noScreenshot, nil, nil)
+            }
+            return (text + "\n\n(Attached: the part of my screen around my mouse pointer, which is on the red ring. "
+                + "\"This\", \"him\", \"her\" and so on mean what I'm pointing at.)", crop, nil)
+        }
         // Follow-ups already have the earlier context: they get the window again only if they name
         // the screen. "Make it even shorter" with nothing selected means Claude's last version.
         let fresh = explicit || !followingUp
         if !picture, let selection = await ScreenContext.selection(limit: 40_000) {
-            turnSelection = selection
+            task.selection = selection
             return (text + """
 
 
@@ -305,10 +811,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 \(selection.text)
                 </selected_text>
                 (That's the text I have selected. If I asked you to change it, put only the new version \
-                between [REPLACE] and [/REPLACE]: Shhh pastes it over my selection.)
-                """, nil)
+                between [REPLACE] and [/REPLACE]: Joe pastes it over my selection.)
+                """, nil, nil)
         }
-        if !picture, !fresh { return (text, nil) }
+        if !picture, !fresh { return (text, nil, nil) }
         if !picture, let window = await ScreenContext.windowText(limit: 12_000) {
             return (text + """
 
@@ -317,22 +823,103 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 \(window.text.text)
                 </window_text>
                 (That's the text of the window I'm in.)
-                """, nil)
+                """, nil, nil)
         }
         guard let screenshot = await screen?.value else {
             ScreenCapture.requestAccess()
-            return (text + "\n\n(Shhh couldn't take a screenshot: it needs Screen Recording access in System "
-                + "Settings → Privacy & Security, then Shhh quit and reopened. Tell the user.)", nil)
+            return (text + Self.noScreenshot, nil, nil)
         }
-        return (text, screenshot)
+        let pointer = screenshot.cursor.map { "\n\n(My mouse pointer is at \(Int($0.x)),\(Int($0.y)) in the screenshot.)" } ?? ""
+        return (text + pointer, screenshot.jpeg, screenshot)
     }
+
+    /// "Help me take notes", "open a notepad".
+    private static func isNotepadRequest(_ text: String) -> Bool {
+        text.range(of: #"\b((take|taking|start|make) (some |my )?notes|note ?pad|(open|show) (a |my |the )?notes)\b"#,
+                   options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// "Email Ammiel. Next task, find revision sites. Next task, …": one request per job (the first
+    /// is empty when it starts with "next task"). "Next task" only divides at the start, after
+    /// punctuation, or after "and", "then", "okay" or "also"; never as in "my next task on ManageBac".
+    static func splitTasks(_ text: String) -> [String] {
+        let divider = #"(?:^|(?<=[.!?,;:])\s*|\b(?:and|then|okay|ok|also)\s+)(?:the\s+)?"#
+            + #"(?:next|new|another|separate|second|third|fourth|fifth)\s+task\b"#
+            + #"(?!\s+(?:on|in|due|for|from|of|is due|is on)\b)[\s:,.\-–—]*(?:is\s+to\s+|is\s+)?"#
+        guard let regex = try? NSRegularExpression(pattern: divider, options: .caseInsensitive) else { return [text] }
+        let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
+        guard !matches.isEmpty else { return [text] }
+        var jobs: [String] = []
+        var start = text.startIndex
+        for match in matches {
+            guard let range = Range(match.range, in: text) else { continue }
+            jobs.append(String(text[start..<range.lowerBound]))
+            start = range.upperBound
+        }
+        jobs.append(String(text[start...]))
+        let tidy = jobs.map {
+            $0.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.init(charactersIn: ",;:-–—")))
+                .replacingOccurrences(of: #"[\s,]+(and|then|and then)$"#, with: "", options: [.regularExpression, .caseInsensitive])
+        }
+        // Keep a leading empty one (it says the first job was new); drop any others.
+        return tidy.enumerated().filter { $0.offset == 0 || !$0.element.isEmpty }.map(\.element)
+    }
+
+    /// "It's resolved", "remove the green tick", "dismiss it", "that's all". Clear-cut phrases count
+    /// whatever else is said; vaguer ones ("clear it") only as a short request of their own, so
+    /// "remove that event from my calendar" still goes to Claude.
+    static func isDismissRequest(_ text: String) -> Bool {
+        let strong = [
+            #"\b(it'?s|that'?s|is) resolved\b"#, #"\bresolve (it|this|that|them|everything|all)\b"#,
+            #"\b(remove|clear|hide|get rid of)\b[^.?!]{0,12}\b(the |that |this )?(green )?(tick|check ?mark)s?\b"#,
+            #"\bdismiss (it|this|that|the answer|everything|all)\b"#,
+            #"\b(clear|close|dismiss|hide|remove) (the|this|that|your) (answer|card|reply|notification|notch|island|screen|message|response)s?\b"#,
+        ]
+        // Whole requests only, give or take "hey Joe", "now", "please", "thanks".
+        let name = NSRegularExpression.escapedPattern(for: Assistant.name.lowercased())
+        let filler = "(?:hey|hi|yo|ok|okay|cool|great|so|alright|all right|you can|can you|could you|please|now|thanks|thank you|then|just|\(name)|joe)"
+        let short = ["(clear|close|dismiss|remove|hide|delete) (it|this|that|them|those)( out| off| away)?", "(clear|dismiss|close)( out)?",
+                     "(clear|wipe) (it|this|that) (all|up)", "get rid of (it|this|that)", "(that'?s|it'?s) (all|it)", "all good",
+                     "(i'?m|we'?re) done", "got it", "never ?mind", "go away", "done with (it|this|that)"]
+            .map { #"^\W*(?:\#(filler)\W+)*(?:\#($0))(?:\W+\#(filler))*\W*$"# }
+        let matches = { (patterns: [String]) in
+            patterns.contains { text.range(of: $0, options: [.regularExpression, .caseInsensitive]) != nil }
+        }
+        // About the notepad ("I'm done taking notes"): that's the notepad's to close.
+        if text.range(of: #"\bnote"#, options: [.regularExpression, .caseInsensitive]) != nil { return false }
+        return matches(strong) || matches(short) || isClearAll(text)
+    }
+
+    /// "Clear everything", "dismiss all of them".
+    private static func isClearAll(_ text: String) -> Bool {
+        text.range(of: #"\b(clear|dismiss|remove|resolve)\b[^.?!]{0,15}\b(all|everything)\b"#,
+                   options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// "Close the notes tab", "hide my notepad", "I'm done taking notes".
+    private static func isCloseNotepadRequest(_ text: String) -> Bool {
+        let patterns = [
+            #"\b(close|hide|dismiss|shut|put away|get rid of|minimi[sz]e)\b[^.?!]{0,25}\b(notes?|note ?pad)\b"#,
+            #"\b(notes?|note ?pad)\b[^.?!]{0,15}\b(away|closed?|off)\b"#,
+            #"\b(i'?m|i am|we'?re) (done|finished) (taking |with )?(the |my )?notes\b"#,
+        ]
+        return patterns.contains { text.range(of: $0, options: [.regularExpression, .caseInsensitive]) != nil }
+    }
+
+    /// With the notepad open: whether a request is about the notes ("make these into bullet points").
+    private static func refersToNotes(_ text: String) -> Bool {
+        text.range(of: #"\b(notes?|notepad|bullet\w*|summar\w*|organi[sz]\w*|tidy|clean|format\w*|rewrite|structure|outline|key points|flash ?cards?|quiz|headings?|sections?)\b"#,
+                   options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    private static let noScreenshot = "\n\n(Joe couldn't take a screenshot: it needs Screen Recording access in System "
+        + "Settings → Privacy & Security, then Joe quit and reopened. Tell the user.)"
 
     /// A right ⌥ recording that went nowhere: stop the conversation it started. A failed
     /// follow-up leaves the open one alone.
     private func dropNewConversation() {
-        guard key == .rightOption, !followingUp else { return }
-        assistant.cancel()
-        answerPanel.hide()
+        guard key == .rightOption, !followingUp, let task = focused else { return }
+        end(task)
     }
 
     /// Shhh sits idle with no windows, so macOS puts it in App Nap and lets its timers run late.
@@ -352,6 +939,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard state == .recording else { return }
         showPanelWork?.cancel()
         panel.hide()
+            answerPanel.setListening(false)
         dropNewConversation()
         state = .idle
         let start = startTask
@@ -369,6 +957,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         state = .processing
+        processingSince = Date()
         panel.showProcessing()
         let asking = key == .rightOption
         let followingUp = self.followingUp
@@ -382,6 +971,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             var asked = false
             defer {
                 panel.hide()
+            answerPanel.setListening(false)
                 state = .idle
                 if asking, !asked, !followingUp { dropNewConversation() }
             }
@@ -409,22 +999,143 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     await cleaner.isReady ? await cleaner.clean(raw, deadline: deadline) : raw
                 }) ?? TextCleaner.removeFillers(raw)
             }
+            text = Vocabulary.apply(text) // the user's names and words, spelled their way
             if asking {
                 guard !text.isEmpty else { return }
                 lastTranscript = text
+                guard var task = focused else { return }
+                // "It's resolved", "remove the tick": the answer on the card is cleared ("clear
+                // everything": the side notch's too). Nothing goes to Claude.
+                if Self.isDismissRequest(text) {
+                    if Self.isClearAll(text) { for other in tasks where other !== task { end(other) } }
+                    // Said with nothing on the card: "it" is the finished answers waiting at the notch.
+                    if task.question.isEmpty { for other in tasks where other !== task && !other.isWorking { end(other) } }
+                    end(task)
+                    pointer.hide()
+                    toast.show("Cleared", symbol: "checkmark.circle", tint: .green)
+                    return
+                }
+                // "Play Fly Me to the Moon", "pause", "skip", "volume down": Spotify, in about a second.
+                // Nothing goes to Claude.
+                // An alarm ringing: "stop", "snooze". Nothing goes to Claude.
+                if alarms.isRinging, let answer = AlarmRequest.ringingCommand(text) {
+                    if task.question.isEmpty { end(task) }
+                    if answer.stop { alarms.stop() } else { alarms.snooze(minutes: answer.snoozeMinutes) }
+                    return
+                }
+                // "Set a timer for 5 minutes", "alarm for 6:30 called econ quiz", "remind me in 20
+                // minutes to…", "cancel my alarms": set here, at once. Nothing goes to Claude.
+                if let request = AlarmRequest.parse(text) {
+                    if task.question.isEmpty { end(task) }
+                    alarms.handle(request)
+                    return
+                }
+                // Anything about the music ("pause it, don't play it"): don't play it again afterwards.
+                if text.range(of: #"\b(music|song|spotify|playlist|pause|resume|unpause|track|album|volume)\b"#,
+                              options: [.regularExpression, .caseInsensitive]) != nil {
+                    pausedMusic = []
+                }
+                if let music = Spotify.command(in: text) {
+                    pausedMusic = [] // they're steering the music themselves now
+                    if task.question.isEmpty { end(task) } // the new conversation this press started
+                    pointer.hide()
+                    Task.detached { [weak self] in
+                        let result = Spotify.run(music)
+                        await MainActor.run { self?.toast.show(result, symbol: "music.note", tint: .green) }
+                    }
+                    return
+                }
+                // "Close the notes tab": the notepad goes away, nothing goes to Claude.
+                if notepad.isVisible, Self.isCloseNotepadRequest(text) {
+                    notepad.hide()
+                    toast.show("Notepad closed: your notes are saved", symbol: "note.text", tint: .orange)
+                    return
+                }
+                // "Help me take notes for Econ": the notepad opens, nothing goes to Claude. The last
+                // notes are in the vault already, so these start fresh.
+                if !notepad.isVisible, Self.isNotepadRequest(text) {
+                    if notepad.text.isEmpty || (NoteSaver.isEnabled && noteSaver.isSaved) {
+                        notepad.clear()
+                        noteSaver.begin(text)
+                    } else {
+                        noteSaver.heard(text)
+                    }
+                    notepad.show(kind: noteSaver.kind)
+                    notepad.show()
+                    toast.show("\(noteSaver.kind?.label ?? "Notepad") open: hold right ⌘ to dictate, or press Listen",
+                               symbol: "note.text", tint: .orange)
+                    return
+                }
+                // "This is a meeting": what the notes are, for their title and folder in the vault.
+                if notepad.isVisible, NoteSaver.isKindStatement(text) {
+                    let kind: NoteSaver.Kind = NoteSaver.kind(in: text)
+                        ?? (text.range(of: #"\b(meeting|call)\b"#, options: [.regularExpression, .caseInsensitive]) != nil ? .meeting
+                            : text.range(of: #"\b(lecture|class|lesson|seminar)\b"#, options: [.regularExpression, .caseInsensitive]) != nil ? .lecture
+                            : .notes)
+                    noteSaver.heard(text)
+                    noteSaver.kind = kind
+                    notepad.show(kind: kind)
+                    toast.show("Got it: \(kind.label.lowercased())", symbol: "note.text", tint: .orange)
+                    return
+                }
+                // "Next task, …": each job after the first is a conversation of its own, working in
+                // parallel in the side notch. The first carries on as usual: a follow-up, or the new
+                // conversation this press started.
+                var continuing = followingUp
+                var jobs = Self.splitTasks(text)
+                if jobs.count > 1 {
+                    if jobs[0].isEmpty {
+                        jobs.removeFirst()
+                        if continuing { // the open one carries on in the side notch; this is new
+                            sendToBackground(task)
+                            task = newTask()
+                            focused = task
+                            answerPanel.reset()
+                            continuing = false
+                        }
+                    }
+                    text = jobs[0]
+                    for job in jobs.dropFirst() { startInBackground(job) }
+                    if jobs.count > 1 {
+                        toast.show("\(jobs.count) tasks started", symbol: "square.stack.3d.up.fill", tint: .orange)
+                    }
+                }
+                task.beginTurn(text)
                 answerPanel.beginTurn(question: text)
-                turnSelection = nil
-                turnReply = ""
-                let (request, screenshot) = await screenContext(for: text, screen: screen, followingUp: followingUp)
-                turnScreenshot = screenshot
-                assistant.ask(request, screenshot: screenshot?.jpeg)
+                var (request, image, screenshot): (String, Data?, ScreenCapture.Screenshot?)
+                if notepad.isVisible, !notepad.text.isEmpty, Self.refersToNotes(text) {
+                    noteSaver.heard(text) // it helps title the notes
+                    notepad.show(kind: noteSaver.kind)
+                    task.notepadTarget = true
+                    (request, image, screenshot) = (text + """
+
+
+                        <notepad>
+                        \(notepad.text)
+                        </notepad>
+                        (That's my notepad. If I asked you to change these notes, put the whole new version \
+                        between [REPLACE] and [/REPLACE]: Joe puts it in the notepad. Plain text, "- " bullets.)
+                        """, nil, nil)
+                } else {
+                    (request, image, screenshot) = await screenContext(for: text, screen: screen, followingUp: continuing,
+                                                                       task: task)
+                }
+                task.screenshot = screenshot
+                // Designing slides needs the strongest model: a new conversation about it gets Opus.
+                if !continuing, Assistant.needsStrongModel(text) { task.assistant.useStrongModel() }
+                task.assistant.ask(request, screenshot: image)
                 asked = true
                 return
             }
             text = style.apply(text)
             guard !text.isEmpty else { return }
             lastTranscript = text
-            TextInserter.insert(text)
+            ActivityLog.record(.dictation, text) // the dashboard's history and stats
+            if notepad.isVisible {
+                notepad.appendDictation(text) // while it's open, dictation is for the notes
+            } else {
+                TextInserter.insert(text)
+            }
         }
     }
 
@@ -433,6 +1144,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         refreshMicrophones(wait: 0.25)
         menu.removeAllItems()
+        menu.addItem(item("Open Joe…", #selector(openDashboard)))
+        menu.addItem(.separator())
 
         if !AXIsProcessTrusted() {
             menu.addItem(item("Grant Accessibility access…", #selector(openAccessibilitySettings)))
@@ -461,6 +1174,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }))
         menu.addItem(microphoneMenu())
 
+        menu.addItem(item("Edit dictionary…", #selector(editDictionary)))
+        let notes = item("Notepad", #selector(toggleNotepad))
+        notes.state = notepad.isVisible ? .on : .off
+        menu.addItem(notes)
+        if Assistant.vaultURL != nil {
+            let remember = item("Remember conversations", #selector(toggleRemember))
+            remember.state = Daybook.remembers ? .on : .off
+            menu.addItem(remember)
+            let save = item("Save notes to Obsidian", #selector(toggleSaveNotes))
+            save.state = NoteSaver.isEnabled ? .on : .off
+            save.indentationLevel = 1
+            menu.addItem(save)
+        }
+
+        let control = item(ScreenControl.cliclick == nil ? "Let \(Assistant.name) click and type (needs cliclick)"
+                           : "Let \(Assistant.name) click and type", #selector(toggleScreenControl))
+        control.state = ScreenControl.isEnabled ? .on : .off
+        control.isEnabled = ScreenControl.cliclick != nil
+        menu.addItem(control)
+
+        let notch = item("Show at the notch", #selector(toggleNotch))
+        notch.state = Notch.isEnabled ? .on : .off
+        menu.addItem(notch)
+
         let cleanup = item(cleanupStatus.map { "AI cleanup (\($0))" } ?? "AI cleanup", #selector(toggleCleanup))
         cleanup.state = aiCleanup ? .on : .off
         menu.addItem(cleanup)
@@ -475,7 +1212,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let login = item("Launch at login", #selector(toggleLaunchAtLogin))
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(login)
-        let quit = NSMenuItem(title: "Quit Shhh", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "Quit Joe", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         quit.target = NSApp
         menu.addItem(quit)
     }
@@ -519,9 +1256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item.state = effort == Assistant.effort ? .on : .off
             return item
         }))
-        let speak = item("Speak replies", #selector(toggleSpeakReplies))
-        speak.state = SpeechOutput.isEnabled ? .on : .off
-        items.append(speak)
+        items.append(voiceMenu())
         items.append(.separator())
         for autonomy in Assistant.Autonomy.allCases {
             let item = item(autonomy.title, #selector(selectAutonomy(_:)))
@@ -529,13 +1264,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item.state = autonomy == Assistant.autonomy ? .on : .off
             items.append(item)
         }
+        let morning = item("Morning briefing", #selector(toggleMorningBriefing))
+        morning.state = morningBriefing ? .on : .off
+        items.append(morning)
+        let night = item("Night shutdown at 21:30 on school nights", #selector(toggleNightShutdown))
+        night.state = nightShutdown ? .on : .off
+        items.append(night)
         items.append(.separator())
         items.append(item("Memory: \(Assistant.vaultURL?.lastPathComponent ?? "none")…", #selector(chooseMemoryVault)))
         if !CGPreflightScreenCaptureAccess() {
             items.append(item("Allow reading your screen…", #selector(openScreenRecordingSettings)))
         }
         items.append(item("Edit instructions…", #selector(editAssistantInstructions)))
-        return submenu("Assistant", items: items)
+        return submenu(Assistant.name, items: items)
     }
 
     /// Reads the microphone list on a background queue and waits at most `wait` for it, so a
@@ -595,9 +1336,93 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc private func toggleSpeakReplies() {
-        SpeechOutput.isEnabled.toggle()
-        if !SpeechOutput.isEnabled { speech.stop() }
+    @objc private func toggleNotepad() {
+        notepad.toggle()
+    }
+
+    /// Into the vault, once the last of a recording is in.
+    private func saveNotes() {
+        notepad.whenDone { [weak self] in
+            guard let self else { return }
+            self.noteSaver.save(self.notepad.text) { [weak self] message in
+                self?.toast.show(message, symbol: "note.text", tint: .purple)
+            }
+        }
+    }
+
+    @objc private func toggleScreenControl() {
+        ScreenControl.isEnabled.toggle()
+        for task in tasks where !task.isWorking { end(task) } // new conversations pick up the new tools
+    }
+
+    @objc private func toggleRemember() {
+        Daybook.remembers.toggle()
+    }
+
+    @objc private func toggleSaveNotes() {
+        NoteSaver.isEnabled.toggle()
+    }
+
+    @objc private func editDictionary() {
+        Vocabulary.open()
+    }
+
+    @objc private func toggleNotch() {
+        Notch.isEnabled.toggle()
+        refreshResting()
+    }
+
+    /// "Voice": off, Natural, Expressive or Apple; Natural's voice; whether Expressive may laugh and
+    /// sigh; and whether the morning briefing is read aloud.
+    private func voiceMenu() -> NSMenuItem {
+        var items: [NSMenuItem] = []
+        if let status = speech.status {
+            let line = NSMenuItem(title: status, action: nil, keyEquivalent: "")
+            line.isEnabled = false
+            items += [line, .separator()]
+        }
+        for engine in SpeechOutput.Engine.allCases {
+            let item = item(engine.title, #selector(selectVoice(_:)))
+            item.representedObject = engine.rawValue
+            item.state = engine == SpeechOutput.engine ? .on : .off
+            items.append(item)
+        }
+        items.append(.separator())
+        items.append(submenu("Natural voice", items: SpeechOutput.naturalVoices.map { voice in
+            let item = item(voice.name, #selector(selectNaturalVoice(_:)))
+            item.representedObject = voice.id
+            item.state = voice.id == SpeechOutput.naturalVoice ? .on : .off
+            return item
+        }))
+        let sounds = item("Expressive can laugh and sigh", #selector(toggleExpressiveSounds))
+        sounds.state = SpeechOutput.expressiveSounds ? .on : .off
+        items.append(sounds)
+        let briefing = item("Read the morning briefing aloud", #selector(toggleSpeakBriefing))
+        briefing.state = SpeechOutput.speakBriefing ? .on : .off
+        items.append(briefing)
+        let title = SpeechOutput.engine == .off ? "Voice: off" : "Voice: \(SpeechOutput.engine.title.components(separatedBy: ":")[0])"
+        return submenu(title, items: items)
+    }
+
+    @objc private func selectVoice(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let engine = SpeechOutput.Engine(rawValue: raw) else { return }
+        speech.stop()
+        SpeechOutput.engine = engine
+        speech.prepare() // downloads the model the first time; lets go of the other
+    }
+
+    @objc private func selectNaturalVoice(_ sender: NSMenuItem) {
+        guard let voice = sender.representedObject as? String else { return }
+        SpeechOutput.naturalVoice = voice
+        if SpeechOutput.engine == .natural { speech.prepare() }
+    }
+
+    @objc private func toggleExpressiveSounds() {
+        SpeechOutput.expressiveSounds.toggle()
+    }
+
+    @objc private func toggleSpeakBriefing() {
+        SpeechOutput.speakBriefing.toggle()
     }
 
     @objc private func selectModel(_ sender: NSMenuItem) {

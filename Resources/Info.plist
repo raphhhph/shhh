@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleExecutable</key>
-	<string>Shhh</string>
+	<string>Joe</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
@@ -13,9 +13,9 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Shhh</string>
+	<string>Joe</string>
 	<key>CFBundleDisplayName</key>
-	<string>Shhh</string>
+	<string>Joe</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -28,7 +28,9 @@
 	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Joe plays, pauses and skips music in Spotify when you ask.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Shhh listens only while you hold the right ⌘ key, and turns your speech into text on your Mac.</string>
+	<string>Joe listens only while you hold the right ⌘ key, and turns your speech into text on your Mac.</string>
 </dict>
 </plist>

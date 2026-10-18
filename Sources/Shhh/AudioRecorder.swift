@@ -58,6 +58,14 @@ final class AudioRecorder {
         return samples
     }
 
+    /// For hands-free listening (the notepad): the recording keeps going while what it has heard so
+    /// far is read in pieces. How many seconds are waiting, the last few (to find a pause), and
+    /// taking them all.
+    func pendingSeconds(_ recording: Recording) -> Double { recording.session.capturedSeconds }
+    func tail(_ recording: Recording, seconds: Double) -> [Float] { recording.session.tail(Int(seconds * 16_000)) }
+    func take(_ recording: Recording) -> [Float] { recording.session.take() }
+    func hasFailed(_ recording: Recording) -> Bool { recording.session.hasFailed }
+
     /// Stops and throws away the recording.
     func cancel(_ recording: Recording) {
         recording.queue.async { recording.session.stop() }
@@ -101,6 +109,21 @@ private final class RecordingSession: @unchecked Sendable {
     var capturedSeconds: Double {
         lock.lock(); defer { lock.unlock() }
         return Double(buffer.count) / targetFormat.sampleRate
+    }
+
+    /// For long recordings: the last `count` samples, without taking them.
+    func tail(_ count: Int) -> [Float] {
+        lock.lock(); defer { lock.unlock() }
+        return Array(buffer.suffix(count))
+    }
+
+    /// For long recordings: everything captured so far, cleared from the buffer so it doesn't grow
+    /// for as long as the recording goes on.
+    func take() -> [Float] {
+        lock.lock(); defer { lock.unlock() }
+        let taken = buffer
+        buffer.removeAll(keepingCapacity: true)
+        return taken
     }
 
     /// True once the microphone has stopped and couldn't be restarted.

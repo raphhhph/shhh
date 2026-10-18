@@ -1,8 +1,16 @@
 import AVFoundation
 import FluidAudio
 
-/// On-device speech-to-text with NVIDIA Parakeet (multilingual: English, French and 23 other European languages).
+/// On-device speech-to-text with NVIDIA Parakeet: English-only (v2) by default, or the
+/// multilingual one (Ultra: English, French and 23 other European languages). The multilingual
+/// one guesses the language, and on short or mumbled English it sometimes guessed Russian.
 actor Transcriber {
+    /// "Speech languages" in Settings: English only, or 25 languages.
+    nonisolated static var englishOnly: Bool {
+        get { UserDefaults.standard.object(forKey: "speechEnglishOnly") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "speechEnglishOnly") }
+    }
+
     private var manager: AsrManager?
 
     var isReady: Bool { manager != nil }
@@ -10,7 +18,8 @@ actor Transcriber {
     /// Downloads the model on first use (~500 MB, cached afterwards) and loads it.
     func load(progress: @escaping @Sendable (Double) -> Void) async throws {
         guard manager == nil else { return }
-        let models = try await AsrModels.downloadAndLoad(version: .ultra, progressHandler: { progress($0.fractionCompleted) })
+        let models = try await AsrModels.downloadAndLoad(version: Self.englishOnly ? .v2 : .ultra,
+                                                         progressHandler: { progress($0.fractionCompleted) })
         let manager = AsrManager(config: .default)
         try await manager.loadModels(models)
         self.manager = manager

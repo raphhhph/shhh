@@ -51,7 +51,9 @@ final class ScreenPointer {
             PointerMark(position: CGPoint(x: point.x * scale.width, y: point.y * scale.height),
                         label: points.count > 1 ? "\(index + 1). \(point.label)" : point.label)
         }
-        let panel = self.panel ?? makePanel()
+        // A new window each time: a reused one can stay hidden behind a full-screen app.
+        self.panel?.orderOut(nil)
+        let panel = makePanel()
         self.panel = panel
         panel.setFrame(frame, display: false)
         panel.contentView = NSHostingView(rootView: PointerView(marks: marks, size: frame.size))

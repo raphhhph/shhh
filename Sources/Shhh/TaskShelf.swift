@@ -1,0 +1,309 @@
+import AppKit
+import SwiftUI
+
+/// One conversation with the assistant. Several can run at once: closing the card while one is
+/// still working moves it to the side notch (`TaskShelf`), where it carries on.
+@MainActor
+final class AssistantTask {
+    let id = UUID()
+    let assistant = Assistant()
+    var question = ""
+    /// The current reply as Claude writes it, tags and all.
+    var reply = ""
+    var status: String?
+    var error: String?
+    var approval: Assistant.Approval?
+    var isDone = false
+    /// When the current request finished: answers clear themselves a while after.
+    var doneAt: Date?
+    var canFollowUp = false
+    /// What the current request was sent with: the screenshot Claude's point tags refer to, and
+    /// the selection a `[REPLACE]` reply is pasted over.
+    var screenshot: ScreenCapture.Screenshot?
+    var selection: ScreenContext.Text?
+    /// The request was about the notepad: a `[REPLACE]` reply goes into it.
+    var notepadTarget = false
+    /// Whether the conversation is about the screen, so visual follow-ups get a fresh screenshot.
+    var screenConversation = false
+    /// Finished, failed or waiting for an OK while in the background, and not looked at yet.
+    var unseen = false
+
+    var isWorking: Bool { !isDone }
+    var subject: String? { Subject.split(reply).subject }
+
+    func beginTurn(_ question: String) {
+        self.question = question
+        reply = ""
+        status = nil
+        error = nil
+        approval = nil
+        isDone = false
+        doneAt = nil
+        screenshot = nil
+        selection = nil
+        notepadTarget = false
+    }
+}
+
+/// Every reply starts with a subject line, like an email's ("Subject: Econ quiz is next"). It
+/// titles the card and the done line at the notch, and labels the task in the side notch.
+enum Subject {
+    /// The subject and the rest of the reply. While the subject is still streaming in, it grows
+    /// and the body is empty.
+    static func split(_ reply: String) -> (subject: String?, body: String) {
+        let start = reply.drop { $0.isWhitespace || $0 == "*" }
+        let marker = "subject:"
+        let head = start.prefix(marker.count).lowercased()
+        guard head == marker else {
+            // Possibly "Subj" so far: show nothing yet rather than flash it.
+            return !start.isEmpty && head.count < marker.count && marker.hasPrefix(head) ? (nil, "") : (nil, reply)
+        }
+        let rest = start.dropFirst(marker.count)
+        let newline = rest.firstIndex(of: "\n")
+        let subject = rest[..<(newline ?? rest.endIndex)]
+            .trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: "*")))
+        let body = newline.map { String(rest[$0...]).trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
+        return (subject.isEmpty ? nil : subject, body)
+    }
+}
+
+/// The side notch: conversations running (or done) in the background, as a small capsule beside
+/// the notch, like VoiceOS's. A spinner while they work, ✋ when one needs an OK, ✓ when they're
+/// done. Click it for the list; click a task to bring its card back, × to stop or dismiss it.
+@MainActor
+final class TaskShelf {
+    struct Item: Identifiable {
+        enum State { case working, needsOK, done, failed, alarm }
+        let id: UUID
+        let question: String
+        let state: State
+    }
+
+    var onOpen: (UUID) -> Void = { _ in }
+    var onStop: (UUID) -> Void = { _ in }
+
+    private let model = ShelfModel()
+    private var panel: NSPanel?
+
+    init() {
+        model.onToggle = { [weak self] in
+            self?.model.expanded.toggle()
+            self?.place()
+        }
+        model.onOpen = { [weak self] id in
+            self?.model.expanded = false
+            self?.onOpen(id)
+        }
+        model.onStop = { [weak self] id in self?.onStop(id) }
+        model.onDrag = { [weak self] ended in self?.drag(ended: ended) }
+        model.onReset = { [weak self] in self?.resetPosition() }
+    }
+
+    func update(_ items: [Item]) {
+        model.items = items
+        guard !items.isEmpty else {
+            model.expanded = false
+            panel?.orderOut(nil)
+            return
+        }
+        if panel?.isVisible != true {
+            // A new window each time: a reused one can stay hidden behind a full-screen app.
+            panel?.orderOut(nil)
+            panel = makePanel()
+        }
+        place()
+        panel?.orderFrontRegardless()
+    }
+
+    /// Hanging from the top of the built-in screen. By default just left of the notch and its
+    /// listening band (the menu bar's right side is busy); the user can drag it anywhere along the
+    /// top, and it stays there. The window is only as big as what's shown, so it never blocks
+    /// clicks around it; the open list grows away from the nearer screen edge.
+    private func place() {
+        guard let panel, let screen = Self.screen, grab == nil else { return } // not while it's being dragged
+        let notch = Notch.rect(on: screen)
+        let size = size(notch: notch)
+        let collapsedWidth = collapsedSize(notch: notch).width
+        // Where the closed capsule's left edge sits: the user's spot, or beside the notch.
+        let left = Self.savedOffset.map { notch.midX + $0 } ?? notch.minX - RecordingPanel.ear - 6 - collapsedWidth
+        var x = left
+        if model.expanded, left + collapsedWidth / 2 > screen.frame.midX { x = left + collapsedWidth - size.width } // right half: grow leftwards
+        x = min(max(x, screen.frame.minX + 4), screen.frame.maxX - size.width - 4)
+        panel.setFrame(NSRect(x: x, y: screen.frame.maxY - size.height, width: size.width, height: size.height), display: true)
+    }
+
+    private func collapsedSize(notch: NSRect) -> NSSize {
+        let onlyAlarms = model.items.allSatisfy { $0.state == .alarm }
+        return NSSize(width: onlyAlarms ? 92 : model.items.count > 1 ? 66 : 50, height: notch.height)
+    }
+
+    private func size(notch: NSRect) -> NSSize {
+        model.expanded ? NSSize(width: 290, height: notch.height + CGFloat(model.items.count) * 34 + 12) : collapsedSize(notch: notch)
+    }
+
+    /// The screen with the notch (or the main one): the capsule doesn't follow the mouse around.
+    private static var screen: NSScreen? {
+        NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.main
+    }
+
+    /// Where the user dragged it: its left edge, from the notch's middle.
+    private static var savedOffset: CGFloat? {
+        get { (UserDefaults.standard.object(forKey: "shelfOffset") as? Double).map { CGFloat($0) } }
+        set { UserDefaults.standard.set(newValue.map(Double.init), forKey: "shelfOffset") }
+    }
+
+    // MARK: Dragging
+
+    private var grab: CGFloat?
+
+    /// Dragging the closed capsule along the top of the screen.
+    fileprivate func drag(ended: Bool) {
+        guard let panel, let screen = Self.screen, !model.expanded else { return }
+        let mouse = NSEvent.mouseLocation.x
+        if grab == nil { grab = mouse - panel.frame.minX }
+        let x = min(max(mouse - (grab ?? 0), screen.frame.minX + 4), screen.frame.maxX - panel.frame.width - 4)
+        panel.setFrameOrigin(NSPoint(x: x, y: panel.frame.minY))
+        if ended {
+            grab = nil
+            Self.savedOffset = x - Notch.rect(on: screen).midX
+        }
+    }
+
+    /// Back beside the notch (double-click).
+    fileprivate func resetPosition() {
+        Self.savedOffset = nil
+        model.expanded = false
+        place()
+    }
+
+    private func makePanel() -> NSPanel {
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 50, height: 38),
+                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        panel.level = .statusBar
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        let host = ShelfHost(rootView: ShelfView(model: model))
+        host.isClosed = { [weak self] in self?.model.expanded == false }
+        host.onClick = { [weak self] count in
+            if count >= 2 { self?.resetPosition() } else { self?.model.onToggle() }
+        }
+        host.onDrag = { [weak self] ended in self?.drag(ended: ended) }
+        panel.contentView = host
+        return panel
+    }
+}
+
+final class ShelfModel: ObservableObject {
+    @Published var items: [TaskShelf.Item] = []
+    @Published var expanded = false
+    var onToggle: () -> Void = {}
+    var onDrag: (_ ended: Bool) -> Void = { _ in }
+    var onReset: () -> Void = {}
+    var onOpen: (UUID) -> Void = { _ in }
+    var onStop: (UUID) -> Void = { _ in }
+}
+
+private struct ShelfView: View {
+    @ObservedObject var model: ShelfModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Click: open the list. Drag: move it along the top. Double-click: back beside the notch.
+            Group {
+                HStack(spacing: 5) {
+                    summaryIcon
+                    if model.items.allSatisfy({ $0.state == .alarm }), let next = model.items.first {
+                        // The next alarm's time, or a timer's countdown.
+                        Text(next.question.components(separatedBy: " · ").first ?? "")
+                            .font(.caption.weight(.bold).monospacedDigit()).foregroundStyle(.white)
+                    } else if model.items.count > 1 {
+                        Text("\(model.items.count)").font(.caption.weight(.bold)).foregroundStyle(.white)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 30)
+                .contentShape(Rectangle())
+            }
+            .onTapGesture { model.onToggle() } // open: closes it (closed, the window handles the mouse)
+            .help("Click to open · drag to move · double-click to put it back")
+            .padding(.top, 4)
+            if model.expanded {
+                ForEach(model.items) { item in
+                    HStack(spacing: 8) {
+                        icon(item.state).frame(width: 16)
+                        Text(item.question)
+                            .font(.callout)
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Button { model.onStop(item.id) } label: {
+                            Image(systemName: "xmark").font(.caption.weight(.bold)).foregroundStyle(.white.opacity(0.6))
+                        }
+                        .buttonStyle(.plain)
+                        .help(item.state == .working ? "Stop" : item.state == .alarm ? "Cancel" : "Dismiss")
+                    }
+                    .frame(height: 34)
+                    .padding(.horizontal, 12)
+                    .contentShape(Rectangle())
+                    .onTapGesture { model.onOpen(item.id) }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color.black, in: UnevenRoundedRectangle(bottomLeadingRadius: 14, bottomTrailingRadius: 14, style: .continuous))
+        .environment(\.colorScheme, .dark)
+    }
+
+    /// The one that matters most: an OK to give, then work going on, then done.
+    @ViewBuilder
+    private var summaryIcon: some View {
+        let states = model.items.map(\.state)
+        if states.contains(.needsOK) { icon(.needsOK) }
+        else if states.contains(.working) { icon(.working) }
+        else if states.contains(.failed) { icon(.failed) }
+        else if states.allSatisfy({ $0 == .alarm }) { icon(.alarm) }
+        else { icon(.done) }
+    }
+
+    @ViewBuilder
+    private func icon(_ state: TaskShelf.Item.State) -> some View {
+        switch state {
+        case .working: ProgressView().controlSize(.mini).tint(.white)
+        case .needsOK: Image(systemName: "hand.raised.fill").foregroundStyle(.orange)
+        case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        case .failed: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+        case .alarm: Image(systemName: "alarm.fill").foregroundStyle(.orange)
+        }
+    }
+}
+
+/// The capsule's view, handling the mouse itself while it's closed: a click opens the list, a
+/// drag slides it along the top of the screen, a double-click puts it back beside the notch.
+/// (SwiftUI's own drag doesn't work well in a panel that never becomes key.)
+private final class ShelfHost: NSHostingView<ShelfView> {
+    var isClosed: () -> Bool = { true }
+    var onClick: (Int) -> Void = { _ in }
+    var onDrag: (_ ended: Bool) -> Void = { _ in }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount >= 2 { return onClick(2) } // a double-click, whether its first click opened the list or not
+        guard isClosed(), let window else { return super.mouseDown(with: event) }
+        let start = NSEvent.mouseLocation
+        var dragged = false
+        while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            if next.type == .leftMouseUp { break }
+            let now = NSEvent.mouseLocation
+            if dragged || hypot(now.x - start.x, now.y - start.y) > 3 {
+                dragged = true
+                onDrag(false)
+            }
+        }
+        if dragged { onDrag(true) } else { onClick(event.clickCount) }
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}

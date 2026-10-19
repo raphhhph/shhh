@@ -106,6 +106,7 @@ final class AnswerPanel {
         case .status(let status): model.status = status
         case .answer(let answer): model.answer = answer
         case .approval(let approval): model.approval = approval
+        case .plan: break // the plan shows in the side notch
         case .didAct: break // shown as a toast by the pointer
         case .turnFinished:
             model.isDone = true

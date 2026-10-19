@@ -30,6 +30,24 @@ final class AssistantTask {
     /// Called once with the answer (or what went wrong) when the request finishes: for requests
     /// from the phone.
     var onFinished: ((String) -> Void)?
+    /// What it has done so far this turn, in order ("Reading DP_ESS_Bioaccumulation…"), for the
+    /// timeline in the side notch; and when the turn started.
+    var steps: [String] = []
+    /// Its to-do list, for long tasks.
+    var plan: [Assistant.PlanStep] = []
+    var startedAt = Date()
+    /// Asked to work in the background ("… in the background"): off the card as soon as it starts.
+    var background = false
+
+    /// A new step, or a vaguer placeholder ("Running a command…") made specific.
+    func addStep(_ text: String) {
+        let vague: Set<String> = ["Thinking…", "Working…", "Waiting for your OK…", "Running a command…", "Getting tools ready…",
+                                  "Reading your notes…", "Searching your notes…", "Updating your notes…", "Connection dropped, trying again…"]
+        guard !text.isEmpty, text != steps.last else { return }
+        if let last = steps.last, vague.contains(last) { steps[steps.count - 1] = text; return }
+        if vague.contains(text), text != "Running a command…", text != "Reading your notes…" { return }
+        steps.append(text)
+    }
 
     var isWorking: Bool { !isDone }
     var subject: String? { Subject.split(reply).subject }
@@ -45,6 +63,9 @@ final class AssistantTask {
         screenshot = nil
         selection = nil
         notepadTarget = false
+        steps = []
+        plan = []
+        startedAt = Date()
     }
 }
 
@@ -80,6 +101,9 @@ final class TaskShelf {
         let id: UUID
         let question: String
         let state: State
+        var steps: [String] = []
+        var plan: [Assistant.PlanStep] = []
+        var started: Date?
     }
 
     var onOpen: (UUID) -> Void = { _ in }
@@ -143,12 +167,17 @@ final class TaskShelf {
     }
 
     private func collapsedSize(notch: NSRect) -> NSSize {
+        if model.items.contains(where: { $0.state == .working }) { return NSSize(width: 250, height: notch.height) } // the step it's on
         let onlyAlarms = model.items.allSatisfy { $0.state == .alarm }
         return NSSize(width: onlyAlarms && !TaskShelf.alarmIconOnly ? 92 : model.items.count > 1 ? 66 : 50, height: notch.height)
     }
 
     private func size(notch: NSRect) -> NSSize {
-        model.expanded ? NSSize(width: 290, height: notch.height + CGFloat(model.items.count) * 34 + 12) : collapsedSize(notch: notch)
+        guard model.expanded else { return collapsedSize(notch: notch) }
+        let rows = model.items.reduce(CGFloat(0)) { $0 + ShelfView.height(of: $1) }
+        let alarmButtons: CGFloat = model.items.contains { $0.state == .alarm } ? 34 : 0
+        let wide = model.items.contains { !$0.steps.isEmpty || !$0.plan.isEmpty }
+        return NSSize(width: wide ? 360 : 290, height: notch.height + rows + alarmButtons + 12)
     }
 
     /// The screen with the notch (or the main one): the capsule doesn't follow the mouse around.
@@ -217,6 +246,20 @@ extension TaskShelf {
     nonisolated static var alarmIconOnly: Bool { alarmStyle == "icon" }
 }
 
+/// "1:23": how long a task has been at it, ticking by itself.
+private struct Elapsed: View {
+    let since: Date
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let seconds = max(0, Int(context.date.timeIntervalSince(since)))
+            Text(String(format: "%d:%02d", seconds / 60, seconds % 60))
+                .font(.caption2.weight(.medium).monospacedDigit())
+                .foregroundStyle(.white.opacity(0.6))
+        }
+    }
+}
+
 final class ShelfModel: ObservableObject {
     @Published var items: [TaskShelf.Item] = []
     @Published var expanded = false
@@ -236,7 +279,17 @@ private struct ShelfView: View {
             Group {
                 HStack(spacing: 5) {
                     summaryIcon
-                    if model.items.allSatisfy({ $0.state == .alarm }), !TaskShelf.alarmIconOnly, let next = model.items.first {
+                    if !model.expanded, let working = model.items.first(where: { $0.state == .working }) {
+                        // A task at work: the step it's on, and for how long.
+                        Text(Self.summary(working))
+                            .font(.caption.weight(.semibold)).foregroundStyle(.white)
+                            .lineLimit(1).truncationMode(.tail)
+                        Spacer(minLength: 4)
+                        if let started = working.started { Elapsed(since: started) }
+                        if model.items.count > 1 {
+                            Text("+\(model.items.count - 1)").font(.caption2.weight(.bold)).foregroundStyle(.white.opacity(0.6))
+                        }
+                    } else if model.items.allSatisfy({ $0.state == .alarm }), !TaskShelf.alarmIconOnly, let next = model.items.first {
                         // The next alarm's time, or a timer's countdown.
                         Text(next.question.components(separatedBy: " · ").first ?? "")
                             .font(.caption.weight(.bold).monospacedDigit()).foregroundStyle(.white)
@@ -244,6 +297,7 @@ private struct ShelfView: View {
                         Text("\(model.items.count)").font(.caption.weight(.bold)).foregroundStyle(.white)
                     }
                 }
+                .padding(.horizontal, model.items.contains { $0.state == .working } && !model.expanded ? 12 : 0)
                 .frame(maxWidth: .infinity)
                 .frame(height: 30)
                 .contentShape(Rectangle())
@@ -271,6 +325,8 @@ private struct ShelfView: View {
                     .padding(.horizontal, 12)
                     .contentShape(Rectangle())
                     .onTapGesture { model.onOpen(item.id) }
+                    if item.state == .working, !item.plan.isEmpty { checklist(item) }
+                    else if item.state == .working, !item.steps.isEmpty { timeline(item) }
                 }
                 if model.items.contains(where: { $0.state == .alarm }) {
                     // Less of the capsule: just the icon, or nothing until an alarm is under an hour away.
@@ -292,6 +348,83 @@ private struct ShelfView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color.black, in: UnevenRoundedRectangle(bottomLeadingRadius: 14, bottomTrailingRadius: 14, style: .continuous))
         .environment(\.colorScheme, .dark)
+    }
+
+    /// The steps a working task has taken: done ones ticked, the one it's on spinning.
+    private func timeline(_ item: TaskShelf.Item) -> some View {
+        let shown = Array(item.steps.suffix(ShelfView.maxSteps).enumerated())
+        return VStack(alignment: .leading, spacing: 0) {
+            ForEach(shown, id: \.offset) { index, step in
+                let current = index == shown.count - 1
+                HStack(spacing: 8) {
+                    if current {
+                        ProgressView().controlSize(.mini).tint(.orange).frame(width: 12)
+                    } else {
+                        Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(.green).frame(width: 12)
+                    }
+                    Text(step).font(.caption).foregroundStyle(.white.opacity(current ? 0.95 : 0.55)).lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 0)
+                    if current, let started = item.started { Elapsed(since: started) }
+                }
+                .frame(height: ShelfView.stepHeight)
+            }
+        }
+        .padding(.leading, 36)
+        .padding(.trailing, 12)
+        .padding(.bottom, 6)
+    }
+
+    /// Its to-do list: done ticked, the one it's on spinning, the rest to come; with the step it's
+    /// taking right now under the list.
+    private func checklist(_ item: TaskShelf.Item) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(item.plan.prefix(ShelfView.maxPlan).enumerated()), id: \.offset) { _, step in
+                HStack(spacing: 8) {
+                    switch step.state {
+                    case .completed: Image(systemName: "checkmark.circle.fill").font(.system(size: 11)).foregroundStyle(.green).frame(width: 12)
+                    case .inProgress: ProgressView().controlSize(.mini).tint(.orange).frame(width: 12)
+                    case .pending: Image(systemName: "circle").font(.system(size: 10)).foregroundStyle(.white.opacity(0.35)).frame(width: 12)
+                    }
+                    Text(step.text).font(.caption.weight(step.state == .inProgress ? .semibold : .regular))
+                        .foregroundStyle(.white.opacity(step.state == .pending ? 0.5 : step.state == .completed ? 0.6 : 0.95))
+                        .strikethrough(step.state == .completed, color: .white.opacity(0.4))
+                        .lineLimit(1).truncationMode(.tail)
+                    Spacer(minLength: 0)
+                }
+                .frame(height: ShelfView.stepHeight)
+            }
+            if let now = item.steps.last {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.turn.down.right").font(.system(size: 9)).foregroundStyle(.white.opacity(0.4))
+                    Text(now).font(.caption2).foregroundStyle(.white.opacity(0.5)).lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 0)
+                    if let started = item.started { Elapsed(since: started) }
+                }
+                .frame(height: ShelfView.stepHeight)
+            }
+        }
+        .padding(.leading, 36)
+        .padding(.trailing, 12)
+        .padding(.bottom, 6)
+    }
+
+    /// The closed capsule's line: "2/5 · Answering question 3", or the step it's taking.
+    static func summary(_ item: TaskShelf.Item) -> String {
+        guard !item.plan.isEmpty else { return item.steps.last ?? "Starting…" }
+        let done = item.plan.filter { $0.state == .completed }.count
+        let current = item.plan.first { $0.state == .inProgress }?.text ?? item.steps.last ?? "Working"
+        return "\(done)/\(item.plan.count) · \(current)"
+    }
+
+    static let maxSteps = 6
+    static let maxPlan = 8
+    static let stepHeight: CGFloat = 20
+
+    /// A row's height in the open list: its title, and a working task's plan or steps.
+    static func height(of item: TaskShelf.Item) -> CGFloat {
+        guard item.state == .working else { return 34 }
+        if !item.plan.isEmpty { return 34 + CGFloat(min(item.plan.count, maxPlan) + (item.steps.isEmpty ? 0 : 1)) * stepHeight + 6 }
+        return 34 + (item.steps.isEmpty ? 0 : CGFloat(min(item.steps.count, maxSteps)) * stepHeight + 6)
     }
 
     private func shelfButton(_ title: String, _ action: @escaping () -> Void) -> some View {

@@ -115,6 +115,14 @@ final class Assistant {
         over the friend's). For an IB summative they hand in for marks (the EE, an IA, the TOK essay \
         or exhibition): help fully as well, and add one short line that IB asks for AI use to be \
         acknowledged in the work.
+
+        Long tasks (a formative, a deck, research, sorting files) run in the background while they use \
+        Joe for other things, with your progress shown at the notch as a checklist. Start one by setting \
+        your plan: "\(Bundle.main.executablePath ?? "Joe")" --plan "<step>" "<step>" … (3 to 8 short steps in \
+        plain words, like "Read the ESS task" "Answer questions 1–4" "Save it as a new doc"); then as you \
+        start each step run --plan <its number>, and --plan done at the end. Work through the whole task \
+        without stopping to check in (ask only if you truly can't go on), save what you make as a new \
+        file, open it at the end, and reply with what you made and where.
         """
 
     nonisolated static var personality: String {
@@ -157,9 +165,18 @@ final class Assistant {
 
     enum Decision { case allow, allowForTask, deny }
 
+    /// One item of Claude's to-do list for a long task (its TodoWrite tool).
+    struct PlanStep: Equatable {
+        enum State: String { case pending, inProgress = "in_progress", completed }
+        let text: String
+        let state: State
+    }
+
     enum Event {
         /// What Claude is doing right now ("Checking Gmail…"), or nil once the reply is coming in.
         case status(String?)
+        /// Its to-do list for this task, each time it's updated.
+        case plan([PlanStep])
         /// The reply so far (replaces the previous one).
         case answer(String)
         /// An action waiting for the user's OK, or nil once there's none.
@@ -253,7 +270,7 @@ final class Assistant {
     /// Designing slides and the like: Opus at high effort, whatever model is chosen (Haiku can't
     /// design). Starts a new session with it when the request is the first of the conversation.
     static func needsStrongModel(_ request: String) -> Bool {
-        request.range(of: #"\b(slides?|slideshow|deck|power ?point|pptx|keynote|presentation|design|redesign|make (it|them|this) look (good|better|nice|professional))\b"#,
+        request.range(of: #"\b(slides?|slideshow|deck|power ?point|pptx|keynote|presentation|design|redesign|make (it|them|this) look (good|better|nice|professional)|formative|summative|worksheet|inquiry|assignment|homework|essay|lab report|IA|EE)\b"#,
                       options: [.regularExpression, .caseInsensitive]) != nil
     }
 
@@ -369,6 +386,8 @@ private final class Session {
     private var answer = ""
     // Tool inputs stream in as JSON fragments, by content block index.
     private var toolInputs: [Int: (name: String, json: String)] = [:]
+    /// The plan so far, from `Joe --plan`.
+    private var plan: [Assistant.PlanStep] = []
     // Actions waiting for the user's OK, shown one at a time.
     private var pending: [(id: String, tool: String, action: ToolPolicy.Action, input: [String: Any], description: String?)] = []
     // What the user allowed "for this task" (until the card is closed).
@@ -576,6 +595,31 @@ private final class Session {
         case "content_block_stop":
             if let tool = toolInputs.removeValue(forKey: index) {
                 let input = (try? JSONSerialization.jsonObject(with: Data(tool.json.utf8))) as? [String: Any] ?? [:]
+                // The plan, from `Joe --plan …` (Claude Code has no to-do tool when run like this).
+                if tool.name == "Bash", let words = ToolPolicy.shellWords(input["command"] as? String ?? ""),
+                   words.count >= 3, words[0] == Bundle.main.executablePath, words[1] == "--plan" {
+                    let rest = Array(words.dropFirst(2))
+                    if rest.count == 1, let number = Int(rest[0]) {
+                        plan = plan.enumerated().map { index, step in
+                            Assistant.PlanStep(text: step.text, state: index + 1 < number ? .completed : index + 1 == number ? .inProgress : .pending)
+                        }
+                    } else if rest == ["done"] {
+                        plan = plan.map { Assistant.PlanStep(text: $0.text, state: .completed) }
+                    } else {
+                        plan = rest.enumerated().map { Assistant.PlanStep(text: $1, state: $0 == 0 ? .inProgress : .pending) }
+                    }
+                    onEvent(.plan(plan))
+                    onEvent(.status("Working…"))
+                    return
+                }
+                if tool.name == "TodoWrite" {
+                    let todos = input["todos"] as? [[String: Any]] ?? []
+                    onEvent(.plan(todos.compactMap { todo in
+                        let state = Assistant.PlanStep.State(rawValue: todo["status"] as? String ?? "") ?? .pending
+                        let text = (state == .inProgress ? todo["activeForm"] as? String : nil) ?? todo["content"] as? String
+                        return text.map { Assistant.PlanStep(text: $0, state: state) }
+                    }))
+                }
                 onEvent(.status(Self.describe(tool: tool.name, input: input)))
             }
         default:
@@ -742,6 +786,8 @@ private final class Session {
             return (input["url"] as? String).flatMap { URL(string: $0)?.host() }.map { "Reading \($0)" } ?? "Reading a page…"
         case "ToolSearch":
             return "Getting tools ready…"
+        case "TodoWrite":
+            return "Working…"
         case "Read":
             return (input["file_path"] as? String).map { "Reading \(Self.noteName($0))" } ?? "Reading your notes…"
         case "Glob", "Grep":
@@ -749,7 +795,7 @@ private final class Session {
         case "Edit", "Write":
             return (input["file_path"] as? String).map { "Updating \(Self.noteName($0))" } ?? "Updating your notes…"
         case "Bash":
-            return "Running a command…"
+            return (input["description"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Running a command…"
         default:
             break
         }
@@ -888,7 +934,8 @@ private final class Session {
             name on screen and sends. Use --message draft (same arguments) only when they want it typed but not \
             sent. Write the message as they would (their language, short, no sign-off), only what they asked \
             to send. If it reports it couldn't confirm the chat, nothing was sent: look at its screenshot, tell \
-            them, and try the name as the chat list shows it.
+            them, and try the name as the chat list shows it. WeChat's File Transfer (文件传输助手) is found by \
+            the name "File".
             """
         let slides = """
 
@@ -1142,7 +1189,7 @@ struct ToolPolicy {
 
     private func builtIn(_ tool: String, _ input: [String: Any]) -> Action {
         switch tool {
-        case "WebSearch", "WebFetch", "ToolSearch":
+        case "WebSearch", "WebFetch", "ToolSearch", "TodoWrite":
             return Action(key: tool, verdict: .allow, title: tool)
         case "Read" where ScreenControl.isEnabled
             && (input["file_path"] as? String).map({ ($0 as NSString).expandingTildeInPath }) == ScreenControl.lookImage.path:
@@ -1181,7 +1228,7 @@ struct ToolPolicy {
             return ["draft", "open"].contains(words[2]) ? Action(key: "message:draft", verdict: .allow, title: "Open a chat or draft a message")
                 : Action(key: "message:send:\(input["command"] as? String ?? "")", verdict: .ask, title: "Send a message")
         case "Bash" where Self.shellWords(input["command"] as? String ?? "").map({
-            $0.count >= 2 && $0[0] == Bundle.main.executablePath && ["--pdf-find", "--pdf-text", "--prereading", "--workspace", "--workspace-reset", "--spotify", "--alarm", "--slides", "--recap"].contains($0[1]) }) == true:
+            $0.count >= 2 && $0[0] == Bundle.main.executablePath && ["--pdf-find", "--pdf-text", "--prereading", "--workspace", "--workspace-reset", "--spotify", "--alarm", "--slides", "--recap", "--plan"].contains($0[1]) }) == true:
             return Action(key: "shhh-tools", verdict: .allow, title: "Use Joe's tools")
         case "Bash" where FileCommands.judge(input["command"] as? String ?? "",
                                              cwd: vault ?? FileManager.default.temporaryDirectory) != nil:

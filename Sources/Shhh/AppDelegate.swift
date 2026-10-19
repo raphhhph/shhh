@@ -155,6 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let alarmTicks = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.alarms.tick()
+                self?.moveLongTaskAside()
                 self?.phone.check()
                 self?.wake.update()
                 self?.resumeMusicIfDone()
@@ -319,7 +320,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         task.beginTurn(text)
         answerPanel.beginTurn(question: text)
         if Assistant.needsStrongModel(text) { task.assistant.useStrongModel() }
+        if Self.wantsBackground(text) { task.background = true }
         task.assistant.ask(text)
+    }
+
+    /// "… in the background", "… while I do something else".
+    private static func wantsBackground(_ text: String) -> Bool {
+        text.range(of: #"\b(in the background|background task|while i (do|work on|use)|as a (side )?task)\b"#,
+                   options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -505,7 +513,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// done or needs an OK.
     private func handle(_ event: Assistant.Event, for task: AssistantTask) {
         switch event {
-        case .status(let status): task.status = status
+        case .status(let status):
+            task.status = status
+            if let status { task.addStep(status) }
+        case .plan(let plan): task.plan = plan
         case .answer(let text): task.reply = text
         case .approval(let approval): task.approval = approval
         case .didAct: break
@@ -696,6 +707,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// A request that never finished turning into text (a hung microphone, model or screenshot)
     /// left Joe "busy" for good, ignoring every key press after it. Past 45 seconds, let it go.
+    /// A task that's still at it after a while (or was asked to work in the background) moves off
+    /// the card to the side notch, where its steps show as it goes, and Joe is free for the next
+    /// thing. Not while they're looking at it, talking, or it needs an OK.
+    private func moveLongTaskAside() {
+        guard let task = focused, task.isWorking, task.approval == nil, state == .idle, !answerPanel.isHovering,
+              task.background || (Date().timeIntervalSince(task.startedAt) > 12 && task.steps.count >= 2) else { return }
+        sendToBackground(task)
+        answerPanel.hide()
+        toast.show("Working on it in the background: " + (task.subject ?? task.question), symbol: "square.stack.3d.up", tint: .orange)
+    }
+
     private func unstickProcessing() {
         guard state == .processing, let since = processingSince, Date().timeIntervalSince(since) > 45 else { return }
         processingSince = nil
@@ -845,7 +867,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 : task.error != nil ? .failed
                 : task.isWorking ? .working : .done
             let label = task.subject ?? (task.question.isEmpty ? "Listening…" : task.question)
-            return TaskShelf.Item(id: task.id, question: label, state: state)
+            return TaskShelf.Item(id: task.id, question: label, state: state, steps: task.steps, plan: task.plan,
+                                  started: task.isWorking ? task.startedAt : nil)
         })
     }
 
@@ -1239,6 +1262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 task.screenshot = screenshot
                 // Designing slides needs the strongest model: a new conversation about it gets Opus.
                 if !continuing, Assistant.needsStrongModel(text) { task.assistant.useStrongModel() }
+                if Self.wantsBackground(text) { task.background = true }
                 task.assistant.ask(request, screenshot: image)
                 asked = true
                 return

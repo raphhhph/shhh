@@ -159,6 +159,11 @@ enum CommandLineTool {
         case ("--recap", 1):
             print(ActivityLog.recap())
             exit(0)
+        case ("--plan", 2...):
+            // Joe --plan "<step>" "<step>" … | <number> | done: the assistant's checklist. The app
+            // reads it from the command itself and shows it at the notch; nothing to do here.
+            print("Plan updated.")
+            exit(0)
         case ("--message", 4...):
             // Joe --message send|draft whatsapp|wechat "<chat>" "<text>", or --message open <app> "<chat>"
             run { print(await Messaging.run(Array(args.dropFirst()))) }

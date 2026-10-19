@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let alarms = AlarmClock()
     private let phone = PhoneRemote()
     private let wake = WakeWord()
+    private let endListener = EndListener()
     /// Recording because of "Hey Joe": it ends by itself when they stop talking.
     private var handsFree = false
     private var heardSpeech = false
@@ -437,6 +438,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         lastOwnVoice = nil
         voiceprintReady = false
         Task { [weak self] in self?.voiceprintReady = await VoicePrint.shared.isReady }
+        // Their words, as they say them: an end phrase or a pause in the words ends it.
+        endListener.start { [weak self] in
+            guard let self, self.handsFree, self.state == .recording else { return }
+            self.handsFree = false
+            self.finishRecording()
+        }
         // The pill now, rather than after the usual hold delay.
         showPanelWork?.perform()
     }
@@ -1109,6 +1116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func cancelRecording() {
         guard state == .recording else { return }
         handsFreeTake = false
+        endListener.stop()
         showPanelWork?.cancel()
         panel.hide()
             answerPanel.setListening(false)
@@ -1133,6 +1141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel.showProcessing()
         let handsFreeTake = self.handsFreeTake
         self.handsFreeTake = false
+        endListener.stop()
         let asking = key == .rightOption
         let followingUp = self.followingUp
         let screen = screenTask
@@ -1185,6 +1194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }) ?? TextCleaner.removeFillers(raw)
             }
             text = Vocabulary.apply(text) // the user's names and words, spelled their way
+            if handsFreeTake { text = EndListener.withoutEndPhrase(text) } // "…, end prompt"
             if asking {
                 guard !text.isEmpty else { return }
                 lastTranscript = text

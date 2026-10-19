@@ -12,6 +12,9 @@ final class Notepad {
     private var saveWork: DispatchWorkItem?
     private var listening: Task<Void, Never>?
     private var recording: AudioRecorder.Recording?
+    /// Who is speaking, for this listening session: lines start "Speaker 1:", "You:" when it changes.
+    private var speakers = SpeakerTracker()
+    private var lastSpeaker: String?
     /// The last piece of a recording, still being transcribed after Stop.
     private var finishing: Task<Void, Never>?
 
@@ -142,6 +145,8 @@ final class Notepad {
     func startListening() {
         guard listening == nil else { return }
         model.listening = true
+        speakers = SpeakerTracker()
+        lastSpeaker = nil
         listening = Task { [weak self] in
             guard let self, let setup = await self.listen?() else {
                 NSSound.beep()
@@ -185,8 +190,17 @@ final class Notepad {
 
     private func transcribe(_ samples: [Float], with transcriber: Transcriber) async {
         guard samples.count >= 16_000 / 2, !Self.isQuiet(samples) else { return }
-        guard let text = try? await transcriber.transcribe(samples) else { return }
-        append(Vocabulary.apply(text), separator: " ")
+        // Split where the voice changes; a new line, with who's speaking, each time it does.
+        for turn in await speakers.split(samples) {
+            guard turn.samples.count >= 16_000 / 2, !Self.isQuiet(turn.samples),
+                  let text = try? await transcriber.transcribe(turn.samples), !text.isEmpty else { continue }
+            if !turn.label.isEmpty, turn.label != lastSpeaker {
+                lastSpeaker = turn.label
+                append("\(turn.label): " + Vocabulary.apply(text), separator: "\n\n")
+            } else {
+                append(Vocabulary.apply(text), separator: " ")
+            }
+        }
     }
 
     /// Below speaking volume (RMS), for finding pauses and skipping silent pieces.

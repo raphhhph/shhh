@@ -1434,6 +1434,7 @@ private struct SettingsPage: View {
     @AppStorage("phoneRemote") private var phoneRemote = true
     @AppStorage("wakeWord") private var wakeWord = false
     @State private var permissionsSeen = 0
+    @State private var voiceLearned = 0
     @AppStorage("assistantModel") private var assistantModel = Assistant.Model.opus.rawValue
     @AppStorage("assistantEffort") private var effort = Assistant.Effort.low.rawValue
     @AppStorage("assistantAutonomy") private var autonomy = Assistant.Autonomy.careful.rawValue
@@ -1574,7 +1575,16 @@ private struct SettingsPage: View {
             row("Ask from iPhone", "“Hey Siri, add … to Ask Joe”", last: true) { switchOn($phoneRemote) }
         }
         section("Hands-free", "ear") {
-            row("“Hey Joe”", "Talk without a key. On your Mac only; the mic stays on", last: true) { switchOn($wakeWord) }
+            row("“Hey Joe”", "Talk without a key. On your Mac only; the mic stays on") { switchOn($wakeWord) }
+            row("Your voice", voiceLearned >= 3 ? "Learned from \(voiceLearned) recordings: Joe listens for you, not the room"
+                    : "Learning: talk to Joe holding the key a few times (\(voiceLearned) of 3)", last: true) {
+                Button("Reset") {
+                    Task { await VoicePrint.shared.reset(); voiceLearned = 0 }
+                }
+                .buttonStyle(PillButton())
+                .disabled(voiceLearned == 0)
+            }
+            .task { voiceLearned = await VoicePrint.shared.learned }
         }
     }
 

@@ -28,6 +28,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var handsFree = false
     private var heardSpeech = false
     private var quietSince: Date?
+    /// This recording came from "Hey Joe": cut down to their voice before it's transcribed.
+    private var handsFreeTake = false
+    /// With a voiceprint: when their own voice was last heard (checked every ¾ s).
+    private var voiceprintReady = false
+    private var lastOwnVoice: Date?
+    private var voiceCheckAt = Date.distantPast
+    private var checkingVoice = false
     private lazy var dashboard = Dashboard(actions: DashboardModel.Actions(
         ask: { [weak self] in self?.askTyped($0) },
         status: { [weak self] in self?.speechStatus ?? "" },
@@ -189,6 +196,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 every word of my notes: under the title add ## Summary (3–5 bullets), ## Key terms (term: one-line \
                 meaning), \(kind == .lecture ? "## Recall questions (5, for revising)" : "## Actions (who does what, by when)"), then \
                 ## Notes with my original notes unchanged. Fix obvious speech-recognition mistakes in the summary only. \
+                Lines start with who said them ("You:", "Speaker 1:"): keep that, and where it's clear who a speaker is \
+                (the teacher, a named classmate), say so in the summary. \
                 \(kind == .meeting ? "Add the actions that are mine to my Daybook. " : "")Reply in one line.
                 """)
         }
@@ -422,8 +431,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         startRecording(.rightOption)
         guard state == .recording else { return }
         handsFree = true
+        handsFreeTake = true
         heardSpeech = false
         quietSince = nil
+        lastOwnVoice = nil
+        voiceprintReady = false
+        Task { [weak self] in self?.voiceprintReady = await VoicePrint.shared.isReady }
         // The pill now, rather than after the usual hold delay.
         showPanelWork?.perform()
     }
@@ -440,6 +453,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             quietSince = Date()
         }
         let quiet = quietSince.map { Date().timeIntervalSince($0) } ?? 0
+        if voiceprintReady {
+            // Their voice, checked every ¾ s: other people talking around them don't keep it open.
+            if !checkingVoice, Date().timeIntervalSince(voiceCheckAt) > 0.75, level > 0.05, let start = startTask {
+                checkingVoice = true
+                voiceCheckAt = Date()
+                Task { [weak self] in
+                    guard let recording = await start.value, let self else { self?.checkingVoice = false; return }
+                    let tail = self.recorder.tail(recording, seconds: 1.5)
+                    let own = await VoicePrint.shared.isOwnVoice(tail) ?? false
+                    self.checkingVoice = false
+                    if own { self.lastOwnVoice = Date() }
+                }
+            }
+            if lastOwnVoice == nil, elapsed > 6 {
+                handsFree = false
+                cancelRecording() // never heard them: someone else said it, or they didn't go on
+            } else if let last = lastOwnVoice, Date().timeIntervalSince(last) > 1.8 || quiet > 1.3 {
+                handsFree = false
+                finishRecording()
+            } else if elapsed > 40 {
+                handsFree = false
+                finishRecording()
+            }
+            return
+        }
         if !heardSpeech, elapsed > 5 {
             handsFree = false
             cancelRecording()
@@ -452,6 +490,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func startRecording(_ key: HotkeyMonitor.Key) {
         guard state == .idle else { return }
         handsFree = false
+        handsFreeTake = false
         guard speechReady, AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             loadSpeechModel() // retry now if an earlier load failed
             NSSound.beep() // the menu explains what's missing
@@ -1069,6 +1108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func cancelRecording() {
         guard state == .recording else { return }
+        handsFreeTake = false
         showPanelWork?.cancel()
         panel.hide()
             answerPanel.setListening(false)
@@ -1091,6 +1131,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         state = .processing
         processingSince = Date()
         panel.showProcessing()
+        let handsFreeTake = self.handsFreeTake
+        self.handsFreeTake = false
         let asking = key == .rightOption
         let followingUp = self.followingUp
         let screen = screenTask
@@ -1108,10 +1150,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if asking, !asked, !followingUp { dropNewConversation() }
             }
             guard let recording = await start?.value else { return } // already beeped
-            let samples = await recorder.stop(recording, covering: heldFor)
+            var samples = await recorder.stop(recording, covering: heldFor)
             guard samples.count >= 16_000 / 4 else {
                 NSSound.beep() // the microphone sent no audio
                 return
+            }
+            if handsFreeTake {
+                // "Hey Joe": only the parts in their voice (nil: no voiceprint yet, keep it all).
+                if let own = await VoicePrint.shared.keepOwnVoice(samples) {
+                    guard own.count >= 16_000 / 2 else { return } // none of it was them
+                    samples = own
+                }
+            } else if samples.count >= 32_000 {
+                // Holding a key: it's them for certain, so it teaches Joe their voice.
+                let theirs = samples
+                Task.detached { await VoicePrint.shared.learn(theirs) }
             }
 
             var text: String

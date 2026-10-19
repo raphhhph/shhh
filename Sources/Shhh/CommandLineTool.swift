@@ -1,3 +1,4 @@
+import FluidAudio
 import AppKit
 
 /// Terminal test modes, to check each part of the pipeline without the app:
@@ -159,6 +160,26 @@ enum CommandLineTool {
         case ("--recap", 1):
             print(ActivityLog.recap())
             exit(0)
+        case ("--voice-similarity", 3...):
+            // Joe --voice-similarity a.wav b.wav …: how alike the voices sound (CAM++), for tuning.
+            run {
+                guard let model = try? await CampPlusEmbedder.load() else { print("Couldn't load the voice model."); return }
+                let files = Array(args.dropFirst())
+                var embeddings: [[Float]] = []
+                for file in files { embeddings.append((try? await model.embed(audioURL: URL(fileURLWithPath: file))) ?? []) }
+                for i in 0..<files.count { for j in (i + 1)..<files.count where !embeddings[i].isEmpty && !embeddings[j].isEmpty {
+                    let score = zip(embeddings[i], embeddings[j]).reduce(Float(0)) { $0 + $1.0 * $1.1 }
+                    print(String(format: "%.3f  %@ ~ %@", score, (files[i] as NSString).lastPathComponent, (files[j] as NSString).lastPathComponent))
+                } }
+            }
+        case ("--speakers", 2):
+            // Joe --speakers file.wav: who speaks when (the notepad's speaker labels), for tuning.
+            run {
+                let samples = (try? AudioConverter(sampleRate: 16_000).resampleAudioFile(URL(fileURLWithPath: args[1]))) ?? []
+                for turn in await SpeakerTracker().split(samples) {
+                    print(String(format: "%@  %.1f s", turn.label, Double(turn.samples.count) / 16_000))
+                }
+            }
         case ("--math-pdf", 2...):
             // Joe --math-pdf <spec.json> [out.pdf]: worked maths solutions, typeset.
             MainActor.assumeIsolated { MathDoc.run(Array(args.dropFirst())) }

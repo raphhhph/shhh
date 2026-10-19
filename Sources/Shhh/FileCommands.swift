@@ -151,6 +151,15 @@ enum FileCommands {
         return wildcard ? resolved + "/*" : resolved
     }
 
+    /// Where passwords, keys and logins live: never read, whatever the mode.
+    static func isSecret(_ path: String) -> Bool {
+        let lower = path.lowercased()
+        let folders = ["/.ssh", "/.gnupg", "/.aws", "/.config/gh", "/.netrc", "/library/keychains", "/library/cookies",
+                       "/library/application support/shhh/spotify.json", "/.claude/.credentials", "/.claude.json"]
+        let files = ["login data", "cookies", "key3.db", "key4.db", "logins.json", "keychain"]
+        return folders.contains { lower.contains($0) } || files.contains { (lower as NSString).lastPathComponent.hasPrefix($0) }
+    }
+
     /// Anywhere in the user's own folders except Library and hidden ones, and the apps.
     static func readable(_ path: String) -> Bool {
         if path.hasPrefix("/Applications") || path.hasPrefix("/Volumes") { return true }
@@ -173,7 +182,7 @@ enum FileCommands {
 
     /// Inside one of the everyday folders (not the folder itself), and not in an app, a git
     /// repository's internals or a hidden folder.
-    private static func changeable(_ path: String) -> Bool {
+    static func changeable(_ path: String) -> Bool {
         guard writable.contains(where: { path.hasPrefix($0 + "/") }) else { return false }
         let parts = path.split(separator: "/")
         return !parts.contains { $0.hasPrefix(".") || $0.hasSuffix(".app") }

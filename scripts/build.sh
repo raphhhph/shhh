@@ -19,6 +19,7 @@ cp "$BIN/Shhh" "$APP/Contents/MacOS/Joe"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp Resources/slides.py "$APP/Contents/Resources/slides.py"
+cp Resources/mathdoc.js "$APP/Contents/Resources/mathdoc.js"
 cp -R "$BIN/llama.framework" "$APP/Contents/Frameworks/"
 for bundle in "$BIN"/*.bundle; do
   [ -e "$bundle" ] && cp -R "$bundle" "$APP/Contents/Resources/"

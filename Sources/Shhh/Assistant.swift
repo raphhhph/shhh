@@ -116,6 +116,15 @@ final class Assistant {
         or exhibition): help fully as well, and add one short line that IB asks for AI use to be \
         acknowledged in the work.
 
+        Maths answers, answer keys and worked solutions (anything with powers, fractions, roots, \
+        integrals): never plain text, Markdown or a Word doc. Write a spec JSON and run "\(Bundle.main.executablePath ?? "Joe")" \
+        --math-pdf "<spec.json>" "<out.pdf>": {"title", "subtitle", "questions": [{"n", "marks", "given": \
+        "<LaTeX>", "parts": [{"label": "(a)", "title": "<what it asks, in a few words>", "steps": [["<LaTeX>", \
+        "<why this step, ≤15 plain words>"]], "answer": "<LaTeX, with units>"}]}]}. One algebraic move per \
+        step, like a teacher's worked example: real LaTeX (\\frac, ^{}, \\int_a^b, \\sqrt), radians, final \
+        answers to 3 s.f. with units. Check every number by computing it (python3) before writing it. Put \
+        the spec beside the output, open the PDF and Read a page to check it.
+
         Long tasks (a formative, a deck, research, sorting files) run in the background while they use \
         Joe for other things, with your progress shown at the notch as a checklist. Start one by setting \
         your plan: "\(Bundle.main.executablePath ?? "Joe")" --plan "<step>" "<step>" … (3 to 8 short steps in \
@@ -1197,7 +1206,12 @@ struct ToolPolicy {
         case "Read", "Glob", "Grep":
             let path = input["file_path"] as? String ?? input["path"] as? String
             let full = path.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath).standardizedFileURL.path }
+            if let full, FileCommands.isSecret(full) {
+                return Action(key: "\(tool):secret", verdict: .block, title: "reading passwords, keys or logins")
+            }
+            // Hands-off: reading anything else needs no OK.
             let free = notePath(path) != nil || Self.isSavedResult(path) || full.map(FileCommands.readable) == true
+                || autonomy == .handsOff
             return Action(key: tool, verdict: free ? .allow : .ask, title: "Read files outside your notes")
         case "Edit", "Write":
             let path = input["file_path"] as? String
@@ -1207,8 +1221,13 @@ struct ToolPolicy {
                 return Action(key: tool, verdict: .allow, title: tool)
             }
             guard let note = notePath(path) else {
-                if autonomy == .handsOff, let path, FileCommands.isWorkingFile(path) {
-                    return Action(key: tool, verdict: .allow, title: "Write a working file") // build.js, plan.json…
+                // Hands-off: their everyday folders (Desktop, Documents, Downloads…) need no OK; a
+                // backup is kept first, so "undo that" puts anything back.
+                if autonomy == .handsOff, let path {
+                    let full = URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL.path
+                    if FileCommands.isWorkingFile(path) || FileCommands.changeable(full) {
+                        return Action(key: tool, verdict: .allow, title: "Write a file")
+                    }
                 }
                 return Action(key: "\(tool):\(path ?? "")", verdict: .ask, title: "Change a file outside your notes")
             }
@@ -1228,7 +1247,7 @@ struct ToolPolicy {
             return ["draft", "open"].contains(words[2]) ? Action(key: "message:draft", verdict: .allow, title: "Open a chat or draft a message")
                 : Action(key: "message:send:\(input["command"] as? String ?? "")", verdict: .ask, title: "Send a message")
         case "Bash" where Self.shellWords(input["command"] as? String ?? "").map({
-            $0.count >= 2 && $0[0] == Bundle.main.executablePath && ["--pdf-find", "--pdf-text", "--prereading", "--workspace", "--workspace-reset", "--spotify", "--alarm", "--slides", "--recap", "--plan"].contains($0[1]) }) == true:
+            $0.count >= 2 && $0[0] == Bundle.main.executablePath && ["--pdf-find", "--pdf-text", "--prereading", "--workspace", "--workspace-reset", "--spotify", "--alarm", "--slides", "--recap", "--plan", "--math-pdf"].contains($0[1]) }) == true:
             return Action(key: "shhh-tools", verdict: .allow, title: "Use Joe's tools")
         case "Bash" where FileCommands.judge(input["command"] as? String ?? "",
                                              cwd: vault ?? FileManager.default.temporaryDirectory) != nil:

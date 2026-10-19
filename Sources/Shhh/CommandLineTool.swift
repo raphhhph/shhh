@@ -159,6 +159,11 @@ enum CommandLineTool {
         case ("--recap", 1):
             print(ActivityLog.recap())
             exit(0)
+        case ("--math-pdf", 2...):
+            // Joe --math-pdf <spec.json> [out.pdf]: worked maths solutions, typeset.
+            MainActor.assumeIsolated { MathDoc.run(Array(args.dropFirst())) }
+            NSApplication.shared.setActivationPolicy(.prohibited)
+            NSApplication.shared.run()
         case ("--plan", 2...):
             // Joe --plan "<step>" "<step>" … | <number> | done: the assistant's checklist. The app
             // reads it from the command itself and shows it at the notch; nothing to do here.

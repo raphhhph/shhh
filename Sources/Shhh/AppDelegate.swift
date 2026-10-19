@@ -38,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var checkingVoice = false
     private lazy var dashboard = Dashboard(actions: DashboardModel.Actions(
         ask: { [weak self] in self?.askTyped($0) },
+        askInBackground: { [weak self] in self?.startInBackground($0) },
         status: { [weak self] in self?.speechStatus ?? "" },
         setVoice: { [weak self] engine in
             self?.speech.stop()

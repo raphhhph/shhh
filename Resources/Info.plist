@@ -30,6 +30,8 @@
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Joe plays, pauses and skips music in Spotify when you ask.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Joe shows the events in your Mac's Calendar on his Calendar page.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Joe copies your alarms into a “Joe” list in Reminders, so they ring on your iPhone too.</string>
 	<key>NSRemindersUsageDescription</key>

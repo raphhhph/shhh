@@ -74,11 +74,12 @@ final class Dashboard: NSObject, NSWindowDelegate {
 @MainActor
 final class DashboardModel: ObservableObject {
     enum Page: String, CaseIterable, Identifiable {
-        case home, history, routines, alarms, notes, dictionary, music, settings
+        case home, calendar, history, routines, alarms, notes, dictionary, music, settings
         var id: String { rawValue }
         var title: String {
             switch self {
             case .home: "Home"
+            case .calendar: "Calendar"
             case .history: "History"
             case .routines: "Routines"
             case .alarms: "Alarms"
@@ -91,6 +92,7 @@ final class DashboardModel: ObservableObject {
         var symbol: String {
             switch self {
             case .home: "house"
+            case .calendar: "calendar"
             case .history: "clock.arrow.circlepath"
             case .routines: "wand.and.stars"
             case .alarms: "alarm"
@@ -105,6 +107,8 @@ final class DashboardModel: ObservableObject {
     /// What the dashboard asks the app to do (the things with side effects beyond a setting).
     struct Actions {
         var ask: (String) -> Void
+        /// A request that runs in the side notch, off the card (syncing the calendar).
+        var askInBackground: (String) -> Void
         var status: () -> String
         var setVoice: (SpeechOutput.Engine) -> Void
         var setNaturalVoice: (String) -> Void
@@ -332,6 +336,7 @@ private struct DashboardView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         switch model.page {
                         case .home: HomePage(model: model)
+                        case .calendar: CalendarPage(model: model)
                         case .history: HistoryPage(model: model)
                         case .routines: RoutinesPage(model: model)
                         case .alarms: AlarmsPage(model: model)
@@ -894,6 +899,295 @@ private struct SearchField: View {
         .frame(width: 240, height: 30)
         .background(Look.card, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Look.line))
+    }
+}
+
+// MARK: - Calendar
+
+/// A week like Google Calendar's: classes, events, ManageBac deadlines and alarms, day by day.
+/// Three days at a time in a narrow window.
+private struct CalendarPage: View {
+    @ObservedObject var model: DashboardModel
+    @Environment(\.narrow) private var narrow
+    @State private var anchor = Date()
+    @State private var selected: CalendarFeed.Item?
+    @State private var syncStarted: Date?
+    @AppStorage("timelineSchool") private var schoolHex = "#5B7CFA"
+    @AppStorage("timelinePersonal") private var personalHex = "#FF9420"
+
+    private static let hourHeight: CGFloat = 46
+    private static let deadlineColor = Color(red: 0.86, green: 0.25, blue: 0.35)
+
+    private var days: Int { narrow ? 3 : 7 }
+    /// The first day shown: Monday of the week (or the anchor day itself when narrow).
+    private var first: Date {
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: anchor)
+        guard !narrow else { return day }
+        let weekday = calendar.component(.weekday, from: day) // 1 = Sunday
+        return calendar.date(byAdding: .day, value: -((weekday + 5) % 7), to: day) ?? day
+    }
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            let now = context.date
+            let items = CalendarFeed.items(from: first, days: days)
+            VStack(alignment: .leading, spacing: 16) {
+                header(now)
+                if let selected { detail(selected, now) }
+                Card { week(items, now) }
+                upcomingDeadlines(now)
+            }
+        }
+    }
+
+    // MARK: Header
+
+    private func header(_ now: Date) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(first.formatted(.dateTime.month(.wide).year())).font(.system(size: 26, weight: .bold))
+                Text(syncLabel(now)).font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button { move(-1) } label: { Image(systemName: "chevron.left") }.buttonStyle(PillButton())
+            Button("Today") { anchor = Date(); selected = nil }.buttonStyle(PillButton())
+            Button { move(1) } label: { Image(systemName: "chevron.right") }.buttonStyle(PillButton())
+            Button {
+                syncStarted = Date()
+                model.actions.askInBackground(CalendarFeed.syncInstructions)
+            } label: { Label(syncing(now) ? "Syncing…" : "Sync", systemImage: "arrow.triangle.2.circlepath") }
+                .buttonStyle(PillButton(prominent: true))
+                .disabled(syncing(now))
+                .help("Joe fetches Google Calendar and ManageBac for the next 3 weeks")
+        }
+    }
+
+    private func syncing(_ now: Date) -> Bool {
+        guard let started = syncStarted else { return false }
+        return now.timeIntervalSince(started) < 120 && (CalendarFeed.syncedAt ?? .distantPast) < started
+    }
+
+    private func syncLabel(_ now: Date) -> String {
+        guard let synced = CalendarFeed.syncedAt else { return "Classes and alarms · Sync to add Google Calendar and ManageBac" }
+        return "Google Calendar and ManageBac synced " + synced.formatted(.relative(presentation: .named))
+    }
+
+    private func move(_ direction: Int) {
+        anchor = Calendar.current.date(byAdding: .day, value: direction * days, to: anchor) ?? anchor
+        selected = nil
+    }
+
+    // MARK: Week
+
+    private func week(_ items: [CalendarFeed.Item], _ now: Date) -> some View {
+        let calendar = Calendar.current
+        let dates = (0..<days).compactMap { calendar.date(byAdding: .day, value: $0, to: first) }
+        let timed = items.filter { !$0.allDay && $0.kind != .deadline }
+        let startHour = min(7, timed.map { calendar.component(.hour, from: $0.start) }.min() ?? 7)
+        let endHour = max(21, (timed.map { calendar.component(.hour, from: $0.end ?? $0.start) }.max() ?? 21) + 1)
+        return VStack(spacing: 0) {
+            // Day names, and the all-day strip with deadlines.
+            HStack(alignment: .top, spacing: 0) {
+                Color.clear.frame(width: 44)
+                ForEach(dates, id: \.self) { date in
+                    let today = calendar.isDateInToday(date)
+                    VStack(spacing: 4) {
+                        Text(date.formatted(.dateTime.weekday(.abbreviated)).uppercased())
+                            .font(.system(size: 10.5, weight: .semibold)).foregroundStyle(today ? Look.accent : .secondary)
+                        Text(date.formatted(.dateTime.day()))
+                            .font(.system(size: 17, weight: today ? .bold : .medium))
+                            .foregroundStyle(today ? Color.white : .primary)
+                            .frame(width: 30, height: 30)
+                            .background(today ? Look.accent : .clear, in: Circle())
+                        VStack(spacing: 3) {
+                            ForEach(items.filter { ($0.allDay || $0.kind == .deadline) && calendar.isDate($0.start, inSameDayAs: date) }) { item in
+                                chip(item)
+                            }
+                        }
+                        .padding(.horizontal, 3)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .top)
+                    .padding(.bottom, 6)
+                }
+            }
+            Rectangle().fill(Look.line).frame(height: 1)
+            // The hours.
+            HStack(alignment: .top, spacing: 0) {
+                VStack(spacing: 0) {
+                    ForEach(startHour..<endHour, id: \.self) { hour in
+                        Text(String(format: "%02d", hour)).font(.system(size: 10).monospacedDigit()).foregroundStyle(.tertiary)
+                            .frame(width: 44, height: Self.hourHeight, alignment: .topTrailing)
+                            .padding(.trailing, 8)
+                            .offset(y: -6)
+                    }
+                }
+                .frame(width: 44)
+                ForEach(dates, id: \.self) { date in
+                    dayColumn(date, timed.filter { calendar.isDate($0.start, inSameDayAs: date) }, startHour: startHour,
+                              hours: endHour - startHour, now: now)
+                }
+            }
+        }
+    }
+
+    private func dayColumn(_ date: Date, _ items: [CalendarFeed.Item], startHour: Int, hours: Int, now: Date) -> some View {
+        let calendar = Calendar.current
+        let origin = calendar.date(bySettingHour: startHour, minute: 0, second: 0, of: date) ?? date
+        let y = { (time: Date) in CGFloat(time.timeIntervalSince(origin) / 3600) * Self.hourHeight }
+        let lanes = Self.lanes(items)
+        return GeometryReader { geometry in
+            let width = geometry.size.width
+            ZStack(alignment: .topLeading) {
+                if calendar.isDateInToday(date) { Look.accent.opacity(0.04) }
+                ForEach(0..<hours, id: \.self) { hour in
+                    Rectangle().fill(Look.line).frame(height: 1).offset(y: CGFloat(hour) * Self.hourHeight)
+                }
+                Rectangle().fill(Look.line).frame(width: 1).frame(maxHeight: .infinity)
+                ForEach(items) { item in
+                    let lane = lanes[item.id] ?? (0, 1)
+                    let end = item.end ?? item.start.addingTimeInterval(item.kind == .alarm ? 900 : 1800)
+                    let laneWidth = (width - 6) / CGFloat(lane.count)
+                    block(item, height: max(18, y(end) - y(item.start) - 2))
+                        .frame(width: max(10, laneWidth - 2))
+                        .offset(x: 3 + CGFloat(lane.index) * laneWidth, y: y(item.start) + 1)
+                }
+                if calendar.isDateInToday(date), now > origin {
+                    Rectangle().fill(Color.red).frame(height: 2).offset(y: y(now))
+                    Circle().fill(Color.red).frame(width: 8, height: 8).offset(x: -4, y: y(now) - 3)
+                }
+            }
+        }
+        .frame(height: CGFloat(hours) * Self.hourHeight)
+        .frame(maxWidth: .infinity)
+        .clipped()
+    }
+
+    /// Side by side where things overlap: each item's lane, and how many lanes its cluster has.
+    private static func lanes(_ items: [CalendarFeed.Item]) -> [String: (index: Int, count: Int)] {
+        var result: [String: (Int, Int)] = [:]
+        var cluster: [(item: CalendarFeed.Item, lane: Int)] = []
+        var clusterEnd = Date.distantPast
+        var laneEnds: [Date] = []
+        func close() {
+            let count = (cluster.map(\.lane).max() ?? 0) + 1
+            for entry in cluster { result[entry.item.id] = (entry.lane, count) }
+            cluster = []
+            laneEnds = []
+        }
+        for item in items.sorted(by: { $0.start < $1.start }) {
+            let end = item.end ?? item.start.addingTimeInterval(1800)
+            if item.start >= clusterEnd { close() }
+            let lane = laneEnds.firstIndex { $0 <= item.start } ?? laneEnds.count
+            if lane == laneEnds.count { laneEnds.append(end) } else { laneEnds[lane] = end }
+            cluster.append((item, lane))
+            clusterEnd = max(clusterEnd, end)
+        }
+        close()
+        return result
+    }
+
+    private func color(_ item: CalendarFeed.Item) -> Color {
+        switch item.kind {
+        case .lesson: Color(hex: schoolHex)
+        case .event: Color(hex: personalHex)
+        case .deadline: Self.deadlineColor
+        case .alarm: Color.secondary
+        }
+    }
+
+    private func block(_ item: CalendarFeed.Item, height: CGFloat) -> some View {
+        let color = color(item)
+        let isSelected = selected?.id == item.id
+        return VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 3) {
+                if item.kind == .alarm { Image(systemName: "alarm.fill").font(.system(size: 8)) }
+                Text(item.title).font(.system(size: 11, weight: .semibold)).lineLimit(height > 40 ? 2 : 1)
+            }
+            if height > 34 {
+                Text([item.start.formatted(date: .omitted, time: .shortened), item.detail].filter { !$0.isEmpty }.joined(separator: " · "))
+                    .font(.system(size: 9.5)).opacity(0.85).lineLimit(1)
+            }
+        }
+        .foregroundStyle(item.kind == .alarm ? Color.primary : .white)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 3)
+        .frame(height: height, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(item.kind == .alarm ? color.opacity(0.18) : color.opacity(0.88), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Color.primary.opacity(isSelected ? 0.7 : 0), lineWidth: 2))
+        .contentShape(Rectangle())
+        .onTapGesture { selected = isSelected ? nil : item }
+        .help("\(item.title) · \(item.start.formatted(date: .omitted, time: .shortened))")
+    }
+
+    /// An all-day item or a deadline, in the strip under the day.
+    private func chip(_ item: CalendarFeed.Item) -> some View {
+        let color = color(item)
+        return HStack(spacing: 4) {
+            if item.kind == .deadline { Image(systemName: "flag.fill").font(.system(size: 8)) }
+            Text(item.title).font(.system(size: 10.5, weight: .semibold)).lineLimit(1)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 6)
+        .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
+        .background(color.opacity(0.9), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture { selected = selected?.id == item.id ? nil : item }
+        .help(item.title)
+    }
+
+    // MARK: Details and deadlines
+
+    private func detail(_ item: CalendarFeed.Item, _ now: Date) -> some View {
+        HStack(spacing: 14) {
+            RoundedRectangle(cornerRadius: 3).fill(color(item)).frame(width: 6, height: 44)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.title).font(.system(size: 16, weight: .semibold))
+                Text(Self.when(item)).font(.system(size: 12.5)).foregroundStyle(.secondary)
+                if !item.detail.isEmpty { Text(item.detail).font(.system(size: 12.5)).foregroundStyle(.secondary) }
+            }
+            Spacer()
+            Text(item.kind == .lesson ? "Class" : item.kind == .deadline ? "ManageBac" : item.kind == .alarm ? "Alarm" : "Event")
+                .font(.system(size: 11, weight: .semibold)).foregroundStyle(color(item))
+                .padding(.horizontal, 8).frame(height: 22)
+                .background(color(item).opacity(0.12), in: Capsule())
+            Button { selected = nil } label: { Image(systemName: "xmark") }.buttonStyle(PillButton())
+        }
+        .padding(14)
+        .background(Look.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Look.line))
+    }
+
+    private static func when(_ item: CalendarFeed.Item) -> String {
+        let day = item.start.formatted(.dateTime.weekday(.wide).day().month(.wide))
+        if item.allDay { return day }
+        let start = item.start.formatted(date: .omitted, time: .shortened)
+        return day + ", " + (item.end.map { "\(start)–\($0.formatted(date: .omitted, time: .shortened))" } ?? start)
+    }
+
+    private func upcomingDeadlines(_ now: Date) -> some View {
+        let soon = CalendarFeed.items(from: now, days: 14).filter { $0.kind == .deadline && ($0.end ?? $0.start) >= Calendar.current.startOfDay(for: now) }
+        return Card(title: "Deadlines, next two weeks", symbol: "flag") {
+            if soon.isEmpty {
+                Text(CalendarFeed.syncedAt == nil ? "Press Sync to bring in ManageBac." : "Nothing due in the next two weeks.")
+                    .font(.system(size: 13)).foregroundStyle(.secondary)
+            }
+            ForEach(soon.prefix(10)) { item in
+                HStack(spacing: 10) {
+                    Image(systemName: "flag.fill").font(.system(size: 10)).foregroundStyle(Self.deadlineColor)
+                    Text(item.start.formatted(.dateTime.weekday(.abbreviated).day())).font(.system(size: 12.5, weight: .semibold))
+                        .frame(width: 52, alignment: .leading)
+                    Text(item.title).font(.system(size: 13)).lineLimit(1)
+                    Spacer()
+                    let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: now), to: Calendar.current.startOfDay(for: item.start)).day ?? 0
+                    Text(days == 0 ? "today" : days == 1 ? "tomorrow" : "in \(days) days")
+                        .font(.system(size: 11.5)).foregroundStyle(days <= 1 ? Self.deadlineColor : .secondary)
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { selected = item; anchor = item.start }
+            }
+        }
     }
 }
 
@@ -1604,6 +1898,9 @@ private struct SettingsPage: View {
             let reminders = EKEventStore.authorizationStatus(for: .reminder)
             permission("Reminders", "Alarms on iPhone, Ask from iPhone", reminders == .fullAccess, "Privacy_Reminders",
                        ask: reminders == .notDetermined ? { done in ReminderMirror.store.requestFullAccessToReminders { _, _ in done() } } : nil)
+            let events = EKEventStore.authorizationStatus(for: .event)
+            permission("Calendar", "Your Mac's calendars on Joe's Calendar page (optional)", events == .fullAccess, "Privacy_Calendars",
+                       ask: events == .notDetermined ? { done in CalendarFeed.requestMacCalendar(done) } : nil)
             let speech = SFSpeechRecognizer.authorizationStatus()
             permission("Speech Recognition", "“Hey Joe”", speech == .authorized, "Privacy_SpeechRecognition", last: true,
                        ask: speech == .notDetermined ? { done in SFSpeechRecognizer.requestAuthorization { _ in done() } } : nil)

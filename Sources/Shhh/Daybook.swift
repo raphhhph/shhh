@@ -13,6 +13,8 @@ enum Daybook {
     static var history: URL? { root?.appendingPathComponent("Daybook/History", isDirectory: true) }
     static var patterns: URL? { root?.appendingPathComponent("Daybook/Patterns.md") }
     static var timetableURL: URL? { root?.appendingPathComponent("_files/School/timetable.json") }
+    /// The Google calendar ManageBac's feed is in (from the timetable's config).
+    static var managebacCalendarID: String? { timetable?.config?.managebacCalendarId }
     static var routinesURL: URL? { root?.appendingPathComponent("Daybook/Routines.md") }
 
     /// The routines in Routines.md: each `##` heading with the line under it (when to say it).
@@ -233,6 +235,7 @@ enum Daybook {
               - Patterns: read \(relative(patterns)) and use it: prepare them for this weekday's regular meetings. \
             When a meeting or call on today's calendar also happened on this weekday last week, add it there.
               - Focus: one sentence, the one thing that matters most today.
+              - Then, for the dashboard's calendar: \(CalendarFeed.syncInstructions.replacingOccurrences(of: " Reply in one line.", with: ""))
             """
     }
 

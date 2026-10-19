@@ -185,6 +185,10 @@ enum CommandLineTool {
             MainActor.assumeIsolated { MathDoc.run(Array(args.dropFirst())) }
             NSApplication.shared.setActivationPolicy(.prohibited)
             NSApplication.shared.run()
+        case ("--whatsapp", 2...):
+            // Joe --whatsapp chats | unread | read "<chat>" [n] | search "<text>": read-only.
+            print(WhatsAppLog.run(Array(args.dropFirst())))
+            exit(0)
         case ("--plan", 2...):
             // Joe --plan "<step>" "<step>" … | <number> | done: the assistant's checklist. The app
             // reads it from the command itself and shows it at the notch; nothing to do here.

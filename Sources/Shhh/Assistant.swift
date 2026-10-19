@@ -937,6 +937,10 @@ private final class Session {
         let messages = """
 
 
+            Reading WhatsApp ("what did X say", "check my WhatsApp", "what do I need to do from my chats"): \
+            never open the app or take screenshots. "\(exe)" --whatsapp unread (new messages, by chat), \
+            --whatsapp chats (recent chats), --whatsapp read "<chat>" [count], --whatsapp search "<text>". \
+            It reads WhatsApp's own database on this Mac, read-only. WeChat has no such access: for WeChat, look.
             Messages in WhatsApp or WeChat: never click and type around the apps, and don't take a \
             screenshot first. One step: "\(exe)" --message send whatsapp|wechat "<chat or group name, as it \
             appears in the app>" "<text>". The user approves it on a card; then it opens the chat, checks its \
@@ -1247,7 +1251,7 @@ struct ToolPolicy {
             return ["draft", "open"].contains(words[2]) ? Action(key: "message:draft", verdict: .allow, title: "Open a chat or draft a message")
                 : Action(key: "message:send:\(input["command"] as? String ?? "")", verdict: .ask, title: "Send a message")
         case "Bash" where Self.shellWords(input["command"] as? String ?? "").map({
-            $0.count >= 2 && $0[0] == Bundle.main.executablePath && ["--pdf-find", "--pdf-text", "--prereading", "--workspace", "--workspace-reset", "--spotify", "--alarm", "--slides", "--recap", "--plan", "--math-pdf"].contains($0[1]) }) == true:
+            $0.count >= 2 && $0[0] == Bundle.main.executablePath && ["--pdf-find", "--pdf-text", "--prereading", "--workspace", "--workspace-reset", "--spotify", "--alarm", "--slides", "--recap", "--plan", "--math-pdf", "--whatsapp"].contains($0[1]) }) == true:
             return Action(key: "shhh-tools", verdict: .allow, title: "Use Joe's tools")
         case "Bash" where FileCommands.judge(input["command"] as? String ?? "",
                                              cwd: vault ?? FileManager.default.temporaryDirectory) != nil:

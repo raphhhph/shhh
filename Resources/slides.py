@@ -168,11 +168,26 @@ def apply(path, plan_path):
         print("⚠", warning)
 
 
+def from_images(out, width, height, images):
+    """A deck with one picture per slide, filling it: a PDF's pages, as they look."""
+    from pptx.util import Inches
+    deck = Presentation()
+    deck.slide_width, deck.slide_height = Inches(float(width)), Inches(float(height))
+    blank = deck.slide_layouts[6]
+    for image in images:
+        slide = deck.slides.add_slide(blank)
+        slide.shapes.add_picture(image, 0, 0, deck.slide_width, deck.slide_height)
+    deck.save(out)
+    print(f"Saved {out} ({len(images)} slides).")
+
+
 if __name__ == "__main__":
     if len(sys.argv) >= 3 and sys.argv[1] == "inspect":
         inspect(sys.argv[2])
     elif len(sys.argv) >= 4 and sys.argv[1] == "apply":
         apply(sys.argv[2], sys.argv[3])
+    elif len(sys.argv) >= 6 and sys.argv[1] == "images":
+        from_images(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:])
     else:
         print(__doc__)
         sys.exit(1)

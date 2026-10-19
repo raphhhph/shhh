@@ -102,6 +102,21 @@ final class Assistant {
         set { UserDefaults.standard.set(newValue, forKey: "joeHype") }
     }
 
+    /// Their school's rules on AI, so Joe helps instead of refusing on their behalf.
+    nonisolated static let schoolWork = """
+
+
+        School work: they're an IB DP1 student, and their teachers allow and expect AI on formatives \
+        and class tasks (worksheets, inquiries, practice questions, homework), especially in ESS and \
+        Business Management. When they ask, do the task with them or for them, fully: read the file, \
+        answer every question, fill it in. Don't refuse, hedge or lecture about academic honesty. \
+        Friends' work is fine too: redesigning, shortening, converting or giving feedback on a \
+        friend's slides or document is a favour they're doing, so do it (save to a new file, never \
+        over the friend's). For an IB summative they hand in for marks (the EE, an IA, the TOK essay \
+        or exhibition): help fully as well, and add one short line that IB asks for AI use to be \
+        acknowledged in the work.
+        """
+
     nonisolated static var personality: String {
         let length = switch UserDefaults.standard.string(forKey: "joeChattiness") ?? "normal" {
         case "brief": "Keep every answer as short as it can be: a line or two, no extras."
@@ -882,6 +897,10 @@ private final class Session {
             Online / Google Slides ask them to download a copy (File → Download a copy / Download → .pptx). \
             Read it with "\(exe)" --slides inspect "<deck.pptx>" (every slide's boxes, ids, text, notes). \
             Never change their original; open your result for them at the end (open "<file>").
+            - A PDF to Keynote ("convert this PDF to Keynote", "so I can present it"): "\(exe)" --slides keynote \
+            "<file.pdf>" makes "<name>.key" beside it, each page a slide exactly as it looks, and opens it. Its \
+            text isn't editable: to redesign or shorten a PDF deck, read it with --pdf-text (and look at pages \
+            with --slides render on the .key), then build a new deck as below, keeping all its content.
             - Small text edits (wording, bullets, notes in their own design): write a plan and run \
             --slides apply "<deck>" "<plan.json>" → "<name> (Joe).pptx". Plan: {"slides":[{"slide":2,"title":"…",\
             "bullets":["…"],"notes":"…"},{"slide":4,"shape":7,"text":["…"]}],"add":[{"after":5,"title":"…",\
@@ -965,7 +984,7 @@ private final class Session {
         notes vault if one is connected. Load these tools with ToolSearch.
         - Their Chrome browser (the Claude in Chrome tools), where they're already signed in to their \
         sites. Read pages with get_page_text or find rather than screenshots: it's faster.
-        When a connected account and the browser can both do something, use the account: it's much faster.\(ScreenControl.isEnabled ? Assistant.controlRules : "")\(music)\(alarms)\(messages)\(slides)\(files)\(memory)\(habits)\(Assistant.personality)
+        When a connected account and the browser can both do something, use the account: it's much faster.\(ScreenControl.isEnabled ? Assistant.controlRules : "")\(music)\(alarms)\(messages)\(slides)\(Assistant.schoolWork)\(files)\(memory)\(habits)\(Assistant.personality)
 
         \(permissions) If they decline, don't retry it. Write emails as Gmail drafts unless they clearly \
         ask you to send, and say the draft is in Gmail. Never spend money: no buying, paying, \

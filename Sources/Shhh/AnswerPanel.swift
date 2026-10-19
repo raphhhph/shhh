@@ -92,6 +92,7 @@ final class AnswerPanel {
             panel = makePanel()
             resize(anchorTo: screen)
             panel.orderFrontRegardless()
+            if notch != nil { NotchSpace.pin(panel) }
             watchHover()
         }
         lastHover = Date()
@@ -205,7 +206,8 @@ final class AnswerPanel {
         panel.backgroundColor = .clear
         panel.hasShadow = notch == nil // the island is black on the black notch
         panel.hidesOnDeactivate = false
-        panel.isMovableByWindowBackground = true
+        panel.isMovableByWindowBackground = notch == nil
+        panel.isMovable = notch == nil // at the notch it stays put, even on space switches
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         let hosting = NSHostingView(rootView: AnswerView(model: model, scrolls: true, notch: notch?.size))
         hosting.sizingOptions = [] // the window's size is set in resize(), not by SwiftUI
@@ -274,7 +276,7 @@ final class AnswerPanel {
 }
 
 /// Can take clicks (links, text selection) without pulling focus from the app the user is in.
-private final class AnswerWindow: NSPanel {
+private final class AnswerWindow: NotchPanel {
     override var canBecomeKey: Bool { true }
 }
 

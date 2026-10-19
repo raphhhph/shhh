@@ -68,6 +68,7 @@ final class RecordingPanel {
             position(panel)
         }
         panel.orderFrontRegardless()
+        if atNotch { NotchSpace.pin(panel) }
     }
 
     /// Feed microphone loudness (0...1). Called from the audio thread.
@@ -85,9 +86,10 @@ final class RecordingPanel {
 
     private func makePanel(notch: NSRect?) -> NSPanel {
         let size = notch.map { NSSize(width: $0.width + 2 * Self.ear, height: $0.height) } ?? NSSize(width: 96, height: 30)
-        let panel = NSPanel(contentRect: NSRect(origin: .zero, size: size),
+        let panel = NotchPanel(contentRect: NSRect(origin: .zero, size: size),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         panel.level = notch == nil ? .statusBar : .aboveResting
+        panel.isMovable = notch == nil
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false

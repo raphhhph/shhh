@@ -75,7 +75,7 @@ enum Subject {
 /// done. Click it for the list; click a task to bring its card back, × to stop or dismiss it.
 @MainActor
 final class TaskShelf {
-    struct Item: Identifiable {
+    struct Item: Identifiable, Equatable {
         enum State { case working, needsOK, done, failed, alarm }
         let id: UUID
         let question: String
@@ -102,20 +102,26 @@ final class TaskShelf {
         model.onReset = { [weak self] in self?.resetPosition() }
     }
 
+    /// Called every second while alarms are pending: only what changed is redrawn or moved.
     func update(_ items: [Item]) {
-        model.items = items
+        if model.items != items { model.items = items }
         guard !items.isEmpty else {
-            model.expanded = false
-            panel?.orderOut(nil)
+            if model.expanded { model.expanded = false }
+            if panel?.isVisible == true { panel?.orderOut(nil) }
             return
         }
+        var shown = false
         if panel?.isVisible != true {
             // A new window each time: a reused one can stay hidden behind a full-screen app.
             panel?.orderOut(nil)
             panel = makePanel()
+            shown = true
         }
         place()
-        panel?.orderFrontRegardless()
+        if shown, let panel {
+            panel.orderFrontRegardless()
+            NotchSpace.pin(panel)
+        }
     }
 
     /// Hanging from the top of the built-in screen. By default just left of the notch and its
@@ -132,7 +138,8 @@ final class TaskShelf {
         var x = left
         if model.expanded, left + collapsedWidth / 2 > screen.frame.midX { x = left + collapsedWidth - size.width } // right half: grow leftwards
         x = min(max(x, screen.frame.minX + 4), screen.frame.maxX - size.width - 4)
-        panel.setFrame(NSRect(x: x, y: screen.frame.maxY - size.height, width: size.width, height: size.height), display: true)
+        let frame = NSRect(x: x, y: screen.frame.maxY - size.height, width: size.width, height: size.height)
+        if panel.frame != frame { panel.setFrame(frame, display: true) }
     }
 
     private func collapsedSize(notch: NSRect) -> NSSize {
@@ -180,13 +187,14 @@ final class TaskShelf {
     }
 
     private func makePanel() -> NSPanel {
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 50, height: 38),
+        let panel = NotchPanel(contentRect: NSRect(x: 0, y: 0, width: 50, height: 38),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         panel.level = .statusBar
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
+        panel.isMovable = false // macOS moved it down the screen on space switches; dragging is ours
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         let host = ShelfHost(rootView: ShelfView(model: model))
         host.isClosed = { [weak self] in self?.model.expanded == false }

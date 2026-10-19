@@ -7,6 +7,53 @@ extension NSWindow.Level {
     static let aboveResting = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
 }
 
+/// A window hanging from the notch. macOS pushes windows below the menu bar when a full-screen
+/// app's space comes or goes (seen: the island stuck 84 points down); this one stays where it's put.
+class NotchPanel: NSPanel {
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+}
+
+/// A space of Joe's own, above all the others, for the notch windows. Without it they belong to
+/// whichever space is showing and slide away with the menu bar each time a full-screen app's space
+/// comes or goes, then jump back. Uses the window server's private space functions (as notch apps
+/// like Boring Notch do), looked up at run time: if they're ever missing, nothing changes.
+@MainActor
+enum NotchSpace {
+    private typealias Connection = @convention(c) () -> Int32
+    private typealias Create = @convention(c) (Int32, Int, CFDictionary?) -> UInt64
+    private typealias SetLevel = @convention(c) (Int32, UInt64, Int32) -> Void
+    private typealias Show = @convention(c) (Int32, CFArray) -> Void
+    private typealias AddWindows = @convention(c) (Int32, CFArray, CFArray) -> Void
+
+    private static func symbol<T>(_ name: String, _ type: T.Type) -> T? {
+        dlsym(UnsafeMutableRawPointer(bitPattern: -2), name).map { unsafeBitCast($0, to: type) } // RTLD_DEFAULT
+    }
+
+    private static let space: (connection: Int32, id: UInt64, add: AddWindows)? = {
+        guard let connection = symbol("CGSMainConnectionID", Connection.self)?(),
+              let create = symbol("CGSSpaceCreate", Create.self),
+              let setLevel = symbol("CGSSpaceSetAbsoluteLevel", SetLevel.self),
+              let show = symbol("CGSShowSpaces", Show.self),
+              let add = symbol("CGSAddWindowsToSpaces", AddWindows.self) else { return nil }
+        let id = create(connection, 1, nil)
+        guard id != 0 else { return nil }
+        setLevel(connection, id, Int32.max)
+        show(connection, [NSNumber(value: id)] as CFArray)
+        return (connection, id, add)
+    }()
+
+    private static var added: Set<Int> = []
+
+    /// Puts a shown window in the space (once; call after it's on screen, when it has a number).
+    static func pin(_ window: NSWindow) {
+        let number = window.windowNumber
+        guard number > 0, !added.contains(number), let space else { return }
+        added.insert(number)
+        if added.count > 400 { added = [number] }
+        space.add(space.connection, [NSNumber(value: number)] as CFArray, [NSNumber(value: space.id)] as CFArray)
+    }
+}
+
 /// "Show at the notch": the pill and the answer card come out of the top of the screen, like the
 /// iPhone's Dynamic Island, instead of sitting at the bottom. On a screen without a notch they use
 /// the same spot, at the top centre.
@@ -60,7 +107,7 @@ final class RestingNotch {
         let notch = Notch.rect(on: screen)
         // A new window each time: a reused one can stay hidden behind a full-screen app.
         panel?.orderOut(nil)
-        let panel = NSPanel(contentRect: NSRect(x: notch.minX - Self.ear, y: notch.minY,
+        let panel = NotchPanel(contentRect: NSRect(x: notch.minX - Self.ear, y: notch.minY,
                                                 width: notch.width + 2 * Self.ear, height: notch.height),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         panel.level = .statusBar
@@ -76,6 +123,7 @@ final class RestingNotch {
         place = panel.frame
         model.open = true // the bands swap in place: no growing out of the notch
         panel.orderFrontRegardless()
+        NotchSpace.pin(panel)
     }
 
     func hide() {
@@ -91,11 +139,13 @@ final class RestingNotch {
         panel.setFrame(place, display: true)
     }
 
-    /// Makes it again, in its place (after macOS may have moved it).
+    /// Back in its place and in front (after Joe switches between a Dock and a menu-bar app),
+    /// without making a new window: that flashed the bare notch.
     func reseat() {
-        panel?.orderOut(nil)
-        panel = nil
-        show()
+        guard let panel, panel.isVisible, let place else { return show() }
+        if panel.frame != place { panel.setFrame(place, display: true) }
+        panel.orderFrontRegardless()
+        NotchSpace.pin(panel)
     }
 }
 

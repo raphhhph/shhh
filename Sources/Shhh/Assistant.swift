@@ -882,12 +882,13 @@ private final class Session {
         let messages = """
 
 
-            Messages in WhatsApp or WeChat: never click and type around the apps. Two steps: \
-            "\(exe)" --message draft whatsapp|wechat "<chat or group name, as it appears in the app>" "<text>", \
-            then Read the screenshot it names and check the open chat is the right one and the text is in the \
-            box. Then "\(exe)" --message send <app> "<chat>" "<the same text>": the user approves it on a card. \
-            Write the message as they would (their language, short, no sign-off), and only what they asked to send. \
-            If the chat is wrong, clear the box (cliclick kd:cmd t:a ku:cmd kp:delete) and tell them.
+            Messages in WhatsApp or WeChat: never click and type around the apps, and don't take a \
+            screenshot first. One step: "\(exe)" --message send whatsapp|wechat "<chat or group name, as it \
+            appears in the app>" "<text>". The user approves it on a card; then it opens the chat, checks its \
+            name on screen and sends. Use --message draft (same arguments) only when they want it typed but not \
+            sent. Write the message as they would (their language, short, no sign-off), only what they asked \
+            to send. If it reports it couldn't confirm the chat, nothing was sent: look at its screenshot, tell \
+            them, and try the name as the chat list shows it.
             """
         let slides = """
 
@@ -1177,7 +1178,7 @@ struct ToolPolicy {
         case "Bash" where Self.shellWords(input["command"] as? String ?? "").map({ $0.count >= 3 && $0[0] == Bundle.main.executablePath && $0[1] == "--message" }) == true:
             // Drafting is free; sending always asks, on a card showing who and what.
             let words = Self.shellWords(input["command"] as? String ?? "") ?? []
-            return words[2] == "draft" ? Action(key: "message:draft", verdict: .allow, title: "Draft a message")
+            return ["draft", "open"].contains(words[2]) ? Action(key: "message:draft", verdict: .allow, title: "Open a chat or draft a message")
                 : Action(key: "message:send:\(input["command"] as? String ?? "")", verdict: .ask, title: "Send a message")
         case "Bash" where Self.shellWords(input["command"] as? String ?? "").map({
             $0.count >= 2 && $0[0] == Bundle.main.executablePath && ["--pdf-find", "--pdf-text", "--prereading", "--workspace", "--workspace-reset", "--spotify", "--alarm", "--slides", "--recap"].contains($0[1]) }) == true:

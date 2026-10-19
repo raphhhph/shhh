@@ -159,8 +159,8 @@ enum CommandLineTool {
         case ("--recap", 1):
             print(ActivityLog.recap())
             exit(0)
-        case ("--message", 5...):
-            // Joe --message draft|send whatsapp|wechat "<chat>" "<text>"
+        case ("--message", 4...):
+            // Joe --message send|draft whatsapp|wechat "<chat>" "<text>", or --message open <app> "<chat>"
             run { print(await Messaging.run(Array(args.dropFirst()))) }
         case ("--slides", 3...):
             // Joe --slides inspect <deck.pptx> | apply <deck.pptx> <plan.json>: edits a copy of a deck.

@@ -22,6 +22,12 @@ final class AnswerPanel {
     private var hoverTimer: Timer?
     private var leftAt: Date?
     var onClose: () -> Void = {}
+    var onStopSpeaking: () -> Void = {}
+
+    /// Whether Joe is reading the answer aloud (checked every second): the stop button.
+    func setSpeaking(_ speaking: Bool) {
+        if model.speaking != speaking { model.speaking = speaking }
+    }
 
     static let width: CGFloat = 480
     /// At the notch, once the answer is done: the subject on one line under the notch, with room
@@ -219,6 +225,7 @@ final class AnswerPanel {
     init() {
         panel = makePanel()
         model.onClose = { [weak self] in self?.onClose() }
+        model.onStopSpeaking = { [weak self] in self?.onStopSpeaking() }
         // objectWillChange fires before the change lands: measure on the next turn.
         changes = model.objectWillChange.sink { [weak self] in
             DispatchQueue.main.async {
@@ -301,8 +308,13 @@ final class AnswerModel: ObservableObject {
     /// Whether the answer has been opened (hovered): the subject was a reminder, so it goes.
     @Published var seen = false
 
-    /// Whether there's something to show: the reply, an error, or an action waiting for an OK.
-    var hasContent: Bool { !answer.isEmpty || error != nil || approval != nil }
+    /// Joe is reading the answer out loud: the card shows a stop button.
+    @Published var speaking = false
+    var onStopSpeaking: () -> Void = {}
+
+    /// Whether there's something to show: the reply, an error, an action waiting for an OK, or just
+    /// a subject line (a one-line answer), or Joe talking (so the stop button can be reached).
+    var hasContent: Bool { !answer.isEmpty || error != nil || approval != nil || speaking || !(subject ?? "").isEmpty }
 
     /// At the notch, the island drops down only while the pointer is over it, or by itself for an
     /// action waiting for an OK or an error. Otherwise it stays a slim band: ✦ and sound waves.
@@ -396,9 +408,13 @@ private struct AnswerView: View {
         .buttonStyle(.borderless)
     }
 
-    /// Copy (once the reply is done) and close.
+    /// Stop Joe talking (while he is), copy (once the reply is done) and close.
     @ViewBuilder
     private var buttons: some View {
+        if model.speaking {
+            Button { model.onStopSpeaking() } label: { Image(systemName: "speaker.slash.fill") }
+                .help("Stop speaking")
+        }
         if model.isDone, !model.answer.isEmpty {
             Button {
                 NSPasteboard.general.clearContents()

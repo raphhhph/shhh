@@ -175,6 +175,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hotkey.onRelease = { [weak self] _ in self?.finishRecording() }
         hotkey.onCancel = { [weak self] _ in self?.cancelRecording() }
         answerPanel.onClose = { [weak self] in self?.closeCard() }
+        answerPanel.onStopSpeaking = { [weak self] in
+            self?.speech.stop()
+            self?.answerPanel.setSpeaking(false)
+        }
         watchForMorning()
         speech.prepare()
         alarms.onNotice = { [weak self] text in self?.toast.show(text, symbol: "alarm.fill", tint: .orange) }
@@ -189,6 +193,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.alarms.tick()
                 self?.moveLongTaskAside()
                 self?.phone.check()
+                if let self { self.answerPanel.setSpeaking(self.speech.isSpeaking) } // the card's stop button
                 self?.wake.update()
                 self?.resumeMusicIfDone()
                 self?.resting.keepInPlace() // the notch band stays at the notch

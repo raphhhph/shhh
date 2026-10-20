@@ -231,6 +231,16 @@ enum CommandLineTool {
         case ("--prereading", 2):
             MainActor.assumeIsolated { print(Textbook.buildPreReading(spec: args[1])) }
             exit(0)
+        case ("--snapshot", 3...):
+            // Joe --snapshot <page> <file.png> [width height] [dark]: a dashboard page, drawn off screen.
+            guard let page = DashboardModel.Page(rawValue: args[1]) else { fail("Pages: " + DashboardModel.Page.allCases.map(\.rawValue).joined(separator: ", ")) }
+            let size = args.count > 4 ? NSSize(width: Double(args[3]) ?? 1080, height: Double(args[4]) ?? 720) : NSSize(width: 1080, height: 720)
+            MainActor.assumeIsolated {
+                NSApplication.shared.setActivationPolicy(.accessory)
+                Dashboard.snapshot(page: page, to: URL(fileURLWithPath: args[2]), size: size, dark: args.last == "dark") { exit(0) }
+            }
+            NSApplication.shared.run()
+            exit(0)
         case ("--system-prompt", 1):
             // Joe --system-prompt: what Claude is told before every conversation.
             MainActor.assumeIsolated { print(Session.currentSystemPrompt()) }

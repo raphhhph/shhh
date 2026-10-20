@@ -133,6 +133,9 @@ final class DashboardModel: ObservableObject {
     @Published var tasks: [(line: String, text: String, detail: String, done: Bool)] = []
     @Published var today: String?
     @Published var timeline: [Daybook.Slot] = []
+    /// ManageBac deadlines in the next two weeks, for Home and the calendar.
+    @Published var deadlines: [CalendarFeed.Item] = []
+    private var deadlinesRead = Date.distantPast
     @Published var alarms: [Alarm] = []
     @Published var routines: [(name: String, trigger: String)] = []
     @Published var notes: [(title: String, kind: String, date: Date, url: URL)] = []
@@ -167,6 +170,12 @@ final class DashboardModel: ObservableObject {
         update(\.status, actions.status())
         update(\.today, Daybook.today)
         update(\.timeline, Daybook.timeline())
+        // Reading the calendar sources takes a moment: once a minute is plenty for deadlines.
+        if (page == .home || page == .calendar), Date().timeIntervalSince(deadlinesRead) > 60 {
+            deadlinesRead = Date()
+            let start = Calendar.current.startOfDay(for: Date())
+            update(\.deadlines, CalendarFeed.items(from: start, days: 14).filter { $0.kind == .deadline })
+        }
         update(\.spotifyConnected, Spotify.Account.isConnected)
         loadDaybook()
         loadRoutines()
@@ -282,6 +291,9 @@ private enum Look {
     static let sidebar = Color(nsColor: .windowBackgroundColor)
     static let card = Color(nsColor: .controlBackgroundColor)
     static let line = Color.primary.opacity(0.08)
+    static let deadline = Color(red: 0.88, green: 0.24, blue: 0.3)
+    /// Personal events (Google Calendar), in the colour chosen on the timeline.
+    static var personal: Color { Color(hex: UserDefaults.standard.string(forKey: "timelinePersonal") ?? "#FF9420") }
 }
 
 private struct Card<Content: View>: View {
@@ -338,7 +350,7 @@ private struct DashboardView: View {
             // Narrow window: the sidebar shrinks to icons. Wide or full screen: the page stays a
             // readable width, centred.
             let compact = geometry.size.width < 1000
-            let content = geometry.size.width - (compact ? 68 : 220)
+            let content = geometry.size.width - (compact ? 68 : 210)
             HStack(spacing: 0) {
                 sidebar(compact: compact)
                 Rectangle().fill(Look.line).frame(width: 1)
@@ -358,10 +370,11 @@ private struct DashboardView: View {
                         }
                     }
                     .environment(\.narrow, content < 820)
+                    .environment(\.wide, content >= 1000)
                     .padding(.horizontal, content < 820 ? 24 : 40)
                     .padding(.top, 44)
                     .padding(.bottom, 36)
-                    .frame(maxWidth: 1060, alignment: .leading)
+                    .frame(maxWidth: model.page == .calendar ? 1500 : 1060, alignment: .leading)
                     .frame(maxWidth: .infinity)
                 }
                 .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
@@ -371,61 +384,107 @@ private struct DashboardView: View {
         .tint(Look.accent)
     }
 
+    /// The pages in groups, like Linear's sidebar: your day, Joe's tools, and the app.
+    private static let groups: [(title: String?, pages: [DashboardModel.Page])] = [
+        (nil, [.home, .calendar, .history]),
+        ("Joe", [.routines, .alarms, .notes, .dictionary, .music]),
+    ]
+
     private func sidebar(compact: Bool) -> some View {
-        VStack(alignment: compact ? .center : .leading, spacing: 2) {
+        VStack(alignment: compact ? .center : .leading, spacing: 1) {
             HStack(spacing: 8) {
-                Image(systemName: "sparkle").font(.system(size: 18, weight: .semibold)).foregroundStyle(Look.accent)
-                if !compact { Text("Joe").font(.system(size: 20, weight: .bold)) }
+                Image(systemName: "sparkle").font(.system(size: 16, weight: .bold)).foregroundStyle(Look.accent)
+                if !compact { Text("Joe").font(.system(size: 18, weight: .bold)) }
             }
-            .padding(.horizontal, compact ? 0 : 12)
-            .padding(.top, 44)
-            .padding(.bottom, 18)
-            ForEach(DashboardModel.Page.allCases) { page in
-                Button { model.page = page; model.reload() } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: page.symbol).frame(width: 18)
-                        if !compact {
-                            Text(page.title)
-                            Spacer()
-                            if page == .alarms, !model.alarms.isEmpty {
-                                Text("\(model.alarms.count)").font(.caption.weight(.bold)).foregroundStyle(.secondary)
-                            }
-                        }
+            .padding(.horizontal, compact ? 0 : 10)
+            .padding(.top, 46)
+            .padding(.bottom, 16)
+            ForEach(Self.groups.indices, id: \.self) { index in
+                let group = Self.groups[index]
+                if let title = group.title {
+                    if compact {
+                        Divider().frame(width: 28).padding(.vertical, 8)
+                    } else {
+                        Text(title.uppercased()).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(.tertiary)
+                            .padding(.horizontal, 10).padding(.top, 16).padding(.bottom, 4)
                     }
-                    .font(.system(size: 14, weight: model.page == page ? .semibold : .regular))
-                    .padding(.horizontal, compact ? 0 : 12)
-                    .frame(width: compact ? 40 : nil, height: 34)
-                    .frame(maxWidth: compact ? nil : .infinity, alignment: .leading)
-                    .background(model.page == page ? Color.primary.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 8))
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .help(page.title)
+                ForEach(group.pages) { page in item(page, compact: compact) }
             }
             Spacer()
+            item(.usage, compact: compact)
+            item(.settings, compact: compact)
             let trouble = model.status.range(of: #"loading|no microphone|blocking|failed|couldn"#, options: [.regularExpression, .caseInsensitive]) != nil
             if compact {
-                Circle().fill(trouble ? Color.orange : Color.green).frame(width: 8, height: 8).padding(.bottom, 16)
+                Circle().fill(trouble ? Color.orange : Color.green).frame(width: 8, height: 8).padding(.vertical, 16)
                     .help(trouble ? model.status : "Ready")
             } else {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 6) {
                         Circle().fill(trouble ? Color.orange : Color.green).frame(width: 7, height: 7)
                         Text(trouble ? model.status : "Ready").font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
                     }
-                    Text("Right ⌘ to dictate · right ⌥ to ask Joe").font(.system(size: 11)).foregroundStyle(.tertiary)
+                    shortcut("Dictate", "right ⌘")
+                    shortcut("Ask Joe", "right ⌥")
+                    shortcut("Long request", "double-tap")
                 }
-                .padding(12)
+                .padding(.horizontal, 10)
+                .padding(.top, 14)
+                .padding(.bottom, 16)
             }
         }
         .padding(.horizontal, compact ? 12 : 10)
-        .frame(width: compact ? 68 : 220)
+        .frame(width: compact ? 68 : 210)
         .background(Look.sidebar)
+    }
+
+    private func item(_ page: DashboardModel.Page, compact: Bool) -> some View {
+        let current = model.page == page
+        return Button { model.page = page; model.reload() } label: {
+            HStack(spacing: 9) {
+                Image(systemName: page.symbol).font(.system(size: 13, weight: current ? .semibold : .regular)).frame(width: 18)
+                    .foregroundStyle(current ? Look.accent : .secondary)
+                if !compact {
+                    Text(page.title)
+                    Spacer()
+                    if page == .alarms, !model.alarms.isEmpty {
+                        Text("\(model.alarms.count)").font(.system(size: 11, weight: .semibold).monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .font(.system(size: 13, weight: current ? .semibold : .regular))
+            .padding(.horizontal, compact ? 0 : 10)
+            .frame(width: compact ? 40 : nil, height: 30)
+            .frame(maxWidth: compact ? nil : .infinity, alignment: .leading)
+            .background(current ? Color.primary.opacity(0.07) : .clear, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(page.title)
+    }
+
+    /// "Ask Joe   right ⌥", the key drawn as a keycap.
+    private func shortcut(_ action: String, _ key: String) -> some View {
+        HStack {
+            Text(action).font(.system(size: 11)).foregroundStyle(.secondary)
+            Spacer()
+            Text(key).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                .padding(.horizontal, 5).frame(height: 17)
+                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 4))
+                .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Look.line))
+        }
     }
 }
 
 private struct NarrowKey: EnvironmentKey { static let defaultValue = false }
+private struct WideKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues {
+    /// Room for a side column beside the page (the calendar's details and deadlines).
+    var wide: Bool {
+        get { self[WideKey.self] }
+        set { self[WideKey.self] = newValue }
+    }
+
     /// The page has little width: side-by-side cards stack.
     var narrow: Bool {
         get { self[NarrowKey.self] }
@@ -447,102 +506,139 @@ private struct HomePage: View {
         return name.isEmpty ? part : "\(part), \(name)"
     }
 
+    /// "Tuesday, 20 October · Day 1 · Cycle A": the school's rotation day when the timetable has one.
+    private var subtitle: String {
+        let date = Date().formatted(.dateTime.weekday(.wide).day().month(.wide))
+        guard let today = model.today, today.hasPrefix("Today"),
+              let range = today.range(of: #"Day \d+ · Cycle \w+"#, options: .regularExpression) else { return date }
+        return "\(date) · \(today[range])"
+    }
+
+    /// One-tap requests a student makes most, like the starters in ChatGPT and Claude.
+    private var suggestions: [String] {
+        let subjects = Profile.subjects.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let day = Calendar.current.ordinality(of: .day, in: .year, for: Date()) ?? 0
+        let subject = subjects.isEmpty ? "my weakest subject" : subjects[day % subjects.count]
+        return ["What's due this week?", "Plan my evening around my deadlines", "Quiz me on \(subject)", "Summarise today's notes"]
+    }
+
     var body: some View {
-        PageTitle(title: greeting, subtitle: Date().formatted(.dateTime.weekday(.wide).day().month(.wide)))
+        PageTitle(title: greeting, subtitle: subtitle)
 
-        // Ask Joe, by typing.
-        HStack(spacing: 10) {
-            Image(systemName: "sparkle").foregroundStyle(Look.accent)
-            TextField("Ask Joe anything, or tell him what to do…", text: $request)
-                .textFieldStyle(.plain)
-                .font(.system(size: 15))
-                .onSubmit(send)
-            Button(action: send) { Image(systemName: "arrow.up.circle.fill").font(.system(size: 22)) }
-                .buttonStyle(.plain)
-                .foregroundStyle(request.isEmpty ? Color.secondary : Look.accent)
-                .disabled(request.isEmpty)
+        // Ask Joe, by typing, with a few starters underneath.
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: "sparkle").font(.system(size: 15, weight: .semibold)).foregroundStyle(Look.accent)
+                TextField("Ask Joe anything, or tell him what to do…", text: $request)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 15))
+                    .onSubmit(send)
+                Button(action: send) { Image(systemName: "arrow.up.circle.fill").font(.system(size: 24)) }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(request.isEmpty ? Color.secondary.opacity(0.5) : Look.accent)
+                    .disabled(request.isEmpty)
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 54)
+            .background(Look.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Look.line))
+            .shadow(color: .black.opacity(0.04), radius: 8, y: 2)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(suggestions, id: \.self) { suggestion in
+                        Button { model.actions.ask(suggestion) } label: { Text(suggestion) }
+                            .buttonStyle(ChipButton())
+                    }
+                }
+            }
         }
-        .padding(.horizontal, 16)
-        .frame(height: 50)
-        .background(Look.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Look.line))
 
-        // Stats, like VoiceOS.
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: narrow ? 2 : 4), spacing: 12) {
-            stat("\(model.stats.wordsToday)", "words dictated today", "waveform")
-            stat("\(model.stats.minutesSaved) min", "saved this week", "bolt")
-            stat("\(model.stats.asksThisWeek)", "requests to Joe this week", "sparkle")
-            stat("\(model.stats.streak)", "day streak", "flame")
-        }
-
-        Card(title: "Timeline", symbol: "calendar.day.timeline.left") {
-            TodayTimeline(slots: model.timeline + model.alarms
-                .filter { Calendar.current.isDateInToday($0.fireAt) }
-                .map { Daybook.Slot(start: $0.fireAt, title: $0.title, kind: .alarm) })
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            NowNext(slots: model.timeline, now: context.date)
         }
 
         let layout = narrow ? AnyLayout(VStackLayout(alignment: .leading, spacing: 16)) : AnyLayout(HStackLayout(alignment: .top, spacing: 16))
         layout {
-            Card(title: "Today", symbol: "sun.max") {
+            Card(title: "Today's five", symbol: "checklist") {
                 if let focus = model.focus {
-                    Text(focus).font(.system(size: 14, weight: .medium))
+                    Text(focus).font(.system(size: 14, weight: .medium)).fixedSize(horizontal: false, vertical: true)
                 }
                 if model.tasks.isEmpty {
                     Text("Today's Daybook isn't built yet: Joe makes it on your first wake, or ask him.").foregroundStyle(.secondary).font(.system(size: 13))
                 }
-                ForEach(model.tasks, id: \.line) { task in
-                    Button { model.toggle(task.line) } label: {
-                        HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: task.done ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(task.done ? Look.accent : .secondary)
-                                .font(.system(size: 16))
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(task.text).font(.system(size: 14)).strikethrough(task.done).foregroundStyle(task.done ? .secondary : .primary)
-                                if !task.detail.isEmpty {
-                                    Text(task.detail).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
+                VStack(spacing: 2) {
+                    ForEach(model.tasks, id: \.line) { task in
+                        Button { model.toggle(task.line) } label: {
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: task.done ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(task.done ? Look.accent : Color.secondary.opacity(0.6))
+                                    .font(.system(size: 17))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(task.text).font(.system(size: 13.5, weight: .medium)).strikethrough(task.done)
+                                        .foregroundStyle(task.done ? .secondary : .primary)
+                                    if !task.detail.isEmpty, !task.done {
+                                        Text(Self.shortDetail(task.detail)).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                                    }
                                 }
+                                Spacer(minLength: 0)
                             }
-                            Spacer(minLength: 0)
+                            .padding(.vertical, 6)
+                            .contentShape(Rectangle())
                         }
-                        .contentShape(Rectangle())
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
             VStack(spacing: 16) {
-                Card(title: "Alarms", symbol: "alarm") {
-                    if model.alarms.isEmpty {
-                        Text("None set. Say “set a timer for 5 minutes”.").font(.system(size: 13)).foregroundStyle(.secondary)
-                    }
-                    ForEach(model.alarms.prefix(4)) { alarm in
-                        HStack {
-                            Text(alarm.when).font(.system(size: 14, weight: .semibold).monospacedDigit())
-                            Text(alarm.title).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+                DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil) { model.page = .calendar }
+                if !model.alarms.isEmpty || model.nowPlaying != nil {
+                    Card {
+                        ForEach(model.alarms.prefix(3)) { alarm in
+                            HStack(spacing: 8) {
+                                Image(systemName: "alarm").font(.system(size: 12)).foregroundStyle(.secondary)
+                                Text(alarm.when).font(.system(size: 13, weight: .semibold).monospacedDigit())
+                                Text(alarm.title).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                        }
+                        if let playing = model.nowPlaying {
+                            HStack(spacing: 8) {
+                                Image(systemName: "music.note").font(.system(size: 12)).foregroundStyle(.green)
+                                Text(playing).font(.system(size: 12.5)).foregroundStyle(.secondary).lineLimit(1)
+                                Spacer(minLength: 4)
+                                Button { model.music(.pause) } label: { Image(systemName: "pause.fill") }.buttonStyle(.plain).foregroundStyle(.secondary)
+                                Button { model.music(.next) } label: { Image(systemName: "forward.fill") }.buttonStyle(.plain).foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
-                Card(title: "Now playing", symbol: "music.note") {
-                    Text(model.nowPlaying ?? "Nothing playing").font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(2)
-                    HStack(spacing: 14) {
-                        Button { model.music(.previous) } label: { Image(systemName: "backward.fill") }
-                        Button { model.music(model.nowPlaying == nil ? .resume : .pause) } label: { Image(systemName: model.nowPlaying == nil ? "play.fill" : "pause.fill") }
-                        Button { model.music(.next) } label: { Image(systemName: "forward.fill") }
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 15))
-                }
             }
-            .frame(width: narrow ? nil : 300)
+            .frame(width: narrow ? nil : 320)
+        }
+
+        Card(title: "Today", symbol: "calendar.day.timeline.left") {
+            TodayTimeline(slots: model.timeline + model.alarms
+                .filter { Calendar.current.isDateInToday($0.fireAt) }
+                .map { Daybook.Slot(start: $0.fireAt, title: $0.title, kind: .alarm) })
         }
 
         Card(title: "Recent", symbol: "clock") {
             if model.activity.isEmpty {
                 Text("What you dictate and ask shows up here.").font(.system(size: 13)).foregroundStyle(.secondary)
             }
-            ForEach(model.activity.prefix(6)) { entry in
+            ForEach(model.activity.prefix(5)) { entry in
                 ActivityRow(entry: entry)
             }
         }
+
+        // The numbers, quietly, at the end.
+        HStack(spacing: 18) {
+            stat("\(model.stats.wordsToday)", "words today")
+            stat("\(model.stats.minutesSaved) min", "saved this week")
+            stat("\(model.stats.asksThisWeek)", "requests this week")
+            stat("\(model.stats.streak)", model.stats.streak == 1 ? "day streak" : "day streak")
+            Spacer()
+        }
+        .padding(.horizontal, 4)
     }
 
     private func send() {
@@ -552,16 +648,182 @@ private struct HomePage: View {
         request = ""
     }
 
-    private func stat(_ value: String, _ label: String, _ symbol: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Image(systemName: symbol).foregroundStyle(Look.accent)
-            Text(value).font(.system(size: 22, weight: .bold).monospacedDigit())
+    private func stat(_ value: String, _ label: String) -> some View {
+        HStack(spacing: 4) {
+            Text(value).font(.system(size: 12, weight: .semibold).monospacedDigit())
             Text(label).font(.system(size: 12)).foregroundStyle(.secondary)
         }
+    }
+
+    /// The first clause of a task's note: the rest is in the Daybook.
+    private static func shortDetail(_ detail: String) -> String {
+        detail.components(separatedBy: " · ").first ?? detail
+    }
+}
+
+/// What's on now and what's next, big, with a countdown.
+private struct NowNext: View {
+    let slots: [Daybook.Slot]
+    let now: Date
+
+    var body: some View {
+        let timed = slots.filter { $0.kind != .alarm }
+        let current = timed.last { $0.start <= now && ($0.end ?? $0.start.addingTimeInterval(1800)) > now }
+        let next = timed.first { $0.start > now }
+        let lessons = timed.filter { $0.kind == .lesson }
+        HStack(spacing: 14) {
+            if let current { tile("Now", current, until: current.end) }
+            if let next { tile("Next", next, until: nil) }
+            if current == nil && next == nil {
+                HStack(spacing: 10) {
+                    Image(systemName: "moon.stars").font(.system(size: 18)).foregroundStyle(.secondary)
+                    Text(lessons.isEmpty ? "Nothing scheduled today." : "Done for today. Classes finished at \(lessons.last?.end?.formatted(date: .omitted, time: .shortened) ?? "").")
+                        .font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Look.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Look.line))
+            }
+        }
+    }
+
+    private func tile(_ label: String, _ slot: Daybook.Slot, until: Date?) -> some View {
+        let color = slot.kind == .lesson ? SubjectGroup.color(for: slot.title) : Look.personal
+        let minutes = Int(((until ?? slot.start).timeIntervalSince(now) / 60).rounded(.up))
+        let countdown = until != nil ? "\(Self.span(minutes)) left" : "in \(Self.span(minutes))"
+        return HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 2.5).fill(color).frame(width: 5)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(label.uppercased()).font(.system(size: 10.5, weight: .bold)).foregroundStyle(color)
+                Text(slot.title).font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                Text([slot.start.formatted(date: .omitted, time: .shortened) + (slot.end.map { "–" + $0.formatted(date: .omitted, time: .shortened) } ?? ""), slot.detail]
+                    .filter { !$0.isEmpty }.joined(separator: " · "))
+                    .font(.system(size: 12.5)).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 6)
+            Text(countdown).font(.system(size: 12.5, weight: .semibold).monospacedDigit())
+                .foregroundStyle(color)
+                .padding(.horizontal, 10).frame(height: 26)
+                .background(color.opacity(0.12), in: Capsule())
+        }
         .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Look.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Look.line))
+        .frame(maxWidth: .infinity, minHeight: 78, alignment: .leading)
+        .background(Look.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Look.line))
+    }
+
+    private static func span(_ minutes: Int) -> String {
+        minutes < 60 ? "\(max(minutes, 1)) min" : "\(minutes / 60) h \(minutes % 60) min"
+    }
+}
+
+/// ManageBac deadlines in the next two weeks, soonest first, with how long is left.
+private struct DueSoon: View {
+    let deadlines: [CalendarFeed.Item]
+    let synced: Bool
+    var open: () -> Void
+
+    var body: some View {
+        Card(title: "Due soon", symbol: "flag") {
+            if deadlines.isEmpty {
+                Text(synced ? "Nothing due in the next two weeks." : "Sync the calendar to bring in ManageBac.")
+                    .font(.system(size: 13)).foregroundStyle(.secondary)
+            }
+            VStack(spacing: 0) {
+                ForEach(deadlines.prefix(5)) { item in
+                    let days = Self.daysLeft(item.start)
+                    HStack(spacing: 10) {
+                        VStack(spacing: 0) {
+                            Text(item.start.formatted(.dateTime.weekday(.abbreviated)).uppercased()).font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary)
+                            Text(item.start.formatted(.dateTime.day())).font(.system(size: 15, weight: .semibold).monospacedDigit())
+                        }
+                        .frame(width: 34)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(item.title).font(.system(size: 13, weight: .medium)).lineLimit(2)
+                            if let group = SubjectGroup.of(item.title) ?? SubjectGroup.of(item.detail) {
+                                Text(group.name).font(.system(size: 11)).foregroundStyle(group.color)
+                            }
+                        }
+                        Spacer(minLength: 4)
+                        Text(days == 0 ? "Today" : days == 1 ? "Tomorrow" : "\(days) days")
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundStyle(days <= 1 ? Look.deadline : days <= 3 ? Color.orange : .secondary)
+                    }
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: open)
+                }
+            }
+        }
+    }
+
+    static func daysLeft(_ date: Date) -> Int {
+        let calendar = Calendar.current
+        return calendar.dateComponents([.day], from: calendar.startOfDay(for: Date()), to: calendar.startOfDay(for: date)).day ?? 0
+    }
+}
+
+/// A rounded suggestion chip.
+private struct ChipButton: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12.5, weight: .medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .frame(height: 28)
+            .background(Color.primary.opacity(configuration.isPressed ? 0.1 : 0.045), in: Capsule())
+            .overlay(Capsule().strokeBorder(Look.line))
+            .contentShape(Capsule())
+    }
+}
+
+/// IB subject groups, each with a colour, so a class looks the same everywhere in Joe: on the
+/// calendar, the timeline and next to a deadline.
+enum SubjectGroup: CaseIterable {
+    case language, acquisition, societies, sciences, maths, arts, core
+
+    var name: String {
+        switch self {
+        case .language: "Language & literature"
+        case .acquisition: "Language acquisition"
+        case .societies: "Individuals & societies"
+        case .sciences: "Sciences"
+        case .maths: "Mathematics"
+        case .arts: "The arts"
+        case .core: "Core"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .language: Color(red: 0.23, green: 0.51, blue: 0.96)
+        case .acquisition: Color(red: 0.05, green: 0.66, blue: 0.62)
+        case .societies: Color(red: 0.84, green: 0.62, blue: 0.0)
+        case .sciences: Color(red: 0.13, green: 0.68, blue: 0.33)
+        case .maths: Color(red: 0.49, green: 0.36, blue: 0.95)
+        case .arts: Color(red: 0.91, green: 0.29, blue: 0.6)
+        case .core: Color(red: 0.45, green: 0.5, blue: 0.58)
+        }
+    }
+
+    /// "Maths AI HL" → maths, "Chinese B" → acquisition, "ESS" → sciences; nil for anything else.
+    static func of(_ title: String) -> SubjectGroup? {
+        let text = " " + title.lowercased() + " "
+        func has(_ pattern: String) -> Bool { text.range(of: #"\b("# + pattern + #")\b"#, options: .regularExpression) != nil }
+        if has(#"tok|theory of knowledge|extended essay|ee|cas|advisory|homeroom|assembly|tutor|core"#) { return .core }
+        if has(#"maths?|mathematics|aa|ai sl|ai hl"#) { return .maths }
+        if has(#"business|econ\w*|history|geography|psychology|global politics|philosophy|anthropology|digital society|itgs"#) { return .societies }
+        if has(#"ess|environmental|physics|chemistry|biology|computer science|design technology|sports|science"#) { return .sciences }
+        if has(#"visual arts?|music|theatre|film|dance"#) { return .arts }
+        if has(#"literature|l&l|lang(uage)? (and|&) lit\w*"#) || (has(#"a"#) && has(#"english|chinese|french|spanish|german|korean|japanese|dutch|language"#)) { return .language }
+        if has(#"b|ab initio|chinese|mandarin|french|spanish|german|korean|japanese|english"#) { return .acquisition }
+        return nil
+    }
+
+    /// A class's colour: its group's, or the school colour when the subject isn't recognised.
+    static func color(for title: String) -> Color {
+        of(title)?.color ?? Color(hex: UserDefaults.standard.string(forKey: "timelineSchool") ?? "#5B7CFA")
     }
 }
 
@@ -598,8 +860,8 @@ private struct TodayTimeline: View {
                                 .font(.system(size: 10).monospacedDigit()).foregroundStyle(.tertiary)
                                 .offset(x: min(x(hour) + 3, width - 16), y: 82)
                         }
-                        ForEach(slots.filter { $0.kind != .alarm }) { slot in block(slot, x: x, now: now) }
-                        ForEach(slots.filter { $0.kind == .alarm }) { slot in
+                        ForEach(slots.filter { $0.kind != .alarm && range.contains($0.start) }) { slot in block(slot, x: x, now: now) }
+                        ForEach(slots.filter { $0.kind == .alarm && range.contains($0.start) }) { slot in
                             Image(systemName: "alarm.fill").font(.system(size: 10)).foregroundStyle(Look.accent)
                                 .offset(x: x(slot.start) - 5, y: 0)
                                 .help("\(slot.start.formatted(date: .omitted, time: .shortened)) \(slot.title)")
@@ -618,7 +880,12 @@ private struct TodayTimeline: View {
 
     private var legend: some View {
         HStack(spacing: 16) {
-            swatch("School", $schoolHex)
+            HStack(spacing: 3) {
+                ForEach([SubjectGroup.language, .societies, .sciences, .maths], id: \.self) { group in
+                    RoundedRectangle(cornerRadius: 2).fill(group.color).frame(width: 8, height: 8)
+                }
+                Text("Classes, by subject group").font(.system(size: 12)).foregroundStyle(.secondary).padding(.leading, 3)
+            }
             swatch("Personal", $personalHex)
             HStack(spacing: 5) {
                 Image(systemName: "alarm.fill").font(.system(size: 10)).foregroundStyle(Look.accent)
@@ -650,7 +917,7 @@ private struct TodayTimeline: View {
     private func block(_ slot: Daybook.Slot, x: (Date) -> CGFloat, now: Date) -> some View {
         let end = slot.end ?? slot.start.addingTimeInterval(1800)
         let width = max(4, x(end) - x(slot.start) - 3)
-        let color = slot.kind == .lesson ? school : personal
+        let color = slot.kind == .lesson ? SubjectGroup.color(for: slot.title) : personal
         let past = end < now
         let lit = selected == slot.id || hovered == slot.id
         return VStack(alignment: .leading, spacing: 1) {
@@ -661,11 +928,15 @@ private struct TodayTimeline: View {
                 Text(slot.detail).font(.system(size: 9.5, weight: .medium)).opacity(0.8).lineLimit(1)
             }
         }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 6)
+        .foregroundStyle(.primary)
+        .padding(.leading, 7)
+        .padding(.trailing, 3)
         .frame(width: width, height: 60, alignment: .leading)
-        .background(color.opacity(past ? 0.35 : lit ? 1 : 0.82), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.white.opacity(selected == slot.id ? 0.9 : 0), lineWidth: 2))
+        .background(alignment: .leading) { Rectangle().fill(color).frame(width: 3) }
+        .background(color.opacity(lit ? 0.3 : 0.16))
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(color.opacity(selected == slot.id ? 0.8 : 0), lineWidth: 1.5))
+        .opacity(past ? 0.5 : 1)
         .offset(x: x(slot.start) + 1.5, y: 16)
         .onHover { inside in hovered = inside ? slot.id : (hovered == slot.id ? nil : hovered) }
         .onTapGesture { withAnimation(.easeOut(duration: 0.12)) { selected = selected == slot.id ? nil : slot.id } }
@@ -677,7 +948,7 @@ private struct TodayTimeline: View {
     private func details(_ now: Date) -> some View {
         if let slot = slots.first(where: { $0.id == selected }) {
             HStack(spacing: 12) {
-                RoundedRectangle(cornerRadius: 3).fill(slot.kind == .lesson ? school : slot.kind == .alarm ? Look.accent : personal).frame(width: 5, height: 38)
+                RoundedRectangle(cornerRadius: 3).fill(slot.kind == .lesson ? SubjectGroup.color(for: slot.title) : slot.kind == .alarm ? Look.accent : personal).frame(width: 5, height: 38)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(slot.title).font(.system(size: 15, weight: .semibold))
                     Text([Self.times(slot), slot.detail].filter { !$0.isEmpty }.joined(separator: " · "))
@@ -698,7 +969,7 @@ private struct TodayTimeline: View {
             VStack(spacing: 0) {
                 ForEach(Array(upcoming)) { slot in
                     HStack(spacing: 10) {
-                        RoundedRectangle(cornerRadius: 2).fill(slot.kind == .lesson ? school : slot.kind == .alarm ? Look.accent : personal).frame(width: 4, height: 18)
+                        RoundedRectangle(cornerRadius: 2).fill(slot.kind == .lesson ? SubjectGroup.color(for: slot.title) : slot.kind == .alarm ? Look.accent : personal).frame(width: 4, height: 18)
                         Text(slot.start.formatted(date: .omitted, time: .shortened)).font(.system(size: 13, weight: .semibold).monospacedDigit()).frame(width: 52, alignment: .leading)
                         Text(slot.title).font(.system(size: 13)).lineLimit(1)
                         if !slot.detail.isEmpty { Text(slot.detail).font(.system(size: 12)).foregroundStyle(.secondary) }
@@ -736,7 +1007,8 @@ private struct TodayTimeline: View {
         let calendar = Calendar.current
         let day = calendar.startOfDay(for: now)
         var start = day.addingTimeInterval(7 * 3600), end = day.addingTimeInterval(19 * 3600)
-        for slot in slots {
+        // Overnight things (sleep, an alarm at 6) don't stretch it: the day starts at 6 at the earliest.
+        for slot in slots where slot.start >= day.addingTimeInterval(6 * 3600) {
             start = min(start, slot.start)
             end = max(end, slot.end ?? slot.start)
         }
@@ -1066,17 +1338,15 @@ private struct UsagePage: View {
 private struct CalendarPage: View {
     @ObservedObject var model: DashboardModel
     @Environment(\.narrow) private var narrow
+    @Environment(\.wide) private var wide
     @State private var anchor = Date()
     @State private var selected: CalendarFeed.Item?
     @State private var syncStarted: Date?
-    @AppStorage("timelineSchool") private var schoolHex = "#5B7CFA"
-    @AppStorage("timelinePersonal") private var personalHex = "#FF9420"
 
-    private static let hourHeight: CGFloat = 46
-    private static let deadlineColor = Color(red: 0.86, green: 0.25, blue: 0.35)
+    private static let hourHeight: CGFloat = 52
+    private static let gutter: CGFloat = 48
 
-    private var days: Int { narrow ? 3 : 7 }
-    /// The first day shown: Monday of the week (or the anchor day itself when narrow).
+    /// Monday of the week (or the anchor day itself when narrow).
     private var first: Date {
         let calendar = Calendar.current
         let day = calendar.startOfDay(for: anchor)
@@ -1085,31 +1355,61 @@ private struct CalendarPage: View {
         return calendar.date(byAdding: .day, value: -((weekday + 5) % 7), to: day) ?? day
     }
 
+    private var span: Int { narrow ? 3 : 7 }
+
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             let now = context.date
-            let items = CalendarFeed.items(from: first, days: days)
+            let items = CalendarFeed.items(from: first, days: span)
+            let dates = shownDays(items)
             VStack(alignment: .leading, spacing: 16) {
-                header(now)
-                if let selected { detail(selected, now) }
-                Card { week(items, now) }
-                upcomingDeadlines(now)
+                header(dates, now)
+                if wide {
+                    HStack(alignment: .top, spacing: 16) {
+                        Card { week(dates, items, now) }
+                        rail(now).frame(width: 270)
+                    }
+                } else {
+                    if let selected { detail(selected) }
+                    Card { week(dates, items, now) }
+                    DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil) {}
+                }
             }
+        }
+    }
+
+    /// The days to draw: a school week, plus Saturday and Sunday only when something is on then
+    /// (alarms don't count).
+    private func shownDays(_ items: [CalendarFeed.Item]) -> [Date] {
+        let calendar = Calendar.current
+        let all = (0..<span).compactMap { calendar.date(byAdding: .day, value: $0, to: first) }
+        guard !narrow else { return all }
+        return all.filter { date in
+            !calendar.isDateInWeekend(date) || calendar.isDateInToday(date)
+                || items.contains { $0.kind != .alarm && calendar.isDate($0.start, inSameDayAs: date) }
         }
     }
 
     // MARK: Header
 
-    private func header(_ now: Date) -> some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(first.formatted(.dateTime.month(.wide).year())).font(.system(size: 26, weight: .bold))
-                Text(syncLabel(now)).font(.system(size: 12)).foregroundStyle(.secondary)
+    private func header(_ dates: [Date], _ now: Date) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(first.formatted(.dateTime.month(.wide).year())).font(.system(size: 28, weight: .bold))
+                Text(range(dates) + "  ·  " + syncLabel(now)).font(.system(size: 12.5)).foregroundStyle(.secondary)
             }
             Spacer()
-            Button { move(-1) } label: { Image(systemName: "chevron.left") }.buttonStyle(PillButton())
-            Button("Today") { anchor = Date(); selected = nil }.buttonStyle(PillButton())
-            Button { move(1) } label: { Image(systemName: "chevron.right") }.buttonStyle(PillButton())
+            HStack(spacing: 0) {
+                Button { move(-1) } label: { Image(systemName: "chevron.left").frame(width: 30, height: 28) }
+                Divider().frame(height: 16)
+                Button("Today") { anchor = Date(); selected = nil }.padding(.horizontal, 10).frame(height: 28)
+                Divider().frame(height: 16)
+                Button { move(1) } label: { Image(systemName: "chevron.right").frame(width: 30, height: 28) }
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 13, weight: .medium))
+            .background(Color.primary.opacity(0.05), in: Capsule())
+            .overlay(Capsule().strokeBorder(Look.line))
             Button {
                 syncStarted = Date()
                 model.actions.askInBackground(CalendarFeed.syncInstructions)
@@ -1120,52 +1420,64 @@ private struct CalendarPage: View {
         }
     }
 
+    private func range(_ dates: [Date]) -> String {
+        guard let start = dates.first, let end = dates.last else { return "" }
+        return "\(start.formatted(.dateTime.day().month(.abbreviated))) – \(end.formatted(.dateTime.day().month(.abbreviated)))"
+    }
+
     private func syncing(_ now: Date) -> Bool {
         guard let started = syncStarted else { return false }
         return now.timeIntervalSince(started) < 120 && (CalendarFeed.syncedAt ?? .distantPast) < started
     }
 
     private func syncLabel(_ now: Date) -> String {
-        guard let synced = CalendarFeed.syncedAt else { return "Classes and alarms · Sync to add Google Calendar and ManageBac" }
-        return "Google Calendar and ManageBac synced " + synced.formatted(.relative(presentation: .named))
+        guard let synced = CalendarFeed.syncedAt else { return "Sync to add Google Calendar and ManageBac" }
+        return "synced " + synced.formatted(.relative(presentation: .named))
     }
 
     private func move(_ direction: Int) {
-        anchor = Calendar.current.date(byAdding: .day, value: direction * days, to: anchor) ?? anchor
+        anchor = Calendar.current.date(byAdding: .day, value: direction * span, to: anchor) ?? anchor
         selected = nil
     }
 
     // MARK: Week
 
-    private func week(_ items: [CalendarFeed.Item], _ now: Date) -> some View {
+    private func week(_ dates: [Date], _ items: [CalendarFeed.Item], _ now: Date) -> some View {
         let calendar = Calendar.current
-        let dates = (0..<days).compactMap { calendar.date(byAdding: .day, value: $0, to: first) }
-        let timed = items.filter { !$0.allDay && $0.kind != .deadline }
-        let startHour = min(7, timed.map { calendar.component(.hour, from: $0.start) }.min() ?? 7)
-        let endHour = max(21, (timed.map { calendar.component(.hour, from: $0.end ?? $0.start) }.max() ?? 21) + 1)
+        let timed = items.filter { !$0.allDay && $0.kind != .deadline && $0.kind != .alarm }
+        let startHour = min(8, timed.map { calendar.component(.hour, from: $0.start) }.min() ?? 8)
+        let endHour = max(18, (timed.map { calendar.component(.hour, from: $0.end ?? $0.start) }.max() ?? 18) + 1)
         return VStack(spacing: 0) {
-            // Day names, and the all-day strip with deadlines.
+            // Day names, then deadlines, all-day events and alarms for the day.
             HStack(alignment: .top, spacing: 0) {
-                Color.clear.frame(width: 44)
+                Color.clear.frame(width: Self.gutter)
                 ForEach(dates, id: \.self) { date in
                     let today = calendar.isDateInToday(date)
-                    VStack(spacing: 4) {
-                        Text(date.formatted(.dateTime.weekday(.abbreviated)).uppercased())
-                            .font(.system(size: 10.5, weight: .semibold)).foregroundStyle(today ? Look.accent : .secondary)
-                        Text(date.formatted(.dateTime.day()))
-                            .font(.system(size: 17, weight: today ? .bold : .medium))
-                            .foregroundStyle(today ? Color.white : .primary)
-                            .frame(width: 30, height: 30)
-                            .background(today ? Look.accent : .clear, in: Circle())
-                        VStack(spacing: 3) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline, spacing: 5) {
+                            Text(date.formatted(.dateTime.weekday(.abbreviated)))
+                                .font(.system(size: 12, weight: .medium)).foregroundStyle(today ? Look.accent : .secondary)
+                            Text(date.formatted(.dateTime.day()))
+                                .font(.system(size: 20, weight: today ? .bold : .semibold).monospacedDigit())
+                                .foregroundStyle(today ? Look.accent : .primary)
+                        }
+                        .padding(.leading, 6)
+                        VStack(alignment: .leading, spacing: 3) {
                             ForEach(items.filter { ($0.allDay || $0.kind == .deadline) && calendar.isDate($0.start, inSameDayAs: date) }) { item in
                                 chip(item)
+                            }
+                            let alarms = items.filter { $0.kind == .alarm && calendar.isDate($0.start, inSameDayAs: date) }
+                            if !alarms.isEmpty {
+                                Text(alarms.map { "\($0.start.formatted(date: .omitted, time: .shortened)) \($0.title)" }.joined(separator: ", "))
+                                    .font(.system(size: 10.5)).foregroundStyle(.tertiary).lineLimit(1)
+                                    .padding(.leading, 6)
+                                    .help(alarms.map(\.title).joined(separator: ", "))
                             }
                         }
                         .padding(.horizontal, 3)
                     }
-                    .frame(maxWidth: .infinity, alignment: .top)
-                    .padding(.bottom, 6)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .padding(.bottom, 8)
                 }
             }
             Rectangle().fill(Look.line).frame(height: 1)
@@ -1173,18 +1485,18 @@ private struct CalendarPage: View {
             HStack(alignment: .top, spacing: 0) {
                 VStack(spacing: 0) {
                     ForEach(startHour..<endHour, id: \.self) { hour in
-                        Text(String(format: "%02d", hour)).font(.system(size: 10).monospacedDigit()).foregroundStyle(.tertiary)
-                            .frame(width: 44, height: Self.hourHeight, alignment: .topTrailing)
-                            .padding(.trailing, 8)
+                        Text(String(format: "%02d:00", hour)).font(.system(size: 10).monospacedDigit()).foregroundStyle(.tertiary)
+                            .frame(width: Self.gutter - 8, height: Self.hourHeight, alignment: .topTrailing)
                             .offset(y: -6)
                     }
                 }
-                .frame(width: 44)
+                .frame(width: Self.gutter, alignment: .leading)
                 ForEach(dates, id: \.self) { date in
                     dayColumn(date, timed.filter { calendar.isDate($0.start, inSameDayAs: date) }, startHour: startHour,
                               hours: endHour - startHour, now: now)
                 }
             }
+            .padding(.top, 8)
         }
     }
 
@@ -1193,31 +1505,31 @@ private struct CalendarPage: View {
         let origin = calendar.date(bySettingHour: startHour, minute: 0, second: 0, of: date) ?? date
         let y = { (time: Date) in CGFloat(time.timeIntervalSince(origin) / 3600) * Self.hourHeight }
         let lanes = Self.lanes(items)
+        let today = calendar.isDateInToday(date)
         return GeometryReader { geometry in
             let width = geometry.size.width
             ZStack(alignment: .topLeading) {
-                if calendar.isDateInToday(date) { Look.accent.opacity(0.04) }
+                if today { Look.accent.opacity(0.035) }
                 ForEach(0..<hours, id: \.self) { hour in
-                    Rectangle().fill(Look.line).frame(height: 1).offset(y: CGFloat(hour) * Self.hourHeight)
+                    Rectangle().fill(Look.line.opacity(0.7)).frame(height: 1).offset(y: CGFloat(hour) * Self.hourHeight)
                 }
                 Rectangle().fill(Look.line).frame(width: 1).frame(maxHeight: .infinity)
                 ForEach(items) { item in
                     let lane = lanes[item.id] ?? (0, 1)
-                    let end = item.end ?? item.start.addingTimeInterval(item.kind == .alarm ? 900 : 1800)
+                    let end = item.end ?? item.start.addingTimeInterval(1800)
                     let laneWidth = (width - 6) / CGFloat(lane.count)
-                    block(item, height: max(18, y(end) - y(item.start) - 2))
+                    block(item, height: max(20, y(end) - y(item.start) - 2), past: end < now)
                         .frame(width: max(10, laneWidth - 2))
                         .offset(x: 3 + CGFloat(lane.index) * laneWidth, y: y(item.start) + 1)
                 }
-                if calendar.isDateInToday(date), now > origin {
-                    Rectangle().fill(Color.red).frame(height: 2).offset(y: y(now))
-                    Circle().fill(Color.red).frame(width: 8, height: 8).offset(x: -4, y: y(now) - 3)
+                if today, now > origin, y(now) < CGFloat(hours) * Self.hourHeight {
+                    Rectangle().fill(Color.red).frame(height: 1.5).offset(y: y(now))
+                    Circle().fill(Color.red).frame(width: 9, height: 9).offset(x: -4.5, y: y(now) - 3.75)
                 }
             }
         }
         .frame(height: CGFloat(hours) * Self.hourHeight)
         .frame(maxWidth: .infinity)
-        .clipped()
     }
 
     /// Side by side where things overlap: each item's lane, and how many lanes its cluster has.
@@ -1246,74 +1558,105 @@ private struct CalendarPage: View {
 
     private func color(_ item: CalendarFeed.Item) -> Color {
         switch item.kind {
-        case .lesson: Color(hex: schoolHex)
-        case .event: Color(hex: personalHex)
-        case .deadline: Self.deadlineColor
+        case .lesson: SubjectGroup.color(for: item.title)
+        case .event: Look.personal
+        case .deadline: Look.deadline
         case .alarm: Color.secondary
         }
     }
 
-    private func block(_ item: CalendarFeed.Item, height: CGFloat) -> some View {
+    /// A tinted block with a coloured edge, like Notion Calendar's: easy to read, quiet when many.
+    private func block(_ item: CalendarFeed.Item, height: CGFloat, past: Bool) -> some View {
         let color = color(item)
         let isSelected = selected?.id == item.id
-        return VStack(alignment: .leading, spacing: 1) {
-            HStack(spacing: 3) {
-                if item.kind == .alarm { Image(systemName: "alarm.fill").font(.system(size: 8)) }
-                Text(item.title).font(.system(size: 11, weight: .semibold)).lineLimit(height > 40 ? 2 : 1)
+        return HStack(spacing: 0) {
+            RoundedRectangle(cornerRadius: 1.5).fill(color).frame(width: 3)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.title).font(.system(size: 11.5, weight: .semibold)).lineLimit(height > 44 ? 2 : 1)
+                if height > 32 {
+                    Text([item.start.formatted(date: .omitted, time: .shortened), item.detail].filter { !$0.isEmpty }.joined(separator: " · "))
+                        .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                }
             }
-            if height > 34 {
-                Text([item.start.formatted(date: .omitted, time: .shortened), item.detail].filter { !$0.isEmpty }.joined(separator: " · "))
-                    .font(.system(size: 9.5)).opacity(0.85).lineLimit(1)
-            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            Spacer(minLength: 0)
         }
-        .foregroundStyle(item.kind == .alarm ? Color.primary : .white)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 3)
         .frame(height: height, alignment: .topLeading)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(item.kind == .alarm ? color.opacity(0.18) : color.opacity(0.88), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Color.primary.opacity(isSelected ? 0.7 : 0), lineWidth: 2))
+        .background(color.opacity(isSelected ? 0.3 : 0.15), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(color.opacity(isSelected ? 0.8 : 0), lineWidth: 1.5))
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .opacity(past ? 0.55 : 1)
         .contentShape(Rectangle())
-        .onTapGesture { selected = isSelected ? nil : item }
-        .help("\(item.title) · \(item.start.formatted(date: .omitted, time: .shortened))")
+        .onTapGesture { withAnimation(.easeOut(duration: 0.12)) { selected = isSelected ? nil : item } }
+        .help("\(item.title) · \(Self.when(item))")
     }
 
-    /// An all-day item or a deadline, in the strip under the day.
+    /// An all-day item or a deadline, under the day.
     private func chip(_ item: CalendarFeed.Item) -> some View {
         let color = color(item)
         return HStack(spacing: 4) {
-            if item.kind == .deadline { Image(systemName: "flag.fill").font(.system(size: 8)) }
+            Image(systemName: item.kind == .deadline ? "flag.fill" : "circle.fill").font(.system(size: item.kind == .deadline ? 8 : 5))
+                .foregroundStyle(color)
             Text(item.title).font(.system(size: 10.5, weight: .semibold)).lineLimit(1)
         }
-        .foregroundStyle(.white)
         .padding(.horizontal, 6)
         .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
-        .background(color.opacity(0.9), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+        .background(color.opacity(0.13), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
         .contentShape(Rectangle())
         .onTapGesture { selected = selected?.id == item.id ? nil : item }
         .help(item.title)
     }
 
-    // MARK: Details and deadlines
+    // MARK: Side
 
-    private func detail(_ item: CalendarFeed.Item, _ now: Date) -> some View {
-        HStack(spacing: 14) {
-            RoundedRectangle(cornerRadius: 3).fill(color(item)).frame(width: 6, height: 44)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(item.title).font(.system(size: 16, weight: .semibold))
-                Text(Self.when(item)).font(.system(size: 12.5)).foregroundStyle(.secondary)
-                if !item.detail.isEmpty { Text(item.detail).font(.system(size: 12.5)).foregroundStyle(.secondary) }
+    private func rail(_ now: Date) -> some View {
+        VStack(spacing: 16) {
+            if let selected { detail(selected) }
+            DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil) {}
+            Card(title: "Subjects", symbol: "square.grid.2x2") {
+                VStack(alignment: .leading, spacing: 7) {
+                    ForEach(SubjectGroup.allCases, id: \.self) { group in
+                        HStack(spacing: 8) {
+                            RoundedRectangle(cornerRadius: 2).fill(group.color).frame(width: 10, height: 10)
+                            Text(group.name).font(.system(size: 12)).foregroundStyle(.secondary)
+                        }
+                    }
+                    HStack(spacing: 8) {
+                        RoundedRectangle(cornerRadius: 2).fill(Look.personal).frame(width: 10, height: 10)
+                        Text("Personal events").font(.system(size: 12)).foregroundStyle(.secondary)
+                    }
+                }
             }
-            Spacer()
-            Text(item.kind == .lesson ? "Class" : item.kind == .deadline ? "ManageBac" : item.kind == .alarm ? "Alarm" : "Event")
-                .font(.system(size: 11, weight: .semibold)).foregroundStyle(color(item))
-                .padding(.horizontal, 8).frame(height: 22)
-                .background(color(item).opacity(0.12), in: Capsule())
-            Button { selected = nil } label: { Image(systemName: "xmark") }.buttonStyle(PillButton())
         }
-        .padding(14)
-        .background(Look.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Look.line))
+    }
+
+    private func detail(_ item: CalendarFeed.Item) -> some View {
+        let color = color(item)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(item.kind == .lesson ? (SubjectGroup.of(item.title)?.name ?? "Class") : item.kind == .deadline ? "ManageBac deadline" : item.kind == .alarm ? "Alarm" : "Event")
+                    .font(.system(size: 11, weight: .semibold)).foregroundStyle(color)
+                Spacer()
+                Button { selected = nil } label: { Image(systemName: "xmark").font(.system(size: 10, weight: .bold)) }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+            }
+            Text(item.title).font(.system(size: 16, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
+            Label(Self.when(item), systemImage: "clock").font(.system(size: 12.5)).foregroundStyle(.secondary)
+            if !item.detail.isEmpty {
+                Label(item.detail, systemImage: item.kind == .lesson ? "mappin" : "text.alignleft").font(.system(size: 12.5)).foregroundStyle(.secondary)
+            }
+            if item.kind == .deadline || item.kind == .lesson {
+                Button {
+                    model.actions.ask(item.kind == .deadline ? "Help me plan for \"\(item.title)\", due \(Self.when(item))." : "What should I prepare for \(item.title) on \(Self.when(item))?")
+                } label: { Label("Ask Joe about this", systemImage: "sparkle") }
+                    .buttonStyle(PillButton())
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(color.opacity(0.07), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(color.opacity(0.3)))
     }
 
     private static func when(_ item: CalendarFeed.Item) -> String {
@@ -1321,30 +1664,6 @@ private struct CalendarPage: View {
         if item.allDay { return day }
         let start = item.start.formatted(date: .omitted, time: .shortened)
         return day + ", " + (item.end.map { "\(start)–\($0.formatted(date: .omitted, time: .shortened))" } ?? start)
-    }
-
-    private func upcomingDeadlines(_ now: Date) -> some View {
-        let soon = CalendarFeed.items(from: now, days: 14).filter { $0.kind == .deadline && ($0.end ?? $0.start) >= Calendar.current.startOfDay(for: now) }
-        return Card(title: "Deadlines, next two weeks", symbol: "flag") {
-            if soon.isEmpty {
-                Text(CalendarFeed.syncedAt == nil ? "Press Sync to bring in ManageBac." : "Nothing due in the next two weeks.")
-                    .font(.system(size: 13)).foregroundStyle(.secondary)
-            }
-            ForEach(soon.prefix(10)) { item in
-                HStack(spacing: 10) {
-                    Image(systemName: "flag.fill").font(.system(size: 10)).foregroundStyle(Self.deadlineColor)
-                    Text(item.start.formatted(.dateTime.weekday(.abbreviated).day())).font(.system(size: 12.5, weight: .semibold))
-                        .frame(width: 52, alignment: .leading)
-                    Text(item.title).font(.system(size: 13)).lineLimit(1)
-                    Spacer()
-                    let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: now), to: Calendar.current.startOfDay(for: item.start)).day ?? 0
-                    Text(days == 0 ? "today" : days == 1 ? "tomorrow" : "in \(days) days")
-                        .font(.system(size: 11.5)).foregroundStyle(days <= 1 ? Self.deadlineColor : .secondary)
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { selected = item; anchor = item.start }
-            }
-        }
     }
 }
 
@@ -2186,6 +2505,41 @@ private struct SettingsPage: View {
                     NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")!)
                 }
                 .buttonStyle(PillButton(prominent: true))
+            }
+        }
+    }
+}
+
+// MARK: - Snapshots
+
+extension Dashboard {
+    /// `Joe --snapshot <page> <file.png> [width height] [dark]`: draws a page off screen, with the
+    /// real data, to check the design without opening the window.
+    static func snapshot(page: DashboardModel.Page, to file: URL, size: NSSize, dark: Bool, done: @escaping () -> Void) {
+        let model = DashboardModel(actions: .init(
+            ask: { _ in }, askInBackground: { _ in }, status: { "" }, setVoice: { _ in }, setNotch: { _ in },
+            setCleanup: { _ in }, setScreenControl: { _ in }, chooseVault: {}, showOnboarding: {}, openNotepad: {},
+            microphones: { [] }, setSpeechLanguages: { _ in }, cancelAlarm: { _ in }, addAlarm: { _ in }))
+        model.page = page
+        model.reload()
+        let window = NSWindow(contentRect: NSRect(origin: NSPoint(x: -20_000, y: -20_000), size: size),
+                              styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        let view = NSHostingView(rootView: DashboardView(model: model))
+        window.contentView = view
+        window.orderFrontRegardless()
+        // Let the page load its data and settle before drawing it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            MainActor.assumeIsolated {
+                view.layoutSubtreeIfNeeded()
+                if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                    view.cacheDisplay(in: view.bounds, to: rep)
+                    try? rep.representation(using: .png, properties: [:])?.write(to: file)
+                }
+                window.orderOut(nil)
+                done()
             }
         }
     }

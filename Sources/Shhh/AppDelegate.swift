@@ -29,6 +29,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var handsFree = false
     private var heardSpeech = false
     private var quietSince: Date?
+    /// Double-tapped: recording without holding the key, through pauses, until the key is tapped
+    /// again (or five minutes pass). For long requests, where a held key slips.
+    private var locked = false
+    private var lockTimeout: DispatchWorkItem?
+    /// The last quick tap of a key, to spot a double tap.
+    private var lastTap: (key: HotkeyMonitor.Key, at: Date)?
     /// This recording came from "Hey Joe": cut down to their voice before it's transcribed.
     private var handsFreeTake = false
     /// With a voiceprint: when their own voice was last heard (checked every ¾ s).
@@ -522,7 +528,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func startRecording(_ key: HotkeyMonitor.Key) {
+        // Locked: a tap of the same key ends it and sends it.
+        if locked, state == .recording {
+            if key == self.key { unlock(); finishRecording() }
+            return
+        }
         guard state == .idle else { return }
+        // A quick tap and then a press: lock it on (released keys are ignored until the next tap).
+        let doubleTap = lastTap.map { $0.key == key && Date().timeIntervalSince($0.at) < 0.45 } ?? false
+        lastTap = nil
+        unlock() // left over from a recording that ended some other way (no microphone)
         handsFree = false
         handsFreeTake = false
         guard speechReady, AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
@@ -579,6 +594,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         showPanelWork = work
         // A follow-up shows it at once: the answer has just folded into the notch beneath it.
         DispatchQueue.main.asyncAfter(deadline: .now() + (followingUp ? 0 : 0.15), execute: work)
+        if doubleTap {
+            locked = true
+            work.perform() // the pill at once
+            toast.show("Listening. Tap \(key == .rightOption ? "right ⌥" : "right ⌘") again to finish", symbol: "lock.fill", tint: .orange)
+            let timeout = DispatchWorkItem { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.locked, self.state == .recording else { return }
+                    self.unlock()
+                    self.finishRecording()
+                }
+            }
+            lockTimeout = timeout
+            DispatchQueue.main.asyncAfter(deadline: .now() + 300, execute: timeout)
+        }
+    }
+
+    private func unlock() {
+        locked = false
+        lockTimeout?.cancel()
+        lockTimeout = nil
     }
 
     /// A task's events. Its state is kept either way; the focused one's also go to the card (point
@@ -1160,6 +1195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func cancelRecording() {
         guard state == .recording else { return }
+        if locked { return } // a shortcut typed while it's locked on is just typing; the next tap ends it
         handsFreeTake = false
         endListener.stop()
         showPanelWork?.cancel()
@@ -1172,11 +1208,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func finishRecording() {
-        guard state == .recording else { return }
+        guard state == .recording, !locked else { return } // locked on: letting go doesn't end it
         showPanelWork?.cancel()
         let heldFor = Date().timeIntervalSince(pressedAt)
 
         guard heldFor >= 0.3 else {
+            lastTap = (key, Date()) // the first half of a double tap, maybe
             cancelRecording()
             return
         }

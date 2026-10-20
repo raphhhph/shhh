@@ -294,11 +294,71 @@ final class DashboardModel: ObservableObject {
 
 // MARK: - Look
 
+/// The app's styles (Settings → General → Style): Classic orange, Midnight (navy and gold,
+/// always dark), Paper (warm paper, serif headings), Ocean (blue, rounded).
+enum Theme: String, CaseIterable {
+    case classic, midnight, paper, ocean
+    static let key = "theme"
+    static var current: Theme { Theme(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .classic }
+
+    var title: String {
+        switch self {
+        case .classic: "Classic"
+        case .midnight: "Midnight"
+        case .paper: "Paper"
+        case .ocean: "Ocean"
+        }
+    }
+}
+
 private enum Look {
-    static let accent = Color(red: 1, green: 0.58, blue: 0.12)
-    static let sidebar = Color(nsColor: .windowBackgroundColor)
-    static let card = Color(nsColor: .controlBackgroundColor)
+    static var accent: Color {
+        switch Theme.current {
+        case .classic: Color(red: 1, green: 0.58, blue: 0.12)
+        case .midnight: Color(red: 0.96, green: 0.77, blue: 0.33)
+        case .paper: Color(red: 0.74, green: 0.25, blue: 0.2)
+        case .ocean: Color(red: 0.16, green: 0.5, blue: 0.96)
+        }
+    }
+    static var sidebar: Color {
+        switch Theme.current {
+        case .midnight: Color(red: 0.05, green: 0.07, blue: 0.13)
+        case .paper: dynamic(light: (0.95, 0.93, 0.89), dark: (0.11, 0.1, 0.09))
+        default: Color(nsColor: .windowBackgroundColor)
+        }
+    }
+    static var card: Color {
+        switch Theme.current {
+        case .midnight: Color(red: 0.1, green: 0.13, blue: 0.22)
+        case .paper: dynamic(light: (1, 0.99, 0.97), dark: (0.17, 0.16, 0.14))
+        default: Color(nsColor: .controlBackgroundColor)
+        }
+    }
+    /// Behind the pages.
+    static var page: Color {
+        switch Theme.current {
+        case .midnight: Color(red: 0.07, green: 0.09, blue: 0.16)
+        case .paper: dynamic(light: (0.98, 0.96, 0.92), dark: (0.13, 0.12, 0.11))
+        case .ocean: dynamic(light: (0.96, 0.97, 1), dark: (0.09, 0.1, 0.13))
+        case .classic: Color(nsColor: .textBackgroundColor).opacity(0.5)
+        }
+    }
+    /// Page titles: serif on Paper, rounded on Ocean.
+    static var titleDesign: Font.Design {
+        switch Theme.current {
+        case .paper: .serif
+        case .ocean: .rounded
+        default: .default
+        }
+    }
     static let line = Color.primary.opacity(0.08)
+
+    private static func dynamic(light: (Double, Double, Double), dark: (Double, Double, Double)) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let rgb = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+            return NSColor(srgbRed: rgb.0, green: rgb.1, blue: rgb.2, alpha: 1)
+        })
+    }
     static let deadline = Color(red: 0.88, green: 0.24, blue: 0.3)
     /// Personal events (Google Calendar), in the colour chosen on the timeline.
     static var personal: Color { Color(hex: UserDefaults.standard.string(forKey: "timelinePersonal") ?? "#FF9420") }
@@ -343,7 +403,7 @@ private struct PageTitle: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.system(size: 28, weight: .bold))
+            Text(title).font(.system(size: 28, weight: .bold, design: Look.titleDesign))
             if let subtitle { Text(subtitle).font(.system(size: 14)).foregroundStyle(.secondary) }
         }
         .padding(.bottom, 6)
@@ -354,6 +414,7 @@ private struct PageTitle: View {
 
 private struct DashboardView: View {
     @ObservedObject var model: DashboardModel
+    @AppStorage(Theme.key) private var theme = Theme.classic.rawValue
 
     var body: some View {
         GeometryReader { geometry in
@@ -388,11 +449,12 @@ private struct DashboardView: View {
                     .frame(maxWidth: model.page == .calendar ? 1500 : 1060, alignment: .leading)
                     .frame(maxWidth: .infinity)
                 }
-                .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
+                .background(Look.page)
             }
         }
         .frame(minWidth: 720, minHeight: 520)
         .tint(Look.accent)
+        .id(theme) // a new style redraws everything in it
     }
 
     /// The pages in groups, like Linear's sidebar: your day, Joe's tools, and the app.
@@ -405,7 +467,7 @@ private struct DashboardView: View {
         VStack(alignment: compact ? .center : .leading, spacing: 1) {
             HStack(spacing: 8) {
                 Image(systemName: "sparkle").font(.system(size: 16, weight: .bold)).foregroundStyle(Look.accent)
-                if !compact { Text("Joe").font(.system(size: 18, weight: .bold)) }
+                if !compact { Text("Joe").font(.system(size: 18, weight: .bold, design: Look.titleDesign)) }
             }
             .padding(.horizontal, compact ? 0 : 10)
             .padding(.top, 46)
@@ -532,7 +594,7 @@ private struct HomePage: View {
         let subjects = Profile.subjects.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         let day = Calendar.current.ordinality(of: .day, in: .year, for: Date()) ?? 0
         let subject = subjects.isEmpty ? "my weakest subject" : subjects[day % subjects.count]
-        return ["What's due this week?", "Plan my evening around my deadlines", "Quiz me on \(subject)", "Summarise today's notes"]
+        return ["What's due this week?", "Plan my evening around my deadlines", "Quiz me on \(subject)", "Summarise today's notes", "Draw on my screen"]
     }
 
     var body: some View {
@@ -583,7 +645,11 @@ private struct HomePage: View {
                     Text(focus).font(.system(size: 14, weight: .medium)).fixedSize(horizontal: false, vertical: true)
                 }
                 if model.tasks.isEmpty {
-                    Text("Today's Daybook isn't built yet: Joe makes it on your first wake, or ask him.").foregroundStyle(.secondary).font(.system(size: 13))
+                    Text("Today's Daybook isn't built yet. Joe makes it on your first wake each morning.").foregroundStyle(.secondary).font(.system(size: 13))
+                    Button { model.actions.askInBackground("Build today's Daybook now (how: your instructions), then tell me my five things in one short line.") } label: {
+                        Label("Build it now", systemImage: "wand.and.stars")
+                    }
+                    .buttonStyle(PillButton(prominent: true))
                 }
                 VStack(spacing: 2) {
                     ForEach(model.tasks, id: \.line) { task in
@@ -2617,6 +2683,7 @@ private struct SettingsPage: View {
 
     @AppStorage("settingsTab") private var tab = "general"
     @AppStorage(AppAppearance.key) private var appearance = AppAppearance.system.rawValue
+    @AppStorage(Theme.key) private var theme = Theme.classic.rawValue
     @State private var newLink = ""
     @State private var calendarLinks = CalendarFeed.links
 
@@ -2700,6 +2767,10 @@ private struct SettingsPage: View {
                         Button("Clear") { CalendarFeed.links = []; calendarLinks = [] }.buttonStyle(PillButton(destructive: true))
                     }
                 }
+            }
+            row("Style", "How Joe looks: Classic, Midnight (navy and gold), Paper (serif, warm) or Ocean") {
+                Choice(options: Theme.allCases.map { ($0.rawValue, $0.title) }, selection: $theme)
+                    .onChange(of: theme) { AppAppearance.apply() }
             }
             row("Appearance", "Light, dark, or follow the Mac") {
                 Choice(options: AppAppearance.allCases.map { ($0.rawValue, $0.title) }, selection: $appearance)
@@ -2967,6 +3038,7 @@ enum AppAppearance: String, CaseIterable {
     }
 
     @MainActor static func apply() {
+        if Theme.current == .midnight { NSApp.appearance = NSAppearance(named: .darkAqua); return }
         NSApp.appearance = switch current {
         case .system: nil
         case .light: NSAppearance(named: .aqua)

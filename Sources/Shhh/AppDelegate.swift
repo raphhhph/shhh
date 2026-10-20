@@ -66,6 +66,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private let greeting = NotchGreeting()
     private let studyBoard = StudyBoard()
+    private let pen = ScreenPen()
+
+    /// "Let me draw on the screen", "annotate my screen", "pen": the drawing overlay.
+    private func openPen(_ request: String) -> Bool {
+        guard request.range(of: #"\b(draw|drawing|annotate|scribble|pen)\b[^.?!]{0,30}\b(screen|this|it)\b|^\W*(screen )?pen\W*$|^\W*(let me )?(draw|annotate)\W*$"#,
+                            options: [.regularExpression, .caseInsensitive]) != nil else { return false }
+        pen.show()
+        return true
+    }
 
     /// "Quiz me on econ externalities", "test me on…": the study whiteboard, not the notch.
     private func openStudy(_ request: String) -> Bool {
@@ -216,6 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.speech.finish()
         }
         studyBoard.stopSpeaking = { [weak self] in self?.speech.stop() }
+        pen.ask = { [weak self] request, screenshot in self?.askTyped(request, screenshot: screenshot) }
         alarms.onChange = { [weak self] in self?.refreshShelf() }
         // The wake-up challenge done: straight into the morning briefing.
         alarms.onWokeUp = { [weak self] in
@@ -387,9 +397,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// A request typed in the dashboard: like one said with right ⌥ (alarms and music at once,
     /// anything else to Joe, with its card at the notch).
-    private func askTyped(_ text: String) {
+    private func askTyped(_ text: String, screenshot: Data? = nil) {
         if let request = AlarmRequest.parse(text) { alarms.handle(request); return }
         if openStudy(text) { return }
+        if screenshot == nil, openPen(text) { return }
         if let music = Spotify.command(in: text) {
             Task.detached { [weak self] in
                 let result = Spotify.run(music)
@@ -405,7 +416,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         answerPanel.beginTurn(question: text)
         if Assistant.needsStrongModel(text) { task.assistant.useStrongModel() }
         if Self.wantsBackground(text) { task.background = true }
-        task.assistant.ask(text)
+        task.assistant.ask(text, screenshot: screenshot)
     }
 
     /// "… in the background", "… while I do something else".
@@ -1361,6 +1372,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     return
                 }
                 if openStudy(text) { return }
+                if openPen(text) { return }
                 if Self.isDismissRequest(text) {
                     if Self.isClearAll(text) { for other in tasks where other !== task { end(other) } }
                     // Said with nothing on the card: "it" is the finished answers waiting at the notch.

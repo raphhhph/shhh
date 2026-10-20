@@ -121,7 +121,7 @@ final class DashboardModel: ObservableObject {
         var showOnboarding: () -> Void
         var openNotepad: () -> Void
         var microphones: () -> [(uid: String, name: String)]
-        var setEnglishOnly: (Bool) -> Void
+        var setSpeechLanguages: (String) -> Void
         var cancelAlarm: (UUID) -> Void
         var addAlarm: (AlarmRequest) -> Void
     }
@@ -1923,7 +1923,7 @@ private struct SettingsPage: View {
     @AppStorage("joeTone") private var tone = "direct"
     @AppStorage("joeHype") private var hype = false
     @State private var notch = Notch.isEnabled
-    @State private var englishOnly = Transcriber.englishOnly
+    @State private var speechLanguages = Transcriber.languages.rawValue
     @State private var cleanup = UserDefaults.standard.bool(forKey: "aiCleanup")
     @State private var control = ScreenControl.isEnabled
     @State private var voice = SpeechOutput.engine
@@ -2005,9 +2005,10 @@ private struct SettingsPage: View {
                 Choice(options: [("", "Automatic")] + model.actions.microphones().map { ($0.uid, $0.name) }, selection: $microphone)
             }
             row("Reduce background noise", "Takes out fans and chatter before your words are written, on this Mac") { switchOn($reduceNoise) }
-            row("Languages", "English only stops it mishearing you as Russian", last: true) {
-                Choice(options: [(true, "English only"), (false, "25 languages")], selection: $englishOnly)
-                    .onChange(of: englishOnly) { model.actions.setEnglishOnly(englishOnly) }
+            row("Languages", "What you speak to Joe in. English only stops it mishearing you as Russian", last: true) {
+                Choice(options: [("english", "English only"), ("chinese", "English + Chinese"), ("european", "25 European languages")],
+                       selection: $speechLanguages)
+                    .onChange(of: speechLanguages) { model.actions.setSpeechLanguages(speechLanguages) }
             }
         }
         section("Notch", "rectangle.topthird.inset.filled") {

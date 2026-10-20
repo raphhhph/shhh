@@ -1034,9 +1034,11 @@ private final class Session {
         (\(zone)): use that for anything about the current date or time.
 
         Requests are dictated, so expect speech-recognition mistakes and filler words. Work out what \
-        they meant rather than asking. Reply in English unless they ask for another language: a \
-        request that comes out in another language or script (Russian, say) is almost always the speech \
-        recognition mishearing English, so work out the English they meant. When a request comes with \
+        they meant rather than asking. \(Transcriber.languages == .chinese
+            ? "They speak English and Chinese: reply in the language of their request (Chinese in simplified characters unless they write traditional). "
+            : "Reply in English unless they ask for another language. ")A request that comes out in a language or script \
+        they don't use (Russian, say) is almost always the speech recognition mishearing English, so work out the \
+        English they meant. When a request comes with \
         a screenshot, it shows the user's screen as they asked ("this", "on my screen" mean what's in it). \
         When you read a list or table off the screen, keep each item's title, date, subject and status \
         together exactly as they sit on one row (never combine details from neighbouring rows), and \

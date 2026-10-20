@@ -80,9 +80,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         showOnboarding: { [weak self] in self?.onboarding.show() },
         openNotepad: { [weak self] in self?.notepad.show() },
         microphones: { [weak self] in self?.microphones.inputs.map { ($0.uid, $0.name) } ?? [] },
-        setEnglishOnly: { [weak self] on in
-            guard Transcriber.englishOnly != on else { return }
-            Transcriber.englishOnly = on
+        setSpeechLanguages: { [weak self] raw in
+            guard let languages = Transcriber.Languages(rawValue: raw), Transcriber.languages != languages else { return }
+            Transcriber.languages = languages
             self?.reloadSpeechModel() // downloads the other model the first time
         },
         cancelAlarm: { [weak self] id in self?.alarms.cancel(id: id) },

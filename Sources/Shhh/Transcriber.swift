@@ -5,21 +5,37 @@ import FluidAudio
 /// multilingual one (Redux, ~180 MB: English, French and 23 other European languages). The multilingual
 /// one guesses the language, and on short or mumbled English it sometimes guessed Russian.
 actor Transcriber {
-    /// "Speech languages" in Settings: English only, or 25 languages.
-    nonisolated static var englishOnly: Bool {
-        get { UserDefaults.standard.object(forKey: "speechEnglishOnly") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "speechEnglishOnly") }
+    /// "Languages" in Settings: English only; 25 European languages; or English and Chinese
+    /// (Mandarin and Cantonese, mixed in one sentence too).
+    enum Languages: String, CaseIterable {
+        case english, european, chinese
     }
 
+    nonisolated static var languages: Languages {
+        get {
+            if let raw = UserDefaults.standard.string(forKey: "speechLanguages"), let value = Languages(rawValue: raw) { return value }
+            return UserDefaults.standard.object(forKey: "speechEnglishOnly") as? Bool ?? true ? .english : .european
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "speechLanguages") }
+    }
+
+    nonisolated static var englishOnly: Bool { languages == .english }
+
     private var manager: AsrManager?
+    /// For "English and Chinese": SenseVoice hears everything first and says which language it was.
+    private var chinese: SenseVoiceManager?
 
     var isReady: Bool { manager != nil }
 
     /// Downloads the model on first use (~500 MB, cached afterwards) and loads it.
     func load(progress: @escaping @Sendable (Double) -> Void) async throws {
         guard manager == nil else { return }
-        let models = try await AsrModels.downloadAndLoad(version: Self.englishOnly ? .v2 : .redux,
+        let models = try await AsrModels.downloadAndLoad(version: Self.languages == .european ? .redux : .v2,
                                                          progressHandler: { progress($0.fractionCompleted) })
+        if Self.languages == .chinese {
+            // Text-norm 14 ("withitn"): punctuation and numbers as digits, like Parakeet's output.
+            chinese = SenseVoiceManager(models: try await SenseVoiceModels.downloadAndLoad(), textNorm: 14)
+        }
         let manager = AsrManager(config: .default)
         try await manager.loadModels(models)
         self.manager = manager
@@ -29,6 +45,13 @@ actor Transcriber {
 
     func transcribe(_ samples: [Float]) async throws -> String {
         guard let manager else { throw TranscriberError.notLoaded }
+        // English and Chinese: Chinese (or mixed) speech is SenseVoice's; English stays with
+        // Parakeet, which is more accurate on English. SenseVoice takes up to ~100 s at a time.
+        if let chinese, samples.count < 16_000 * 100,
+           let heard = try? await chinese.transcribeDetailed(audio: samples) {
+            let text = heard.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if ["zh", "yue"].contains(heard.language ?? "") || SpeechOutput.isChinese(text) { return text }
+        }
         // The model wants at least one second of audio.
         var padded = samples
         if padded.count < 16_000 { padded += [Float](repeating: 0, count: 16_000 - padded.count) }
@@ -37,11 +60,9 @@ actor Transcriber {
         return result.text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// A file, through the same path as a recording (so the language choice applies).
     func transcribe(fileURL: URL) async throws -> String {
-        guard let manager else { throw TranscriberError.notLoaded }
-        var state = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
-        let result = try await manager.transcribe(fileURL, decoderState: &state)
-        return result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        try await transcribe(AudioConverter(sampleRate: 16_000).resampleAudioFile(fileURL))
     }
 
     enum TranscriberError: LocalizedError {

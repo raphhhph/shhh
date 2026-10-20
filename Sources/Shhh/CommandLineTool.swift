@@ -272,6 +272,16 @@ enum CommandLineTool {
             }
             NSApplication.shared.run()
             exit(0)
+        case ("--route", 2...):
+            // Joe --route "<request>"…: what each request would do (testing the routing).
+            for request in args.dropFirst() {
+                var route = MainActor.assumeIsolated { Assistant.needsStrongModel(request) } ? "Claude (Opus)" : "Claude (Haiku)"
+                if AlarmRequest.parse(request) != nil { route = "alarm" }
+                else if Spotify.command(in: request) != nil { route = "Spotify" }
+                else if PromptPolish.request(in: request) != nil { route = "prompt rewrite (dictation)" }
+                print("\(route.padding(toLength: 26, withPad: " ", startingAt: 0)) \(request)")
+            }
+            exit(0)
         case ("--challenge", 1...):
             // Joe --challenge [seed] ["what I said"]: a wake-up challenge, and whether that answer passes.
             let seed = args.count > 1 ? Int(args[1]) ?? 0 : 0

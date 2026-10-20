@@ -301,7 +301,9 @@ final class Assistant {
             || request.range(of: #"什么时|几号|哪天|哪一天|有没有|有什么|是什么|吗[？?]?\s*$"#, options: .regularExpression) != nil { return false }
         // Only when they ask Joe to do a piece of work ("do my ESS formative", "answer this worksheet",
         // "redesign this deck"); just mentioning one ("I got a 4 on a summative") is a chat for Haiku.
-        let work = #"\b(do|doing|write|answer|complete|finish|fill(?: in| out)?|solve|make|create|draft|design|redesign|build)\b[^.?!\n]{0,60}?\b(formative|summative|worksheet|inquiry|assignment|homework|essay|lab report|internal assessment|IA|extended essay|EE|slides?|deck|presentation|poster)\b"#
+        // Asked of Joe, at the start ("can you do…", "help me write…", "do my…"): "I need to finish my
+        // homework tonight, plan my evening" is a planning request, not one to do the homework.
+        let work = #"^\W*((hey|ok|okay),?\s+)?(joe,?\s+)?((can|could|would|will) you\s+|please\s+|help me\s+|i need you to\s+|i want you to\s+)?(do|write|answer|complete|finish|fill(?: in| out)?|solve|make|create|draft|design|redesign|build)\b[^.?!\n]{0,60}?\b(formative|summative|worksheet|inquiry|assignment|homework|essay|lab report|internal assessment|IA|extended essay|EE|slides?|deck|presentation|poster)\b"#
         let look = #"\b(design|redesign)\b|make (it|them|this) look (good|better|nice|professional)"#
         return request.range(of: work, options: [.regularExpression, .caseInsensitive]) != nil
             || request.range(of: look, options: [.regularExpression, .caseInsensitive]) != nil

@@ -165,19 +165,26 @@ final class SpeechOutput {
             while let self, !Task.isCancelled, !self.pending.isEmpty {
                 let sentence = self.pending.removeFirst()
                 let started = Date()
-                let audio: NeuralVoices.Audio
+                var first: TimeInterval?
+                var seconds = 0.0
                 do {
-                    audio = try await self.neural.speak(sentence)
+                    // Audio is played as it's made, a fraction of a second at a time, so speech
+                    // starts almost at once instead of after the whole sentence.
+                    try await self.neural.speak(sentence) { audio in
+                        guard !Task.isCancelled else { return }
+                        if first == nil { first = Date().timeIntervalSince(started) }
+                        seconds += Double(audio.samples.count) / Double(audio.sampleRate)
+                        self.player.play(audio.samples, sampleRate: audio.sampleRate)
+                    }
                 } catch {
                     if ProcessInfo.processInfo.environment["SHHH_VOICE_LOG"] != nil { print("voice error:", error) }
                     continue
                 }
                 guard !Task.isCancelled else { break }
                 if ProcessInfo.processInfo.environment["SHHH_VOICE_LOG"] != nil { // `Joe --say` timing
-                    print(String(format: "%@: %.1fs of speech made in %.2fs: %@", engine.rawValue,
-                                 Double(audio.samples.count) / Double(audio.sampleRate), Date().timeIntervalSince(started), sentence))
+                    print(String(format: "%@: first sound after %.2fs, %.1fs of speech made in %.2fs: %@", engine.rawValue,
+                                 first ?? 0, seconds, Date().timeIntervalSince(started), sentence))
                 }
-                self.player.play(audio.samples, sampleRate: audio.sampleRate)
             }
             self?.worker = nil
         }
@@ -265,14 +272,23 @@ private final class NeuralVoices {
         do { _ = try await englishManager() } catch { status = "Couldn't load the voice: \(error.localizedDescription)" }
     }
 
-    func speak(_ text: String) async throws -> Audio {
+    /// Says `text`, handing over the audio as it's made: Alba streams it in small pieces, the
+    /// Mandarin voice in one go.
+    func speak(_ text: String, onAudio: (Audio) -> Void) async throws {
         if SpeechOutput.isChinese(text) {
             let chinese = SpeechOutput.chineseVoice
             let result = try await chineseManager(voice: chinese).synthesizeDetailed(text: text, voice: chinese)
-            return Audio(samples: result.samples, sampleRate: result.sampleRate)
+            onAudio(Audio(samples: result.samples, sampleRate: result.sampleRate))
+            return
         }
-        let result = try await englishManager().synthesizeDetailed(text: text, voice: SpeechOutput.lifelikeVoice)
-        return Audio(samples: result.samples, sampleRate: 24_000)
+        // Pieces of about a quarter of a second, so playback starts soon without a flood of tiny buffers.
+        var buffer: [Float] = []
+        for try await frame in try await englishManager().synthesizeStreaming(text: text, voice: SpeechOutput.lifelikeVoice) {
+            try Task.checkCancellation() // stopped: don't keep making audio no one will hear
+            buffer += frame.samples
+            if buffer.count >= 6_000 { onAudio(Audio(samples: buffer, sampleRate: 24_000)); buffer = [] }
+        }
+        if !buffer.isEmpty { onAudio(Audio(samples: buffer, sampleRate: 24_000)) }
     }
 
     private func englishManager() async throws -> PocketTtsManager {

@@ -239,8 +239,9 @@ enum Daybook {
             """
     }
 
-    /// For the assistant's instructions: where the Daybook is, how to use it, today's classes and
-    /// what was asked lately.
+    /// For the assistant's instructions: where the Daybook is, how to use it and today's classes.
+    /// What was asked lately goes with the first request instead (`recentRequests`), so these
+    /// instructions stay the same all day and Claude can reuse them from its cache.
     static var instructions: String {
         guard url != nil else { return "" }
         archiveIfOld()
@@ -273,11 +274,15 @@ enum Daybook {
         if !isCurrent {
             text += "\nThere's no Daybook for today yet: build it before you answer anything about their day.\n" + buildRules
         }
-        let log = recentLog(limit: 15)
-        if !log.isEmpty {
-            text += "\n\nWhat they asked you lately (newest last), from \(relative(logURL(for: Date())))…:\n" + log.joined(separator: "\n")
-        }
         return text
+    }
+
+    /// What they asked lately (newest last), sent with the first request of a conversation.
+    static var recentRequests: String {
+        guard url != nil else { return "" }
+        let log = recentLog(limit: 15)
+        guard !log.isEmpty else { return "" }
+        return "What they asked you lately (newest last), from \(relative(logURL(for: Date())))…:\n" + log.joined(separator: "\n")
     }
 
     // MARK: - Memory: the conversation log

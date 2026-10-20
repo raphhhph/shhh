@@ -231,6 +231,10 @@ enum CommandLineTool {
         case ("--prereading", 2):
             MainActor.assumeIsolated { print(Textbook.buildPreReading(spec: args[1])) }
             exit(0)
+        case ("--system-prompt", 1):
+            // Joe --system-prompt: what Claude is told before every conversation.
+            MainActor.assumeIsolated { print(Session.currentSystemPrompt()) }
+            exit(0)
         case ("--daybook", 1):
             // Shhh --daybook: what the assistant is told about the user's day.
             print(Daybook.instructions)

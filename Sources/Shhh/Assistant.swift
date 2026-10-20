@@ -282,7 +282,12 @@ final class Assistant {
     /// doing a piece of schoolwork. Not converting, reading or filing (short words like "EE" or
     /// "Keynote" switched it on for a PDF-to-Keynote request that needed no extra intelligence).
     static func needsStrongModel(_ request: String) -> Bool {
-        request.range(of: #"\b(design|redesign|make (it|them|this) look (good|better|nice|professional)|formative|summative|worksheet|inquiry|assignment|homework|essay|lab report|internal assessment|extended essay)\b"#,
+        // Asking about schoolwork ("when is my next summative?", "what homework do I have?") is a
+        // lookup, not schoolwork: Haiku does it.
+        if request.range(of: #"^\W*(hey,? joe,?\s*)?(when|what|which|is|are|do i have|how many|have i|did i|list|show|check|remind)\b"#,
+                         options: [.regularExpression, .caseInsensitive]) != nil
+            || request.range(of: #"什么时|几号|哪天|哪一天|有没有|有什么|是什么|吗[？?]?\s*$"#, options: .regularExpression) != nil { return false }
+        return request.range(of: #"\b(design|redesign|make (it|them|this) look (good|better|nice|professional)|formative|summative|worksheet|inquiry|assignment|homework|essay|lab report|internal assessment|extended essay)\b"#,
                       options: [.regularExpression, .caseInsensitive]) != nil
     }
 
@@ -377,7 +382,7 @@ final class Assistant {
 
 /// One `claude -p` process, talking JSON lines over stdin and stdout.
 @MainActor
-private final class Session {
+final class Session {
     private let process = Process()
     private let input = Pipe()
     private let output = Pipe()
@@ -491,7 +496,13 @@ private final class Session {
         // The time it's sent, to the second: the system prompt is written once per conversation,
         // so a time there goes stale with every follow-up.
         let sent = Date().formatted(.dateTime.weekday(.wide).day().month(.wide).year().hour().minute().second())
-        let request = request + "\n\n(Sent \(sent), \(TimeZone.current.identifier).)"
+        var request = request + "\n\n(Sent \(sent), \(TimeZone.current.identifier).)"
+        // What they asked lately comes with the first request, not in the system prompt: it changes
+        // after every request, and there it would stop Claude reusing the instructions from its cache.
+        if requestsSent == 1 {
+            let recent = Daybook.recentRequests
+            if !recent.isEmpty { request = "<context>\n\(recent)\n</context>\n\n" + request }
+        }
         let content: Any = screenshot.map { image in [
             ["type": "image", "source": ["type": "base64", "media_type": "image/jpeg", "data": image.base64EncodedString()]],
             ["type": "text", "text": request],
@@ -521,6 +532,9 @@ private final class Session {
         }
         // "API key" mode (Settings → Advanced): Claude Code bills that key per request instead.
         if let key = AIAccount.apiKey { environment["ANTHROPIC_API_KEY"] = key }
+        // Keep the instructions in Claude's cache for an hour instead of five minutes: requests come
+        // minutes apart, and a cached prompt is read at a tenth of the price, and sooner.
+        environment["CLAUDE_CODE_PROMPT_CACHE_TTL"] = "1h"
         // Apps opened from Finder get a bare PATH, and some MCP servers run through Homebrew's npx.
         environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
         return environment
@@ -873,6 +887,12 @@ private final class Session {
             return "You've reached your Claude usage limit for now. \(error)"
         }
         return error.isEmpty ? "Something went wrong." : error
+    }
+
+    /// What Claude is told before every conversation, for `Joe --system-prompt`.
+    static func currentSystemPrompt() -> String {
+        let vault = Assistant.vaultURL
+        return systemPrompt(Assistant.effort, autonomy: Assistant.autonomy, instructions: Instructions(vault: vault).text, vault: vault)
     }
 
     private static func systemPrompt(_ effort: Assistant.Effort, autonomy: Assistant.Autonomy,

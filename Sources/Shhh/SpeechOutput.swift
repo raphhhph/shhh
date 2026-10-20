@@ -47,6 +47,25 @@ final class SpeechOutput {
         ("bm_george", "George: UK, male"), ("bm_lewis", "Lewis: UK, male"),
     ]
 
+    /// The voice for sentences in Chinese (Kokoro's Mandarin model); English stays in `naturalVoice`.
+    static var chineseVoice: String {
+        get { UserDefaults.standard.string(forKey: "chineseVoice") ?? "zf_001" }
+        set { UserDefaults.standard.set(newValue, forKey: "chineseVoice") }
+    }
+
+    static let chineseVoices: [(id: String, name: String)] = [
+        ("zf_001", "Female 1"), ("zf_002", "Female 2"), ("zf_003", "Female 3"),
+        ("zm_009", "Male 1"), ("zm_010", "Male 2"), ("zm_011", "Male 3"),
+    ]
+
+    /// Mostly Chinese characters: read with the Mandarin voice.
+    nonisolated static func isChinese(_ text: String) -> Bool {
+        let letters = text.unicodeScalars.filter { CharacterSet.letters.contains($0) }
+        guard !letters.isEmpty else { return false }
+        let han = letters.filter { (0x4E00...0x9FFF).contains($0.value) || (0x3400...0x4DBF).contains($0.value) }.count
+        return Double(han) / Double(letters.count) > 0.4
+    }
+
     /// Expressive: whether the assistant may laugh, chuckle or sigh now and then.
     static var expressiveSounds: Bool {
         get { UserDefaults.standard.object(forKey: "expressiveSounds") as? Bool ?? true }
@@ -144,9 +163,11 @@ final class SpeechOutput {
             .flatMap { Self.sentences(in: $0) }
             .filter { $0.contains(where: \.isLetter) }
         for sentence in sentences {
-            // The new voices speak English; anything else goes to Apple's.
+            // The new voices speak English, and Natural also Chinese (Kokoro's Mandarin model);
+            // anything else goes to Apple's.
             let english = (NLLanguageRecognizer.dominantLanguage(for: Self.withoutSounds(sentence)) ?? .english) == .english
-            if engine == .apple || !english {
+            let chinese = engine == .natural && Self.isChinese(sentence)
+            if engine == .apple || (!english && !chinese) {
                 let utterance = AVSpeechUtterance(string: Self.withoutSounds(sentence))
                 utterance.voice = Self.appleVoice(for: sentence)
                 apple.speak(utterance)
@@ -261,6 +282,9 @@ private final class NeuralVoices {
     private(set) var status: String?
     private var kokoro: KokoroAneManager?
     private var kokoroVoice: String?
+    /// Kokoro's Mandarin model, loaded the first time a sentence in Chinese is read.
+    private var kokoroChinese: KokoroAneManager?
+    private var kokoroChineseVoice: String?
     /// A `ChatterboxNanoManager`, which needs macOS 15.
     private var nano: AnyObject?
 
@@ -298,9 +322,26 @@ private final class NeuralVoices {
             let audio = try await expressiveManager().synthesize(text: text)
             return Audio(samples: audio.samples, sampleRate: audio.sampleRate)
         default:
+            if SpeechOutput.isChinese(text) {
+                let chinese = SpeechOutput.chineseVoice
+                let result = try await chineseManager(voice: chinese).synthesizeDetailed(text: text, voice: chinese)
+                return Audio(samples: result.samples, sampleRate: result.sampleRate)
+            }
             let result = try await naturalManager(voice: voice).synthesizeDetailed(text: text, voice: voice)
             return Audio(samples: result.samples, sampleRate: result.sampleRate)
         }
+    }
+
+    private func chineseManager(voice: String) async throws -> KokoroAneManager {
+        if let kokoroChinese, kokoroChineseVoice == voice { return kokoroChinese }
+        status = "Getting the Chinese voice ready…"
+        defer { status = nil }
+        let version: KokoroAneVersion = if #available(macOS 15, *) { .v3 } else { .legacy }
+        let manager = kokoroChinese ?? KokoroAneManager(variant: .mandarin, defaultVoice: voice, version: version)
+        try await manager.initialize(preloadVoices: [voice])
+        kokoroChinese = manager
+        kokoroChineseVoice = voice
+        return manager
     }
 
     private func naturalManager(voice: String) async throws -> KokoroAneManager {

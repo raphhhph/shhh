@@ -151,6 +151,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - Launch and quit
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        ModelDownloads.apply() // Hugging Face or the China mirror, before any model loads
+        Task.detached(priority: .utility) { await NoiseFilter.shared.prepare() }
         phone.run = { [weak self] request, done in self?.startInBackground(request, onFinished: done) }
         wake.canListen = { [weak self] in
             guard let self else { return false }
@@ -1227,7 +1229,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             do {
                 // Normally well under a second. Far longer means the model is stuck.
                 let seconds = Double(samples.count) / 16_000
-                text = try await withTimeout(15 + seconds) { try await transcriber.transcribe(samples) }
+                let heard = await NoiseFilter.shared.clean(samples) // background noise out (Settings)
+                text = try await withTimeout(15 + seconds) { try await transcriber.transcribe(heard) }
             } catch {
                 NSSound.beep()
                 if error is WatchdogError, transcriber === self.transcriber { reloadSpeechModel() }

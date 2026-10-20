@@ -193,7 +193,7 @@ final class Notepad {
         // Split where the voice changes; a new line, with who's speaking, each time it does.
         for turn in await speakers.split(samples) {
             guard turn.samples.count >= 16_000 / 2, !Self.isQuiet(turn.samples),
-                  let text = try? await transcriber.transcribe(turn.samples), !text.isEmpty else { continue }
+                  let text = try? await transcriber.transcribe(await NoiseFilter.shared.clean(turn.samples)), !text.isEmpty else { continue }
             if !turn.label.isEmpty, turn.label != lastSpeaker {
                 lastSpeaker = turn.label
                 append("\(turn.label): " + Vocabulary.apply(text), separator: "\n\n")

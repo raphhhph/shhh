@@ -1889,6 +1889,9 @@ private struct SettingsPage: View {
     @State private var voiceLearned = 0
     @AppStorage("useAPIKey") private var useAPIKey = false
     @AppStorage("ibQuestion") private var ibQuestion = true
+    @AppStorage("reduceNoise") private var reduceNoise = true
+    @AppStorage("chineseVoice") private var chineseVoice = "zf_001"
+    @AppStorage("modelMirrorChina") private var chinaMirror = false
     @AppStorage("profileSchool") private var profileSchool = ""
     @AppStorage("profileProgramme") private var profileProgramme = ""
     @AppStorage("profileSubjects") private var profileSubjects = ""
@@ -2001,6 +2004,7 @@ private struct SettingsPage: View {
             row("Microphone") {
                 Choice(options: [("", "Automatic")] + model.actions.microphones().map { ($0.uid, $0.name) }, selection: $microphone)
             }
+            row("Reduce background noise", "Takes out fans and chatter before your words are written, on this Mac") { switchOn($reduceNoise) }
             row("Languages", "English only stops it mishearing you as Russian", last: true) {
                 Choice(options: [(true, "English only"), (false, "25 languages")], selection: $englishOnly)
                     .onChange(of: englishOnly) { model.actions.setEnglishOnly(englishOnly) }
@@ -2037,6 +2041,9 @@ private struct SettingsPage: View {
             row("Natural voice") {
                 Choice(options: SpeechOutput.naturalVoices.map { ($0.id, $0.name) }, selection: $naturalVoice)
                     .onChange(of: naturalVoice) { model.actions.setNaturalVoice(naturalVoice) }
+            }
+            row("Chinese voice", "Used for sentences in Chinese (Natural voice)") {
+                Choice(options: SpeechOutput.chineseVoices.map { ($0.id, $0.name) }, selection: $chineseVoice)
             }
             row("Laughs and sighs", "In the Expressive voice") { switchOn($sounds) }
             row("Read briefings aloud", last: true) { switchOn($speakBriefing) }
@@ -2126,6 +2133,12 @@ private struct SettingsPage: View {
             }
             row("Click and type", "Joe can use your mouse and keyboard") { switchOn($control) { model.actions.setScreenControl($0) } }
             row("AI cleanup", "Removes filler words from dictation, on this Mac", last: true) { switchOn($cleanup) { model.actions.setCleanup($0) } }
+        }
+        section("Downloads", "arrow.down.circle") {
+            row("Download models from", chinaMirror ? "HF-Mirror: works in mainland China without a VPN" : "Hugging Face", last: true) {
+                Choice(options: [(false, "Hugging Face"), (true, "China mirror")], selection: Binding(
+                    get: { chinaMirror }, set: { chinaMirror = $0; ModelDownloads.useChinaMirror = $0 }))
+            }
         }
         section("Memory", "brain") {
             row("Memory vault", Assistant.vaultURL?.path.replacingOccurrences(of: NSHomeDirectory(), with: "~") ?? "None") {

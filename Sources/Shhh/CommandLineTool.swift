@@ -1,3 +1,4 @@
+import AVFoundation
 import FluidAudio
 import AppKit
 
@@ -35,6 +36,19 @@ enum CommandLineTool {
             guard let style = WritingStyle(rawValue: args[1]) else { fail("Unknown style: \(args[1])") }
             print(style.apply(args[2]))
             exit(0)
+        case ("--denoise", 3):
+            // Joe --denoise in.wav out.wav: the noise filter on a file, for testing it.
+            run {
+                let samples = try AudioConverter(sampleRate: 16_000).resampleAudioFile(URL(fileURLWithPath: args[1]))
+                let cleaned = await NoiseFilter.shared.clean(samples)
+                let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)!
+                let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(cleaned.count))!
+                buffer.frameLength = AVAudioFrameCount(cleaned.count)
+                cleaned.withUnsafeBufferPointer { buffer.floatChannelData![0].update(from: $0.baseAddress!, count: cleaned.count) }
+                let file = try AVAudioFile(forWriting: URL(fileURLWithPath: args[2]), settings: format.settings)
+                try file.write(from: buffer)
+                print(cleaned == samples ? "Unchanged (filter not ready or off)." : "Cleaned: \(args[2])")
+            }
         case ("--transcribe", 2):
             run { try await transcribe(file: args[1]) }
         case ("--clean", 2):

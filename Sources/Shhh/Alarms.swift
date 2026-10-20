@@ -433,7 +433,8 @@ final class AlarmClock {
         model.alarm = alarm
         // A morning alarm only stops once they've read the verse or fact, or answered the question.
         let challenge = WakeChallenge.applies(to: alarm)
-        model.challenge = challenge ? WakeChallenge.today() : nil
+        // The second alarm of a morning gets a different challenge from the first.
+        model.challenge = challenge ? WakeChallenge.today(seed: WakeChallenge.nextRing()) : nil
         model.feedback = nil
         model.heard = nil
         model.canSnooze = !challenge || !snoozedThisMorning

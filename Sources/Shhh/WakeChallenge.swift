@@ -19,6 +19,16 @@ struct WakeChallenge: Equatable {
         set { UserDefaults.standard.set(newValue, forKey: "wakeChallenge") }
     }
 
+    /// How many challenges have rung today (0 for the first), counted as each one rings.
+    static func nextRing() -> Int {
+        let today = Date().formatted(.iso8601.year().month().day())
+        let defaults = UserDefaults.standard
+        let count = defaults.string(forKey: "wakeChallengeDay") == today ? defaults.integer(forKey: "wakeChallengeCount") : 0
+        defaults.set(today, forKey: "wakeChallengeDay")
+        defaults.set(count + 1, forKey: "wakeChallengeCount")
+        return count
+    }
+
     static func applies(to alarm: Alarm) -> Bool {
         guard isEnabled, alarm.kind == .alarm else { return false }
         // "Wake up" at any hour (a nap, a night shift, a test) gets one too.

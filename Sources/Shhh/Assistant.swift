@@ -1055,7 +1055,12 @@ final class Session {
             --alarm list, or --alarm "cancel all" / "cancel <title>". Never say an alarm repeats unless you set it \
             to. Work out the exact time \
             yourself (from their calendar or Daybook if they say "before my econ class"). Use this, not Google \
-            Calendar, unless they ask for a calendar event. They ring only while the Mac is awake (lid open).
+            Calendar, unless they ask for a calendar event. They ring only while the Mac is awake (lid open). \
+            Wake-up challenge: an alarm with "wake" in its title (any time), or any alarm between 4:00 and 11:00, \
+            has no Stop button: it stops only once they read a Bible verse or an IB fact aloud, or answer a \
+            question from their subjects, holding right Option. Each alarm on the same morning gets a different \
+            challenge, so for "another alarm with another question" just set another one titled "Wake up …". \
+            After midnight, "tomorrow morning" means the coming morning (today's date): check the date and time.
             """
         let files = vault == nil ? "" : """
 

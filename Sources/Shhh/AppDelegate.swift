@@ -178,7 +178,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         ModelDownloads.apply() // Hugging Face or the China mirror, before any model loads
         AppAppearance.apply() // light, dark or the Mac's
-        Task.detached(priority: .utility) { await NoiseFilter.shared.prepare() }
         phone.run = { [weak self] request, done in self?.startInBackground(request, onFinished: done) }
         wake.canListen = { [weak self] in
             guard let self else { return false }
@@ -208,7 +207,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.answerPanel.setSpeaking(false)
         }
         watchForMorning()
-        speech.prepare()
         alarms.onNotice = { [weak self] text in self?.toast.show(text, symbol: "alarm.fill", tint: .orange) }
         studyBoard.speak = { [weak self] text in
             guard let self, !text.isEmpty else { return }
@@ -459,8 +457,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 guard transcriber === self.transcriber else { return } // replaced meanwhile
                 speechLoading = false
+                let first = !speechReady
                 speechReady = true
                 speechStatus = "Hold right ⌘ to dictate"
+                // Then the rest, so the keys never wait behind them: the voice and the noise filter.
+                if first {
+                    speech.prepare()
+                    Task.detached(priority: .utility) { await NoiseFilter.shared.prepare() }
+                }
             } catch {
                 guard transcriber === self.transcriber else { return }
                 speechLoading = false

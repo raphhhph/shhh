@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreML
 import FluidAudio
 
 /// On-device speech-to-text with NVIDIA Parakeet: English-only (v2) by default, or the
@@ -30,7 +31,13 @@ actor Transcriber {
     /// Downloads the model on first use (~500 MB, cached afterwards) and loads it.
     func load(progress: @escaping @Sendable (Double) -> Void) async throws {
         guard manager == nil else { return }
-        let models = try await AsrModels.downloadAndLoad(version: Self.languages == .european ? .redux : .v2,
+        // On the GPU, not the Neural Engine: after every update macOS recompiles a Neural Engine model
+        // from scratch, which took minutes, and the keys waited. The GPU is ready in seconds and fast
+        // enough for a few seconds of speech.
+        let gpu = MLModelConfiguration()
+        gpu.computeUnits = .cpuAndGPU
+        let models = try await AsrModels.downloadAndLoad(configuration: gpu, version: Self.languages == .european ? .redux : .v2,
+                                                         encoderComputeUnits: .cpuAndGPU,
                                                          progressHandler: { progress($0.fractionCompleted) })
         let manager = AsrManager(config: .default)
         try await manager.loadModels(models)

@@ -572,7 +572,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             task.doneAt = Date()
             task.canFollowUp = true
             Daybook.log(question: task.question, reply: task.reply) // memory across days
-            ActivityLog.record(.ask, task.question, answer: task.subject) // the dashboard's history
+            ActivityLog.record(.ask, task.question, answer: task.subject, // the dashboard's history
+                               reply: SpeechOutput.withoutSounds(ScreenContext.display(Subject.split(task.reply).body)))
             if let finished = task.onFinished {
                 task.onFinished = nil
                 let parts = Subject.split(task.reply)
@@ -711,9 +712,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             tasks, anything due today or tomorrow, the emails that need me, and today's regular meetings from my \
             patterns.
             On a day off (a weekend or holiday) it's a lighter brief instead, in a relaxed tone: what's due when \
-            school is back (and later this week), anything on today's calendar, the one WellPrepped thing that \
-            matters most, and one thing from my backlog worth doing today. No classes.
+            school is back (and later this week), anything on today's calendar, \(Profile.project.isEmpty ? "" : "the one \(Profile.project) thing that matters most, ")and one thing from my backlog worth doing today. No classes.\(Self.ibQuestion)
             """)
+    }
+
+    /// "IB question of the day" (Settings → Automations): the end of the morning brief.
+    private static var ibQuestion: String {
+        guard UserDefaults.standard.object(forKey: "ibQuestion") as? Bool ?? true,
+              let subjects = Daybook.root?.appendingPathComponent("School/Subjects"),
+              FileManager.default.fileExists(atPath: subjects.path) else { return "" }
+        let log = Daybook.relative(Daybook.root?.appendingPathComponent("School/IB Daily Questions.md"))
+        return """
+
+            Last, my IB question of the day. Read \(log) (make it if it's missing) for the subject asked last time, \
+            take the next of my subjects in \(Daybook.relative(subjects))/ in turn, and ask me one short question on it \
+            in IB style, answerable in 1–3 minutes and drawn from that subject's note: a Math AI calculation, an \
+            Economics or Business "explain" with a real example, ESS data to interpret, a short text to analyse for \
+            English, a sentence to translate or a word to use for Chinese B. Name the command term. Don't give the \
+            answer. Add it to the log (date, subject, topic, question). When I answer later, mark it (right, partly, \
+            not yet), give the model answer in two lines, and log the result.
+            """
     }
 
     // MARK: - Night shutdown

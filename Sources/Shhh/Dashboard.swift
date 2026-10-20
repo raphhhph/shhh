@@ -74,12 +74,13 @@ final class Dashboard: NSObject, NSWindowDelegate {
 @MainActor
 final class DashboardModel: ObservableObject {
     enum Page: String, CaseIterable, Identifiable {
-        case home, calendar, history, routines, alarms, notes, dictionary, music, settings
+        case home, calendar, history, routines, alarms, notes, dictionary, music, usage, settings
         var id: String { rawValue }
         var title: String {
             switch self {
             case .home: "Home"
             case .calendar: "Calendar"
+            case .usage: "Usage"
             case .history: "History"
             case .routines: "Routines"
             case .alarms: "Alarms"
@@ -93,6 +94,7 @@ final class DashboardModel: ObservableObject {
             switch self {
             case .home: "house"
             case .calendar: "calendar"
+            case .usage: "chart.bar"
             case .history: "clock.arrow.circlepath"
             case .routines: "wand.and.stars"
             case .alarms: "alarm"
@@ -322,6 +324,7 @@ private struct PageTitle: View {
 
 private struct DashboardView: View {
     @ObservedObject var model: DashboardModel
+    @AppStorage("profileSetUp") private var setUp = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -334,9 +337,11 @@ private struct DashboardView: View {
                 Rectangle().fill(Look.line).frame(width: 1)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
+                        if !setUp { WelcomePage(model: model) } else {
                         switch model.page {
                         case .home: HomePage(model: model)
                         case .calendar: CalendarPage(model: model)
+                        case .usage: UsagePage()
                         case .history: HistoryPage(model: model)
                         case .routines: RoutinesPage(model: model)
                         case .alarms: AlarmsPage(model: model)
@@ -344,6 +349,7 @@ private struct DashboardView: View {
                         case .dictionary: DictionaryPage()
                         case .music: MusicPage(model: model)
                         case .settings: SettingsPage(model: model)
+                        }
                         }
                     }
                     .environment(\.narrow, content < 820)
@@ -432,8 +438,8 @@ private struct HomePage: View {
     private var greeting: String {
         let hour = Calendar.current.component(.hour, from: Date())
         let part = hour < 5 ? "Up late" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening"
-        let name = UserDefaults.standard.string(forKey: "userName") ?? "Raphael"
-        return "\(part), \(name)"
+        let name = Profile.name
+        return name.isEmpty ? part : "\(part), \(name)"
     }
 
     var body: some View {
@@ -816,7 +822,8 @@ private struct HistoryPage: View {
                 .padding(.leading, 4)
                 VStack(spacing: 0) {
                     ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-                        HistoryRow(entry: entry)
+                        HistoryRow(entry: entry, onDelete: { ActivityLog.delete(entry.id); model.reload() },
+                                   onContinue: { followUp in model.actions.ask(Self.continuing(entry, followUp)) })
                         if index < entries.count - 1 { Rectangle().fill(Look.line).frame(height: 1).padding(.leading, 62) }
                     }
                 }
@@ -824,6 +831,15 @@ private struct HistoryPage: View {
                 .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Look.line))
             }
         }
+    }
+
+    /// A follow-up to an old conversation, with what was said then (sessions aren't kept).
+    private static func continuing(_ entry: Activity, _ followUp: String) -> String {
+        """
+        [Continuing a conversation from \(entry.date.formatted(date: .abbreviated, time: .shortened)). I asked: \
+        “\(entry.text)”. You answered: “\((entry.reply ?? entry.answer ?? "").prefix(2500))”.]
+        \(followUp)
+        """
     }
 
     private static func title(_ day: Date) -> String {
@@ -838,9 +854,13 @@ private struct HistoryPage: View {
 /// the copy button shows on hover.
 private struct HistoryRow: View {
     let entry: Activity
+    var onDelete: () -> Void = {}
+    var onContinue: (String) -> Void = { _ in }
     @State private var open = false
     @State private var hovering = false
     @State private var copied = false
+    @State private var followUp = ""
+    @State private var continuing = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -854,24 +874,48 @@ private struct HistoryRow: View {
                 .foregroundStyle(entry.kind == .ask ? Look.accent : .secondary)
                 .frame(width: 22, height: 22)
                 .background((entry.kind == .ask ? Look.accent : Color.secondary).opacity(0.12), in: Circle())
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(entry.text).font(.system(size: 13.5)).lineLimit(open ? nil : 2).textSelection(.enabled)
-                if let answer = entry.answer {
+                if open, let reply = entry.reply, !reply.isEmpty {
+                    // The whole answer, as Joe gave it.
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let subject = entry.answer { Text(subject).font(.system(size: 12.5, weight: .semibold)) }
+                        Text(reply).font(.system(size: 12.5)).foregroundStyle(.secondary).textSelection(.enabled)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+                } else if let answer = entry.answer {
                     Text(answer).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(open ? nil : 1)
                         .padding(.horizontal, 8).padding(.vertical, 3)
                         .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 6))
                 }
+                if continuing {
+                    HStack(spacing: 8) {
+                        TextField("Ask a follow-up…", text: $followUp)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit(send)
+                        Button("Send", action: send).buttonStyle(PillButton(prominent: true)).disabled(followUp.isEmpty)
+                    }
+                }
             }
             Spacer(minLength: 8)
-            Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(entry.text, forType: .string)
-                copied = true
-            } label: { Image(systemName: copied ? "checkmark" : "doc.on.doc").font(.system(size: 12)) }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .opacity(hovering || copied ? 1 : 0)
-                .help("Copy")
+            HStack(spacing: 10) {
+                if entry.kind == .ask {
+                    Button { continuing.toggle(); open = true } label: { Image(systemName: "arrowshape.turn.up.left").font(.system(size: 12)) }
+                        .buttonStyle(.plain).help("Continue this conversation")
+                }
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(entry.reply.map { entry.text + "\n\n" + $0 } ?? entry.text, forType: .string)
+                    copied = true
+                } label: { Image(systemName: copied ? "checkmark" : "doc.on.doc").font(.system(size: 12)) }
+                    .buttonStyle(.plain).help("Copy")
+                Button(action: onDelete) { Image(systemName: "trash").font(.system(size: 12)) }
+                    .buttonStyle(.plain).help("Delete from history")
+            }
+            .foregroundStyle(.secondary)
+            .opacity(hovering || copied || continuing ? 1 : 0)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
@@ -879,6 +923,14 @@ private struct HistoryRow: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture { withAnimation(.easeOut(duration: 0.12)) { open.toggle() } }
+    }
+
+    private func send() {
+        let text = followUp.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return }
+        onContinue(text)
+        followUp = ""
+        continuing = false
     }
 }
 
@@ -899,6 +951,178 @@ private struct SearchField: View {
         .frame(width: 240, height: 30)
         .background(Look.card, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Look.line))
+    }
+}
+
+// MARK: - Welcome
+
+/// The first launch: who they are, where notes go, how Joe reaches Claude, and the two
+/// permissions it can't work without. One page, editable later in Settings.
+private struct WelcomePage: View {
+    @ObservedObject var model: DashboardModel
+    @AppStorage("userName") private var name = ""
+    @AppStorage("profileSchool") private var school = ""
+    @AppStorage("profileProgramme") private var programme = ""
+    @AppStorage("profileSubjects") private var subjects = ""
+    @AppStorage("profileProject") private var project = ""
+    @AppStorage("profileSetUp") private var setUp = false
+    @AppStorage("useAPIKey") private var useAPIKey = false
+    @State private var apiKey = ""
+    @State private var refresh = 0
+
+    var body: some View {
+        PageTitle(title: "Welcome to Joe", subtitle: "Hold a key, say what you need, and Joe does it. A minute of setup first.")
+        Card(title: "About you", symbol: "person.crop.circle") {
+            field("Your name", "Raphael", $name)
+            field("School", "Shenzhen International School", $school)
+            field("Programme and year", "IB Diploma, year 1 (DP1)", $programme)
+            field("Subjects and levels", "Math AI HL, Economics HL, ESS SL…", $subjects)
+            field("A business or project of yours (optional)", "WellPrepped", $project)
+        }
+        Card(title: "Your notes", symbol: "folder") {
+            Text(Assistant.vaultURL.map { "Joe keeps notes, your Daybook and his memory in \($0.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))." }
+                 ?? "Joe keeps lecture notes, your daily plan and his memory in a folder. Use your Obsidian vault, or let Joe make one.")
+                .font(.system(size: 13)).foregroundStyle(.secondary)
+            HStack {
+                Button("Use my Obsidian vault…") { model.actions.chooseVault(); refresh += 1 }.buttonStyle(PillButton())
+                Button("Make a Joe folder in Documents") { makeFolder(); refresh += 1 }.buttonStyle(PillButton())
+            }
+        }
+        .id(refresh)
+        Card(title: "Claude", symbol: "sparkle") {
+            if Assistant.executable == nil {
+                Text("Joe thinks with Claude through Claude Code, which isn't installed yet. In Terminal: npm install -g @anthropic-ai/claude-code, then run claude once to sign in.")
+                    .font(.system(size: 13)).foregroundStyle(.orange)
+            } else {
+                Label("Claude Code is installed.", systemImage: "checkmark.circle.fill").font(.system(size: 13)).foregroundStyle(.green)
+            }
+            Toggle("Use an Anthropic API key instead of a Claude plan", isOn: $useAPIKey).font(.system(size: 13))
+            if useAPIKey {
+                HStack {
+                    SecureField("sk-ant-…", text: $apiKey).textFieldStyle(.roundedBorder)
+                    Button("Save") { AIAccount.save(apiKey); apiKey = ""; refresh += 1 }.buttonStyle(PillButton(prominent: true)).disabled(apiKey.count < 20)
+                }
+                if let saved = AIAccount.maskedKey { Text("Saved: \(saved)").font(.system(size: 12)).foregroundStyle(.secondary) }
+            }
+        }
+        Card(title: "Permissions", symbol: "checkmark.shield") {
+            permission("Microphone", "To hear you while you hold a key", AVCaptureDevice.authorizationStatus(for: .audio) == .authorized, "Privacy_Microphone")
+            permission("Accessibility", "To type what you dictate", AXIsProcessTrusted(), "Privacy_Accessibility")
+            Text("Hold right ⌘ to dictate into any app; hold right ⌥ to ask Joe.").font(.system(size: 12.5)).foregroundStyle(.secondary)
+        }
+        .id(refresh)
+        HStack {
+            Spacer()
+            Button("Start using Joe") { setUp = true; model.reload() }
+                .buttonStyle(PillButton(prominent: true))
+                .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+    }
+
+    private func field(_ label: String, _ example: String, _ value: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label).font(.system(size: 12.5, weight: .medium))
+            TextField(example, text: value).textFieldStyle(.roundedBorder)
+        }
+    }
+
+    private func permission(_ label: String, _ detail: String, _ granted: Bool, _ pane: String) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label).font(.system(size: 13.5, weight: .medium))
+                Text(detail).font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if granted {
+                Label("Allowed", systemImage: "checkmark.circle.fill").font(.system(size: 13, weight: .medium)).foregroundStyle(.green)
+            } else {
+                Button("Allow…") {
+                    if pane == "Privacy_Microphone" { AVCaptureDevice.requestAccess(for: .audio) { _ in } }
+                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")!)
+                }
+                .buttonStyle(PillButton(prominent: true))
+            }
+        }
+    }
+
+    /// ~/Documents/Joe, with the folders Joe files things in.
+    private func makeFolder() {
+        let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Joe", isDirectory: true)
+        for sub in ["School/Lecture Notes", "Meetings", "Notes", "Daybook/History", "People"] {
+            try? FileManager.default.createDirectory(at: folder.appendingPathComponent(sub), withIntermediateDirectories: true)
+        }
+        Assistant.vaultURL = folder
+    }
+}
+
+// MARK: - Usage
+
+/// What Joe's requests cost (from the usage log): today, this week, by kind, and what a month
+/// looks like at this rate. On a Claude plan it's what the same use would cost on the API.
+private struct UsagePage: View {
+    @Environment(\.narrow) private var narrow
+    @State private var entries: [UsageLog.Entry] = []
+
+    var body: some View {
+        PageTitle(title: "Usage", subtitle: AIAccount.usesAPIKey ? "Billed to your API key, per request." : "On your Claude plan. Costs show what the same use would cost on the API.")
+        let calendar = Calendar.current
+        let today = entries.filter { calendar.isDateInToday($0.date) }
+        let weekAgo = Date().addingTimeInterval(-7 * 86_400)
+        let week = entries.filter { $0.date > weekAgo }
+        let days = Set(week.map { calendar.startOfDay(for: $0.date) }).count
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: narrow ? 2 : 4), spacing: 12) {
+            stat(Self.dollars(today.reduce(0) { $0 + $1.cost }), "today", "sun.max")
+            stat(Self.dollars(week.reduce(0) { $0 + $1.cost }), "last 7 days", "calendar")
+            stat("\(week.count)", "requests, last 7 days", "sparkle")
+            stat(Self.dollars(days == 0 ? 0 : week.reduce(0) { $0 + $1.cost } / Double(days) * 30), "a month at this rate", "chart.line.uptrend.xyaxis")
+        }
+        Card(title: "By kind, last 7 days", symbol: "square.grid.2x2") {
+            if week.isEmpty { Text("Nothing logged yet: costs appear after Joe's next request.").font(.system(size: 13)).foregroundStyle(.secondary) }
+            ForEach(Self.byKind(week), id: \.kind) { group in
+                HStack {
+                    Text(group.kind).font(.system(size: 14, weight: .medium))
+                    Spacer()
+                    Text("\(group.count) × avg \(Self.dollars(group.total / Double(group.count)))").font(.system(size: 12.5)).foregroundStyle(.secondary)
+                    Text(Self.dollars(group.total)).font(.system(size: 14, weight: .semibold).monospacedDigit()).frame(width: 80, alignment: .trailing)
+                }
+            }
+        }
+        Card(title: "Most expensive, last 7 days", symbol: "arrow.up.circle") {
+            ForEach(week.sorted { $0.cost > $1.cost }.prefix(8)) { entry in
+                HStack(spacing: 10) {
+                    Text(Self.dollars(entry.cost)).font(.system(size: 13, weight: .semibold).monospacedDigit()).frame(width: 64, alignment: .leading)
+                    Text(entry.request.replacingOccurrences(of: "\n", with: " ")).font(.system(size: 13)).lineLimit(1)
+                    Spacer()
+                    Text(entry.model.replacingOccurrences(of: "claude-", with: "")).font(.system(size: 11.5)).foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .onAppear { entries = UsageLog.load() }
+    }
+
+    private static func byKind(_ entries: [UsageLog.Entry]) -> [(kind: String, count: Int, total: Double)] {
+        var groups: [String: (count: Int, total: Double)] = [:]
+        for entry in entries {
+            let current = groups[entry.kind] ?? (0, 0)
+            groups[entry.kind] = (current.count + 1, current.total + entry.cost)
+        }
+        return groups.map { (kind: $0.key, count: $0.value.count, total: $0.value.total) }.sorted { $0.total > $1.total }
+    }
+
+    private static func dollars(_ value: Double) -> String {
+        value < 1 ? String(format: "$%.3f", value) : String(format: "$%.2f", value)
+    }
+
+    private func stat(_ value: String, _ label: String, _ symbol: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Image(systemName: symbol).foregroundStyle(Look.accent)
+            Text(value).font(.system(size: 22, weight: .bold).monospacedDigit())
+            Text(label).font(.system(size: 12)).foregroundStyle(.secondary)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Look.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Look.line))
     }
 }
 
@@ -1729,6 +1953,26 @@ private struct SettingsPage: View {
     @AppStorage("wakeWord") private var wakeWord = false
     @State private var permissionsSeen = 0
     @State private var voiceLearned = 0
+    @AppStorage("useAPIKey") private var useAPIKey = false
+    @AppStorage("ibQuestion") private var ibQuestion = true
+    @AppStorage("profileSchool") private var profileSchool = ""
+    @AppStorage("profileProgramme") private var profileProgramme = ""
+    @AppStorage("profileSubjects") private var profileSubjects = ""
+    @AppStorage("profileProject") private var profileProject = ""
+
+    private func profileRow(_ label: String, _ detail: String, _ value: Binding<String>, _ placeholder: String) -> some View {
+        row(label, detail) {
+            TextField(placeholder, text: value)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13, weight: .medium))
+                .multilineTextAlignment(.trailing)
+                .padding(.horizontal, 12)
+                .frame(width: 280, height: 28)
+                .background(Color.primary.opacity(0.06), in: Capsule())
+                .overlay(Capsule().strokeBorder(Look.line))
+        }
+    }
+    @State private var apiKeyDraft = ""
     @AppStorage("assistantModel") private var assistantModel = Assistant.Model.opus.rawValue
     @AppStorage("assistantEffort") private var effort = Assistant.Effort.low.rawValue
     @AppStorage("assistantAutonomy") private var autonomy = Assistant.Autonomy.careful.rawValue
@@ -1737,7 +1981,7 @@ private struct SettingsPage: View {
     @AppStorage("keepHistory") private var keepHistory = true
     @AppStorage("expressiveSounds") private var sounds = true
     @AppStorage("speakBriefing") private var speakBriefing = true
-    @AppStorage("userName") private var userName = "Raphael"
+    @AppStorage("userName") private var userName = ""
     @AppStorage("joeChattiness") private var chattiness = "normal"
     @AppStorage("joeTone") private var tone = "direct"
     @AppStorage("joeHype") private var hype = false
@@ -1803,6 +2047,10 @@ private struct SettingsPage: View {
                     .background(Color.primary.opacity(0.06), in: Capsule())
                     .overlay(Capsule().strokeBorder(Look.line))
             }
+            profileRow("School", "Where you study", $profileSchool, "Your school")
+            profileRow("Programme", "e.g. IB Diploma, year 1 (DP1)", $profileProgramme, "IB Diploma, year 1")
+            profileRow("Subjects", "Joe’s IB help and daily question use these", $profileSubjects, "Math AI HL, ESS SL…")
+            profileRow("Your project", "A business or club Joe should know about", $profileProject, "Optional")
             row("Open Joe at login", last: true) {
                 switchOn($login) { on in
                     do { if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() } } catch { NSSound.beep() }
@@ -1862,7 +2110,8 @@ private struct SettingsPage: View {
         section("Every day", "sun.horizon") {
             row("Morning briefing", "On your first wake of the day") { switchOn($morning) }
             row("Evening check", "19:30: new ManageBac tasks and grades into your Daybook") { switchOn($evening) }
-            row("Night shutdown", "21:30 on school nights", last: true) { switchOn($night) }
+            row("Night shutdown", "21:30 on school nights") { switchOn($night) }
+            row("IB question of the day", "One short question from your subjects, at the end of the morning brief", last: true) { switchOn($ibQuestion) }
         }
         section("iPhone", "iphone") {
             row("Alarms on iPhone", "Copies alarms to a “Joe” list in Reminders") { switchOn($toReminders) }
@@ -1909,6 +2158,23 @@ private struct SettingsPage: View {
     }
 
     @ViewBuilder private var advanced: some View {
+        section("AI account", "creditcard") {
+            row("Pay for Claude with", useAPIKey ? "An Anthropic API key, billed per request" : "The Claude plan Claude Code is signed in to", last: !useAPIKey) {
+                Choice(options: [(false, "Claude plan"), (true, "API key")], selection: $useAPIKey)
+            }
+            if useAPIKey {
+                row("API key", AIAccount.maskedKey.map { "Saved: \($0). New conversations use it." } ?? "From console.anthropic.com → API keys", last: true) {
+                    HStack(spacing: 8) {
+                        SecureField("sk-ant-…", text: $apiKeyDraft)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 220)
+                        Button("Save") { AIAccount.save(apiKeyDraft); apiKeyDraft = ""; model.settingsVersion += 1 }
+                            .buttonStyle(PillButton(prominent: true))
+                            .disabled(apiKeyDraft.count < 20)
+                    }
+                }
+            }
+        }
         section("Brain", "cpu") {
             row("Model", "Smarter, or faster and lighter on your usage") {
                 Choice(options: Assistant.Model.allCases.map { ($0.rawValue, $0.name) }, selection: $assistantModel)

@@ -103,12 +103,12 @@ final class Assistant {
     }
 
     /// Their school's rules on AI, so Joe helps instead of refusing on their behalf.
-    nonisolated static let schoolWork = """
+    nonisolated static var schoolWork: String { """
 
 
-        School work: they're an IB DP1 student, and their teachers allow and expect AI on formatives \
-        and class tasks (worksheets, inquiries, practice questions, homework), especially in ESS and \
-        Business Management. When they ask, do the task with them or for them, fully: read the file, \
+        School work: \(Profile.description) Their teachers allow and expect AI on formatives \
+        and class tasks (worksheets, inquiries, practice questions, homework). When they ask, do the task \
+        with them or for them, fully: read the file, \
         answer every question, fill it in. Don't refuse, hedge or lecture about academic honesty. \
         Friends' work is fine too: redesigning, shortening, converting or giving feedback on a \
         friend's slides or document is a favour they're doing, so do it (save to a new file, never \
@@ -132,7 +132,7 @@ final class Assistant {
         start each step run --plan <its number>, and --plan done at the end. Work through the whole task \
         without stopping to check in (ask only if you truly can't go on), save what you make as a new \
         file, open it at the end, and reply with what you made and where.
-        """
+        """ }
 
     nonisolated static var personality: String {
         let length = switch UserDefaults.standard.string(forKey: "joeChattiness") ?? "normal" {
@@ -397,6 +397,10 @@ private final class Session {
     private var toolInputs: [Int: (name: String, json: String)] = [:]
     /// The plan so far, from `Joe --plan`.
     private var plan: [Assistant.PlanStep] = []
+    /// For the usage log: the model, the latest request, and the conversation's cost so far.
+    private var modelName = ""
+    private var lastSent = ""
+    private var costSoFar = 0.0
     // Actions waiting for the user's OK, shown one at a time.
     private var pending: [(id: String, tool: String, action: ToolPolicy.Action, input: [String: Any], description: String?)] = []
     // What the user allowed "for this task" (until the card is closed).
@@ -413,6 +417,7 @@ private final class Session {
     init(executable: URL, model: Assistant.Model? = nil, effort: Assistant.Effort? = nil,
          onEvent: @escaping @MainActor (Assistant.Event) -> Void) {
         self.onEvent = onEvent
+        modelName = (model ?? Assistant.model).rawValue
         let vault = Assistant.vaultURL
         let instructions = Instructions(vault: vault)
         let autonomy = Assistant.autonomy
@@ -479,6 +484,7 @@ private final class Session {
         turnDone = false
         turnStarted = Date()
         requestsSent += 1
+        lastSent = request
         // The time it's sent, to the second: the system prompt is written once per conversation,
         // so a time there goes stale with every follow-up.
         let sent = Date().formatted(.dateTime.weekday(.wide).day().month(.wide).year().hour().minute().second())
@@ -510,6 +516,8 @@ private final class Session {
             // instead of using the subscription.
             !key.hasPrefix("CLAUDE_CODE_") && !["CLAUDECODE", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"].contains(key)
         }
+        // "API key" mode (Settings → Advanced): Claude Code bills that key per request instead.
+        if let key = AIAccount.apiKey { environment["ANTHROPIC_API_KEY"] = key }
         // Apps opened from Finder get a bare PATH, and some MCP servers run through Homebrew's npx.
         environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
         return environment
@@ -544,6 +552,7 @@ private final class Session {
             noteCreations(message)
         case "result":
             resultsSeen += 1
+            UsageLog.record(message, model: modelName, request: lastSent, total: &costSoFar)
             // Already finished at the end of Claude's turn, or the late result of an earlier request.
             guard !turnDone, resultsSeen == requestsSent else { return }
             let text = message["result"] as? String ?? ""

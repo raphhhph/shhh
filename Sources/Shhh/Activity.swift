@@ -9,8 +9,9 @@ struct Activity: Codable, Identifiable, Hashable {
     var date: Date
     var kind: Kind
     var text: String
-    /// For a request to Joe: the answer's subject line.
+    /// For a request to Joe: the answer's subject line, and the answer itself (up to 4,000 characters).
     var answer: String?
+    var reply: String?
     var words: Int { text.split(whereSeparator: \.isWhitespace).count }
 }
 
@@ -29,10 +30,19 @@ enum ActivityLog {
         return (try? Data(contentsOf: url)).flatMap { try? decoder.decode([Activity].self, from: $0) } ?? []
     }
 
-    static func record(_ kind: Activity.Kind, _ text: String, answer: String? = nil) {
+    static func record(_ kind: Activity.Kind, _ text: String, answer: String? = nil, reply: String? = nil) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard isEnabled, !text.isEmpty else { return }
-        let entries = Array((load() + [Activity(date: Date(), kind: kind, text: text, answer: answer)]).suffix(1000))
+        let entry = Activity(date: Date(), kind: kind, text: text, answer: answer, reply: reply.map { String($0.prefix(4000)) })
+        save(Array((load() + [entry]).suffix(1000)))
+    }
+
+    /// Deletes one entry (History → the bin on a row).
+    static func delete(_ id: UUID) {
+        save(load().filter { $0.id != id })
+    }
+
+    private static func save(_ entries: [Activity]) {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

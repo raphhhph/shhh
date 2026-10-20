@@ -230,7 +230,7 @@ enum Daybook {
               - Rest of today: today's Google Calendar events that aren't classes (classes carry #class).
               - Deadlines: the ManageBac calendar (\(config?.managebacCalendarId ?? "ManageBac")) for the next three weeks.
               - Needs you: at most three emails or invites from the last day that really need their reply (Gmail \
-            inbox, not promotions or social; school mail has label \(config?.swisLabelId ?? "SWIS")), each with who, \
+            inbox, not promotions or social; \(config?.swisLabelId.map { "school mail has label \($0)" } ?? "school mail first")), each with who, \
             what to do and an [Open](link); then "_N others, all noise._".
               - Patterns: read \(relative(patterns)) and use it: prepare them for this weekday's regular meetings. \
             When a meeting or call on today's calendar also happened on this weekday last week, add it there.

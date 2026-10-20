@@ -75,12 +75,13 @@ final class Dashboard: NSObject, NSWindowDelegate {
 @MainActor
 final class DashboardModel: ObservableObject {
     enum Page: String, CaseIterable, Identifiable {
-        case home, calendar, history, routines, alarms, notes, dictionary, music, usage, settings
+        case home, calendar, study, history, routines, alarms, notes, dictionary, music, usage, settings
         var id: String { rawValue }
         var title: String {
             switch self {
             case .home: "Home"
             case .calendar: "Calendar"
+            case .study: "Study"
             case .usage: "Usage"
             case .history: "History"
             case .routines: "Routines"
@@ -95,6 +96,7 @@ final class DashboardModel: ObservableObject {
             switch self {
             case .home: "house"
             case .calendar: "calendar"
+            case .study: "graduationcap"
             case .usage: "chart.bar"
             case .history: "clock.arrow.circlepath"
             case .routines: "wand.and.stars"
@@ -362,6 +364,7 @@ private struct DashboardView: View {
                         switch model.page {
                         case .home: HomePage(model: model)
                         case .calendar: CalendarPage(model: model)
+                        case .study: StudyPage(model: model)
                         case .usage: UsagePage()
                         case .history: HistoryPage(model: model)
                         case .routines: RoutinesPage(model: model)
@@ -389,7 +392,7 @@ private struct DashboardView: View {
 
     /// The pages in groups, like Linear's sidebar: your day, Joe's tools, and the app.
     private static let groups: [(title: String?, pages: [DashboardModel.Page])] = [
-        (nil, [.home, .calendar, .history]),
+        (nil, [.home, .calendar, .study, .history]),
         ("Joe", [.routines, .alarms, .notes, .dictionary, .music]),
     ]
 
@@ -1737,6 +1740,138 @@ private struct CalendarPage: View {
         if item.allDay { return day }
         let start = item.start.formatted(date: .omitted, time: .shortened)
         return day + ", " + (item.end.map { "\(start)–\($0.formatted(date: .omitted, time: .shortened))" } ?? start)
+    }
+}
+
+// MARK: - Study
+
+/// Joe as a study buddy: a card per subject with how the quizzes have gone and a button to start one.
+private struct StudyPage: View {
+    @ObservedObject var model: DashboardModel
+    @Environment(\.narrow) private var narrow
+    @State private var request = ""
+    @State private var results: [StudyBuddy.Result] = []
+
+    /// Their subjects from Settings, and TOK, which everyone takes.
+    private var subjects: [String] {
+        var list = Profile.subjects.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        if !list.contains(where: { StudyBuddy.pack(for: $0) == "Theory of Knowledge" }) { list.append("TOK") }
+        return list
+    }
+
+    var body: some View {
+        PageTitle(title: "Study", subtitle: "Joe quizzes you on the IB syllabus, from your own notes and textbooks, and marks you like an examiner.")
+        HStack(spacing: 10) {
+            Image(systemName: "graduationcap.fill").font(.system(size: 15)).foregroundStyle(Look.accent)
+            TextField("Quiz me on… (a subject, a topic, or “my weakest topic”)", text: $request)
+                .textFieldStyle(.plain)
+                .font(.system(size: 14))
+                .onSubmit(start)
+            Button("Start", action: start).buttonStyle(PillButton(prominent: !request.isEmpty)).disabled(request.isEmpty)
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 50)
+        .background(Look.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Look.line))
+        Text("Answer by holding right ⌥ while the question is on screen. Joe marks it, explains, and asks the next one.")
+            .font(.system(size: 12)).foregroundStyle(.secondary).padding(.leading, 4)
+
+        let columns = narrow ? 1 : 2
+        let rows = stride(from: 0, to: subjects.count, by: columns).map { Array(subjects[$0..<min($0 + columns, subjects.count)]) }
+        Grid(horizontalSpacing: 14, verticalSpacing: 14) {
+            ForEach(rows.indices, id: \.self) { index in
+                GridRow {
+                    ForEach(rows[index], id: \.self) { subject in card(subject) }
+                    if rows[index].count < columns { Color.clear }
+                }
+            }
+        }
+
+        Card(title: "Recent answers", symbol: "checkmark.seal") {
+            if results.isEmpty {
+                Text("Nothing yet. Start a quiz and each marked answer shows up here (and in “Quiz log” in your notes).")
+                    .font(.system(size: 13)).foregroundStyle(.secondary)
+            }
+            ForEach(Array(results.suffix(8).reversed().enumerated()), id: \.offset) { _, result in
+                HStack(spacing: 10) {
+                    Text("\(result.score)/\(result.total)").font(.system(size: 13, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(Self.color(result.score, result.total))
+                        .frame(width: 40, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(result.topic).font(.system(size: 13)).lineLimit(1)
+                        Text([result.subject, result.note].filter { !$0.isEmpty }.joined(separator: " · "))
+                            .font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                    Text(result.date).font(.system(size: 11.5).monospacedDigit()).foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .onAppear { results = StudyBuddy.results() }
+    }
+
+    private func card(_ subject: String) -> some View {
+        let pack = StudyBuddy.pack(for: subject)
+        let mine = results.filter { StudyBuddy.pack(for: $0.subject) == pack && pack != nil }
+        let scored = mine.reduce(0) { $0 + $1.score }, possible = mine.reduce(0) { $0 + $1.total }
+        let weakest = Dictionary(grouping: mine, by: \.topic)
+            .map { (topic: $0.key, ratio: Double($0.value.reduce(0) { $0 + $1.score }) / Double(max(1, $0.value.reduce(0) { $0 + $1.total }))) }
+            .min { $0.ratio < $1.ratio }
+        let color = SubjectGroup.of(subject)?.color ?? Look.accent
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 4, height: 34)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(subject).font(.system(size: 15, weight: .semibold))
+                    Text(SubjectGroup.of(subject)?.name ?? "DP core").font(.system(size: 11.5)).foregroundStyle(color)
+                }
+                Spacer()
+                if possible > 0 {
+                    Text("\(Int((Double(scored) / Double(possible) * 100).rounded()))%")
+                        .font(.system(size: 18, weight: .bold).monospacedDigit())
+                        .foregroundStyle(Self.color(scored, possible))
+                }
+            }
+            Group {
+                if mine.isEmpty {
+                    Text(pack == nil ? "No syllabus map yet: Joe uses your notes and what he knows." : "Not quizzed yet.")
+                } else {
+                    Text("\(mine.count) answered" + (weakest.map { " · weakest: \($0.topic)" } ?? ""))
+                }
+            }
+            .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+            Spacer(minLength: 0)
+            HStack(spacing: 8) {
+                Button { model.actions.ask("Quiz me on \(subject): five questions, mixed topics, focusing on my weak spots.") } label: {
+                    Label("Quiz me", systemImage: "play.fill")
+                }
+                .buttonStyle(PillButton(prominent: true))
+                Button("Exam question") {
+                    model.actions.ask("Give me one full exam-style \(subject) question, like a real paper, and mark my answer.")
+                }
+                .buttonStyle(PillButton())
+                if let weakest {
+                    Button("Revise weakest") { model.actions.ask("Quiz me on \(subject), topic \(weakest.topic).") }
+                        .buttonStyle(PillButton())
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Look.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Look.line))
+    }
+
+    private static func color(_ score: Int, _ total: Int) -> Color {
+        let ratio = Double(score) / Double(max(total, 1))
+        return ratio >= 0.7 ? .green : ratio >= 0.45 ? .orange : Look.deadline
+    }
+
+    private func start() {
+        let text = request.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return }
+        model.actions.ask(text.lowercased().hasPrefix("quiz") ? text : "Quiz me on \(text)")
+        request = ""
     }
 }
 

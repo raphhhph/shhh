@@ -579,7 +579,7 @@ final class Session {
                 onEvent(.approval(nil))
                 onEvent(.failed(Self.explain(text)))
             } else {
-                if !text.isEmpty { onEvent(.answer(text)) } // the final word, in full
+                if !text.isEmpty { answer = text; onEvent(.answer(StudyBuddy.withoutMarks(text))) } // the final word, in full
                 finishTurn()
             }
         default:
@@ -614,7 +614,7 @@ final class Session {
             switch delta["type"] as? String {
             case "text_delta":
                 answer += delta["text"] as? String ?? ""
-                onEvent(.answer(answer))
+                onEvent(.answer(StudyBuddy.withoutMarks(answer)))
             case "input_json_delta":
                 toolInputs[index]?.json += delta["partial_json"] as? String ?? ""
             default:
@@ -666,6 +666,8 @@ final class Session {
         guard !turnDone else { return }
         turnDone = true
         pending = []
+        // A quiz mark in the reply goes to the quiz log (it's already hidden from the card).
+        if answer.contains("<mark") { _ = StudyBuddy.record(answer) }
         ScreenControl.shared.ended()
         onEvent(.approval(nil))
         onEvent(.status(nil))
@@ -1073,7 +1075,7 @@ final class Session {
         notes vault if one is connected. Load these tools with ToolSearch.
         - Their Chrome browser (the Claude in Chrome tools), where they're already signed in to their \
         sites. Read pages with get_page_text or find rather than screenshots: it's faster.
-        When a connected account and the browser can both do something, use the account: it's much faster.\(ScreenControl.isEnabled ? Assistant.controlRules : "")\(music)\(alarms)\(messages)\(slides)\(Assistant.schoolWork)\(files)\(memory)\(habits)\(Assistant.personality)
+        When a connected account and the browser can both do something, use the account: it's much faster.\(ScreenControl.isEnabled ? Assistant.controlRules : "")\(music)\(alarms)\(messages)\(slides)\(Assistant.schoolWork)\(StudyBuddy.instructions)\(files)\(memory)\(habits)\(Assistant.personality)
 
         \(permissions) If they decline, don't retry it. Write emails as Gmail drafts unless they clearly \
         ask you to send, and say the draft is in Gmail. Never spend money: no buying, paying, \
@@ -1243,6 +1245,7 @@ struct ToolPolicy {
             }
             // Hands-off: reading anything else needs no OK.
             let free = notePath(path) != nil || Self.isSavedResult(path) || full.map(FileCommands.readable) == true
+                || full?.hasPrefix(StudyBuddy.syllabus.standardizedFileURL.path) == true // the syllabus maps
                 || autonomy == .handsOff
             return Action(key: tool, verdict: free ? .allow : .ask, title: "Read files outside your notes")
         case "Edit", "Write":

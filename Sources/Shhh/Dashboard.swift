@@ -1823,6 +1823,8 @@ private struct StudyPage: View {
             }
         }
 
+        if !Profile.programme.uppercased().contains("MYP") { PointsCalculator(subjects: subjects.filter { StudyBuddy.pack(for: $0) != "Theory of Knowledge" }) }
+
         Card(title: "Recent answers", symbol: "checkmark.seal") {
             if results.isEmpty {
                 Text("Nothing yet. Start a quiz and each marked answer shows up here (and in “Quiz log” in your notes).")
@@ -1908,6 +1910,72 @@ private struct StudyPage: View {
         guard !text.isEmpty else { return }
         model.actions.ask(text.lowercased().hasPrefix("quiz") ? text : "Quiz me on \(text)")
         request = ""
+    }
+}
+
+/// "What would I get?": predicted grades for each subject (1–7) plus the core points from TOK
+/// and the EE (the IB's matrix), out of 45, with the conditions that fail a diploma.
+private struct PointsCalculator: View {
+    let subjects: [String]
+    @AppStorage("predictedGrades") private var stored = "{}"
+    @AppStorage("predictedTOK") private var tok = "B"
+    @AppStorage("predictedEE") private var ee = "B"
+
+    private var grades: [String: Int] {
+        (try? JSONDecoder().decode([String: Int].self, from: Data(stored.utf8))) ?? [:]
+    }
+
+    private func grade(_ subject: String) -> Binding<Int> {
+        Binding(get: { grades[subject] ?? 5 }, set: { value in
+            var all = grades
+            all[subject] = value
+            stored = (try? String(data: JSONEncoder().encode(all), encoding: .utf8)) ?? "{}"
+        })
+    }
+
+    /// TOK × EE → core points; nil means a failing E.
+    static func core(_ tok: String, _ ee: String) -> Int? {
+        let order = ["A", "B", "C", "D"]
+        guard let t = order.firstIndex(of: tok), let e = order.firstIndex(of: ee) else { return nil }
+        let matrix = [[3, 3, 2, 2], [3, 2, 1, 1], [2, 1, 1, 0], [2, 1, 0, 0]]
+        return matrix[t][e]
+    }
+
+    var body: some View {
+        let subjectTotal = subjects.reduce(0) { $0 + grade($1).wrappedValue }
+        let corePoints = Self.core(tok, ee)
+        let total = subjectTotal + (corePoints ?? 0)
+        let problems = [corePoints == nil ? "An E in TOK or the EE fails the diploma." : nil,
+                        total < 24 ? "Under 24 points fails the diploma." : nil,
+                        subjects.contains { grade($0).wrappedValue == 1 } ? "A grade 1 in any subject fails the diploma." : nil].compactMap { $0 }
+        Card(title: "Predicted points", symbol: "function") {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("\(total)").font(.system(size: 34, weight: .bold).monospacedDigit())
+                    .foregroundStyle(problems.isEmpty ? (total >= 38 ? Color.green : total >= 30 ? Color.primary : Color.orange) : Color.red)
+                Text("/ 45").font(.system(size: 16, weight: .semibold)).foregroundStyle(.secondary)
+                Spacer()
+                Text("\(subjectTotal) from subjects + \(corePoints.map(String.init) ?? "0") core").font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            ForEach(subjects, id: \.self) { subject in
+                HStack {
+                    RoundedRectangle(cornerRadius: 2).fill(SubjectGroup.of(subject)?.color ?? Look.accent).frame(width: 4, height: 16)
+                    Text(subject).font(.system(size: 13))
+                    Spacer()
+                    Picker("", selection: grade(subject)) { ForEach((1...7).reversed(), id: \.self) { Text("\($0)").tag($0) } }
+                        .pickerStyle(.segmented).labelsHidden().frame(width: 230)
+                }
+            }
+            HStack(spacing: 16) {
+                Text("TOK").font(.system(size: 13))
+                Picker("", selection: $tok) { ForEach(["A", "B", "C", "D", "E"], id: \.self) { Text($0).tag($0) } }.pickerStyle(.segmented).labelsHidden().frame(width: 170)
+                Spacer()
+                Text("EE").font(.system(size: 13))
+                Picker("", selection: $ee) { ForEach(["A", "B", "C", "D", "E"], id: \.self) { Text($0).tag($0) } }.pickerStyle(.segmented).labelsHidden().frame(width: 170)
+            }
+            ForEach(problems, id: \.self) { Text($0).font(.system(size: 12)).foregroundStyle(.red) }
+            Text("Also needed for a diploma: CAS completed, at least 12 points from HL subjects and 9 from SL, and no academic misconduct.")
+                .font(.system(size: 11.5)).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 

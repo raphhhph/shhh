@@ -83,7 +83,7 @@ final class StudyBoardModel: ObservableObject {
 
     enum Item: Identifiable, Equatable {
         case question(n: Int, marks: Int, topic: String, source: String, text: String)
-        case answer(text: String, spoken: Bool)
+        case answer(text: String, spoken: Bool, image: Data? = nil)
         case feedback(score: Int, total: Int, text: String, model: String)
         case summary(score: Int, total: Int, text: String)
         case note(String)
@@ -91,7 +91,7 @@ final class StudyBoardModel: ObservableObject {
         var id: String {
             switch self {
             case let .question(n, _, _, _, text): "q\(n)\(text.prefix(20))"
-            case let .answer(text, _): "a\(text.hashValue)"
+            case let .answer(text, _, image): "a\(text.hashValue)\(image?.count ?? 0)"
             case let .feedback(score, total, text, _): "f\(score)/\(total)\(text.prefix(20))"
             case let .summary(_, _, text): "s\(text.prefix(20))"
             case let .note(text): "n\(text.hashValue)"
@@ -155,12 +155,13 @@ final class StudyBoardModel: ObservableObject {
     }
 
     /// Their answer (typed or said), or "hint", "skip", "end".
-    func submit(_ text: String, spoken: Bool = false) {
-        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, assistant != nil, !isBusy else { return }
-        items.append(.answer(text: text, spoken: spoken))
+    func submit(_ text: String, spoken: Bool = false, image: Data? = nil) {
+        var text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty || image != nil, assistant != nil, !isBusy else { return }
+        items.append(.answer(text: text, spoken: spoken, image: image))
         draft = ""
-        send(text)
+        if image != nil { text = (text.isEmpty ? "" : text + "\n\n") + "[My diagram is attached: mark it as part of my answer.]" }
+        send(text, image: image)
     }
 
     func command(_ text: String) {
@@ -169,12 +170,12 @@ final class StudyBoardModel: ObservableObject {
         send(text)
     }
 
-    private func send(_ text: String) {
+    private func send(_ text: String, image: Data? = nil) {
         stopSpeaking()
         reply = ""
         isBusy = true
         status = "Thinking…"
-        assistant?.ask(text)
+        assistant?.ask(text, screenshot: image)
     }
 
     private func handle(_ event: Assistant.Event) {
@@ -253,7 +254,7 @@ final class StudyBoardModel: ObservableObject {
             if let (score, total, body) = pendingFeedback { items.append(.feedback(score: score, total: total, text: body, model: model)) }
             pendingFeedback = nil
         }
-        while let open = rest.range(of: #"<(question|feedback|model|summary)\b[^>]*>"#, options: .regularExpression) {
+        while let open = rest.range(of: #"<(question|feedback|model|summary|ms)\b[^>]*>"#, options: .regularExpression) {
             let before = rest[..<open.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
             if !before.isEmpty { flushFeedback(); items.append(.note(before)) }
             let tag = String(rest[open])
@@ -266,6 +267,8 @@ final class StudyBoardModel: ObservableObject {
                 return String(tag[match].dropFirst(key.count + 2).dropLast())
             }
             switch name {
+            case "ms":
+                break // the markscheme: Joe's, not shown
             case "question":
                 flushFeedback()
                 items.append(.question(n: Int(attribute("n")) ?? 0, marks: Int(attribute("marks")) ?? 0,
@@ -294,7 +297,9 @@ final class StudyBoardModel: ObservableObject {
     // MARK: The tutor's instructions
 
     static func tutorPrompt(subject: String, mode: Mode) -> String {
-        let pack = StudyBuddy.pack(for: subject)
+        // MYP students are marked on criteria A–D, out of 8, not on DP marks.
+        let myp = Profile.programme.uppercased().contains("MYP")
+        let pack = myp ? "MYP" : StudyBuddy.pack(for: subject)
         let map = pack.flatMap { try? String(contentsOf: StudyBuddy.syllabus.appendingPathComponent($0 + ".md"), encoding: .utf8) } ?? ""
         let terms = (try? String(contentsOf: StudyBuddy.syllabus.appendingPathComponent("Command terms.md"), encoding: .utf8)) ?? ""
         let history = StudyBuddy.results().filter { StudyBuddy.pack(for: $0.subject) == pack }.suffix(25)
@@ -309,11 +314,16 @@ final class StudyBoardModel: ObservableObject {
             # How to write (the whiteboard reads these tags)
             - A question: <question n="1" marks="4" topic="2.8 Externalities" source="IB-style">the question in Markdown</question>. \
             Data as Markdown tables; maths in plain text (x², √, ≤, fractions as a/b). One question at a time. Never put the answer in it.
+            - Right after each question, its markscheme, hidden from them: <ms>each mark point as the IB would write it (M1, A1, \
+            or one point per mark; for markband questions, what each band needs), and acceptable alternatives</ms>. Mark their answer \
+            strictly against it, so the same answer always gets the same mark.
+            - They can draw: a diagram sent as an image with their answer. Mark what's drawn (axes, labels, curves, shifts, areas) as an examiner would.
             - After they answer: <feedback n="1" score="3" total="4">✓ what earned marks, one bullet each; ✗ missing: what was missing, one bullet each</feedback> \
             then <model>the answer a markscheme would credit, concise</model>, then the next <question>.
             - Outside the tags, at most one short sentence, said aloud ("Nice, three out of four."). No other chatter.
             - At the end: <summary score="x" total="y">strengths, the weakest topic, the one thing to revise next</summary>.
 
+            \(myp ? "# MYP\nThey're in the MYP (\(Profile.programme)). Name the criterion each question targets, and mark on that criterion's band and level out of 8 (score=\"6\" total=\"8\"), using the descriptors below. No DP papers.\n" : "")
             # The session
             \(mode == .exam
                 ? "Exam mode: one full question in the style of a real paper for this subject (with parts (a), (b)…, a stimulus or data where the paper has one, marks per part). Mark it part by part; long parts with markbands. Then the summary."
@@ -361,6 +371,9 @@ private let accent = Color(red: 1, green: 0.58, blue: 0.12)
 private struct StudyBoardView: View {
     @ObservedObject var model: StudyBoardModel
     @FocusState private var typing: Bool
+    @State private var sketching = false
+    @State private var strokes: [SketchPad.Stroke] = []
+    @State private var ink = Color.primary
 
     var body: some View {
         VStack(spacing: 0) {
@@ -449,11 +462,17 @@ private struct StudyBoardView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(accent.opacity(0.35)))
-        case let .answer(text, spoken):
+        case let .answer(text, spoken, image):
             HStack {
                 Spacer(minLength: 80)
                 VStack(alignment: .trailing, spacing: 4) {
-                    Text(text).font(.system(size: 14)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    if let image, let picture = NSImage(data: image) {
+                        Image(nsImage: picture).resizable().scaledToFit().frame(maxWidth: 320, maxHeight: 220)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    if !text.isEmpty {
+                        Text(text).font(.system(size: 14)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    }
                     if spoken { Label("said", systemImage: "waveform").font(.system(size: 10.5)).foregroundStyle(.secondary) }
                 }
                 .padding(.horizontal, 14).padding(.vertical, 10)
@@ -499,6 +518,12 @@ private struct StudyBoardView: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if sketching {
+                SketchPad(strokes: $strokes, ink: $ink)
+                    .frame(height: 260)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.15)))
+            }
             ZStack(alignment: .topLeading) {
                 if model.draft.isEmpty {
                     Text("Type your answer… (⌘↩ to submit) or hold right ⌥ and say it")
@@ -514,16 +539,28 @@ private struct StudyBoardView: View {
             .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(typing ? 0.25 : 0.1)))
             HStack(spacing: 8) {
+                Button { withAnimation(.easeOut(duration: 0.15)) { sketching.toggle() } } label: {
+                    Label(sketching ? "Hide sketch" : "Draw a diagram", systemImage: "pencil.and.scribble")
+                }
+                if sketching {
+                    ForEach([Color.primary, Color.red, Color.blue], id: \.self) { color in
+                        Circle().fill(color).frame(width: 16, height: 16)
+                            .overlay(Circle().strokeBorder(Color.accentColor, lineWidth: ink == color ? 2 : 0).padding(-3))
+                            .onTapGesture { ink = color }
+                    }
+                    Button("Clear") { strokes = [] }
+                }
                 Button("Hint") { model.command("hint") }
                 Button("Skip") { model.command("skip") }
                 Button("End") { model.command("end") }
                 Spacer()
                 Button {
-                    model.submit(model.draft)
+                    model.submit(model.draft, image: strokes.isEmpty ? nil : SketchPad.jpeg(strokes))
+                    strokes = []
                 } label: { Label("Submit", systemImage: "arrow.up") }
                     .keyboardShortcut(.return, modifiers: .command)
                     .buttonStyle(.borderedProminent)
-                    .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isBusy)
+                    .disabled((model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && strokes.isEmpty) || model.isBusy)
             }
             .buttonStyle(.bordered)
             .disabled(!model.isActive)
@@ -545,5 +582,58 @@ private struct StudyBoardView: View {
     /// Markdown for bold, italics and lists; tables and the rest shown as written.
     private static func markdown(_ text: String) -> AttributedString {
         (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+    }
+}
+
+// MARK: - Sketch pad
+
+/// Drawing a diagram with the trackpad or mouse: a supply-and-demand shift, a food web, a graph.
+/// Sent to Joe as a picture with the answer.
+struct SketchPad: View {
+    struct Stroke { var points: [CGPoint]; var color: Color }
+
+    @Binding var strokes: [Stroke]
+    @Binding var ink: Color
+    @State private var drawing = false
+
+    var body: some View {
+        Canvas { context, size in Self.draw(strokes, in: &context, size: size) }
+            .background(Color.white)
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    if drawing, !strokes.isEmpty {
+                        strokes[strokes.count - 1].points.append(value.location)
+                    } else {
+                        drawing = true
+                        strokes.append(Stroke(points: [value.location], color: ink))
+                    }
+                }
+                .onEnded { _ in drawing = false })
+            .overlay(alignment: .topLeading) {
+                if strokes.isEmpty {
+                    Text("Draw here: axes, curves, labels, arrows").font(.system(size: 12)).foregroundStyle(.gray).padding(10)
+                }
+            }
+    }
+
+    static func draw(_ strokes: [Stroke], in context: inout GraphicsContext, size: CGSize) {
+        for stroke in strokes where stroke.points.count > 1 {
+            var path = Path()
+            path.addLines(stroke.points)
+            // Black ink stays black on the white page, whatever the app's theme.
+            let color = stroke.color == .primary ? Color.black : stroke.color
+            context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+        }
+    }
+
+    /// The drawing as a JPEG, on white, for Claude to look at.
+    @MainActor static func jpeg(_ strokes: [Stroke]) -> Data? {
+        let points = strokes.flatMap(\.points)
+        let width = max(400, (points.map(\.x).max() ?? 400) + 20), height = max(260, (points.map(\.y).max() ?? 260) + 20)
+        let renderer = ImageRenderer(content: Canvas { context, size in draw(strokes, in: &context, size: size) }
+            .frame(width: width, height: height).background(Color.white))
+        renderer.scale = 2
+        guard let image = renderer.nsImage, let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
+        return bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.8])
     }
 }

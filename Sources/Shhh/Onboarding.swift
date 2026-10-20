@@ -509,7 +509,8 @@ private struct SchoolStep: View {
     @AppStorage("profileProject") private var project = ""
     @State private var group = 0
 
-    private static let programmes = ["IB Diploma, year 1 (DP1)", "IB Diploma, year 2 (DP2)", "IB Career-related", "IB MYP", "Other"]
+    private static let programmes = ["IB Diploma, year 1 (DP1)", "IB Diploma, year 2 (DP2)", "IB MYP, years 1–3", "IB MYP, year 4 (MYP4)",
+                                     "IB MYP, year 5 (MYP5)", "IB Career-related", "Other"]
     private static let groups: [(name: String, symbol: String, subjects: [String])] = [
         ("Language & literature", "book", ["English A Lang & Lit", "English A Literature", "Chinese A Lang & Lit", "Chinese A Literature", "Literature & Performance"]),
         ("Language acquisition", "character.bubble", ["Chinese B", "English B", "Spanish B", "French B", "Mandarin ab initio", "Spanish ab initio", "French ab initio"]),

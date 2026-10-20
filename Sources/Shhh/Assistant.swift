@@ -285,20 +285,32 @@ final class Assistant {
     /// Only work where the strongest model clearly pays for itself: designing a deck or page, and
     /// doing a piece of schoolwork. Not converting, reading or filing (short words like "EE" or
     /// "Keynote" switched it on for a PDF-to-Keynote request that needed no extra intelligence).
+    /// Settings → Advanced → "Opus for big jobs": off keeps everything on the chosen model.
+    static var strongModelForWork: Bool {
+        get { UserDefaults.standard.object(forKey: "strongModelForWork") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "strongModelForWork") }
+    }
+
     static func needsStrongModel(_ request: String) -> Bool {
+        guard strongModelForWork else { return false }
         // Asking about schoolwork ("when is my next summative?", "what homework do I have?") is a
         // lookup, not schoolwork: Haiku does it.
         if request.range(of: #"^\W*(hey,? joe,?\s*)?(when|what|which|is|are|do i have|how many|have i|did i|list|show|check|remind)\b"#,
                          options: [.regularExpression, .caseInsensitive]) != nil
             || request.range(of: #"什么时|几号|哪天|哪一天|有没有|有什么|是什么|吗[？?]?\s*$"#, options: .regularExpression) != nil { return false }
-        return request.range(of: #"\b(design|redesign|make (it|them|this) look (good|better|nice|professional)|formative|summative|worksheet|inquiry|assignment|homework|essay|lab report|internal assessment|extended essay)\b"#,
-                      options: [.regularExpression, .caseInsensitive]) != nil
+        // Only when they ask Joe to do a piece of work ("do my ESS formative", "answer this worksheet",
+        // "redesign this deck"); just mentioning one ("I got a 4 on a summative") is a chat for Haiku.
+        let work = #"\b(do|doing|write|answer|complete|finish|fill(?: in| out)?|solve|make|create|draft|design|redesign|build)\b[^.?!\n]{0,60}?\b(formative|summative|worksheet|inquiry|assignment|homework|essay|lab report|internal assessment|IA|extended essay|EE|slides?|deck|presentation|poster)\b"#
+        let look = #"\b(design|redesign)\b|make (it|them|this) look (good|better|nice|professional)"#
+        return request.range(of: work, options: [.regularExpression, .caseInsensitive]) != nil
+            || request.range(of: look, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     func useStrongModel() {
-        guard modelOverride == nil, Assistant.model != .opus || Assistant.effort < .high else { return }
+        guard modelOverride == nil, Assistant.model != .opus || Assistant.effort < .medium else { return }
         modelOverride = .opus
-        effortOverride = Assistant.effort < .high ? .high : Assistant.effort
+        // Medium, not high: high effort roughly doubled what each of these cost.
+        effortOverride = Assistant.effort < .medium ? .medium : Assistant.effort
         prepare(onEvent: onEvent) // a fresh session with the stronger model
     }
 

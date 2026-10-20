@@ -2513,6 +2513,7 @@ private struct SettingsPage: View {
         }
     }
     @State private var apiKeyDraft = ""
+    @AppStorage("strongModelForWork") private var strongForWork = true
     @AppStorage("assistantModel") private var assistantModel = Assistant.Model.opus.rawValue
     @AppStorage("assistantEffort") private var effort = Assistant.Effort.low.rawValue
     @AppStorage("assistantAutonomy") private var autonomy = Assistant.Autonomy.careful.rawValue
@@ -2725,6 +2726,9 @@ private struct SettingsPage: View {
         section("Brain", "cpu") {
             row("Model", "Smarter, or faster and lighter on your usage") {
                 Choice(options: Assistant.Model.allCases.map { ($0.rawValue, $0.name) }, selection: $assistantModel)
+            }
+            row("Opus for big jobs", "Doing schoolwork or designing slides switches to Opus. Off: everything stays on the model above") {
+                switchOn($strongForWork)
             }
             row("Effort", "How hard Joe thinks before answering", last: true) {
                 Choice(options: Assistant.Effort.allCases.map { ($0.rawValue, $0.name) }, selection: $effort)

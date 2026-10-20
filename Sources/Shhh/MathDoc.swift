@@ -25,6 +25,7 @@ enum MathDoc {
         let made = shell(node, [script.path, spec.path, html.path], environment: ["NODE_PATH": Slides.nodeModules])
         guard made.ok, FileManager.default.fileExists(atPath: html.path) else { return finish("Couldn't build the page: \(made.output)") }
         printer = Printer(html, pdf) { ok in
+            try? FileManager.default.removeItem(at: build) // the page and KaTeX copy were only for printing
             finish(ok ? "Made \(pdf.path) and opened it."
                       : "Couldn't print the PDF.")
             if ok { NSWorkspace.shared.open(pdf) }

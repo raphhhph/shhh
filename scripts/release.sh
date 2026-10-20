@@ -14,6 +14,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 ./scripts/build.sh --release >/dev/null
+rm -f build/Joe.zip # the .dmg replaces the old zip
 APP="build/Joe.app"
 DMG="build/Joe.dmg"
 IDENTITY="${JOE_IDENTITY:-}"

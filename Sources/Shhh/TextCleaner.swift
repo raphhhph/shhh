@@ -8,7 +8,11 @@ import llama
 /// The model is used as a copy-editor through a few-shot "Raw: / Clean:" completion
 /// prompt rather than a chat, which stops small models from replying to dictated prompts.
 actor TextCleaner {
-    static let modelURL = URL(string: "https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_K_M.gguf")!
+    /// From Hugging Face, or the China mirror when that's chosen in Settings.
+    static var modelURL: URL {
+        URL(string: (ModelDownloads.useChinaMirror ? "https://hf-mirror.com" : "https://huggingface.co")
+            + "/unsloth/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_K_M.gguf")!
+    }
     static var modelPath: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Shhh/Models", isDirectory: true)

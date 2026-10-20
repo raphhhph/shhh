@@ -49,12 +49,21 @@ actor Transcriber {
         if Self.languages == .chinese { Task { await self.loadChinese() } }
     }
 
+    private var loadingChinese = false
+
     private func loadChinese() async {
-        guard chinese == nil else { return }
+        guard chinese == nil, !loadingChinese else { return }
+        loadingChinese = true
         // Text-norm 14 ("withitn"): punctuation and numbers as digits, like Parakeet's output.
         if let models = try? await SenseVoiceModels.downloadAndLoad() {
-            chinese = SenseVoiceManager(models: models, textNorm: 14)
+            let manager = SenseVoiceManager(models: models, textNorm: 14)
+            // Its first run is when macOS compiles it for the Neural Engine (minutes after an
+            // update). Done here, on silence, before it's used: a real request used to wait behind it,
+            // and every request after that one.
+            _ = try? await manager.transcribeDetailed(audio: [Float](repeating: 0, count: 16_000))
+            chinese = manager
         }
+        loadingChinese = false
     }
 
     /// Whether Chinese is ready too (it loads after English).

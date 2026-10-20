@@ -118,6 +118,7 @@ final class DashboardModel: ObservableObject {
         var setCleanup: (Bool) -> Void
         var setScreenControl: (Bool) -> Void
         var chooseVault: () -> Void
+        var showOnboarding: () -> Void
         var openNotepad: () -> Void
         var microphones: () -> [(uid: String, name: String)]
         var setEnglishOnly: (Bool) -> Void
@@ -149,11 +150,19 @@ final class DashboardModel: ObservableObject {
 
     /// Re-reads everything, but only publishes what changed: each change redraws the window, and
     /// redrawing a dozen times every two seconds starved the rest of the app.
+    /// When History.json was last read: it's decoded again only after it changes (decoding a
+    /// thousand entries every two seconds made scrolling stutter).
+    private var activityStamp: Date?
+
     func reload() {
-        let newActivity = Array(ActivityLog.load().reversed())
-        if newActivity != activity {
-            activity = newActivity
-            stats = ActivityLog.stats(newActivity)
+        let stamp = (try? ActivityLog.url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+        if stamp != activityStamp {
+            activityStamp = stamp
+            let newActivity = Array(ActivityLog.load().reversed())
+            if newActivity != activity {
+                activity = newActivity
+                stats = ActivityLog.stats(newActivity)
+            }
         }
         update(\.alarms, AlarmStore.load())
         update(\.status, actions.status())
@@ -324,7 +333,6 @@ private struct PageTitle: View {
 
 private struct DashboardView: View {
     @ObservedObject var model: DashboardModel
-    @AppStorage("profileSetUp") private var setUp = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -336,8 +344,7 @@ private struct DashboardView: View {
                 sidebar(compact: compact)
                 Rectangle().fill(Look.line).frame(width: 1)
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        if !setUp { WelcomePage(model: model) } else {
+                    LazyVStack(alignment: .leading, spacing: 18) {
                         switch model.page {
                         case .home: HomePage(model: model)
                         case .calendar: CalendarPage(model: model)
@@ -349,7 +356,6 @@ private struct DashboardView: View {
                         case .dictionary: DictionaryPage()
                         case .music: MusicPage(model: model)
                         case .settings: SettingsPage(model: model)
-                        }
                         }
                     }
                     .environment(\.narrow, content < 820)
@@ -812,25 +818,54 @@ private struct HistoryPage: View {
         if shown.isEmpty {
             Card { Text(search.isEmpty ? "Nothing here yet." : "Nothing matches “\(search)”.").foregroundStyle(.secondary).font(.system(size: 13)) }
         }
-        let days = Dictionary(grouping: shown) { Calendar.current.startOfDay(for: $0.date) }.sorted { $0.key > $1.key }
-        ForEach(days, id: \.key) { day, entries in
-            VStack(alignment: .leading, spacing: 8) {
+        ForEach(Self.lines(Array(shown))) { line in
+            switch line {
+            case let .day(day, count):
                 HStack {
                     Text(Self.title(day)).font(.system(size: 13, weight: .semibold))
-                    Text("\(entries.count)").font(.system(size: 12)).foregroundStyle(.tertiary)
+                    Text("\(count)").font(.system(size: 12)).foregroundStyle(.tertiary)
                 }
                 .padding(.leading, 4)
-                VStack(spacing: 0) {
-                    ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-                        HistoryRow(entry: entry, onDelete: { ActivityLog.delete(entry.id); model.reload() },
-                                   onContinue: { followUp in model.actions.ask(Self.continuing(entry, followUp)) })
-                        if index < entries.count - 1 { Rectangle().fill(Look.line).frame(height: 1).padding(.leading, 62) }
-                    }
-                }
-                .background(Look.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Look.line))
+                .padding(.top, 6)
+            case let .entry(entry, first, last):
+                HistoryRow(entry: entry, onDelete: { ActivityLog.delete(entry.id); model.reload() },
+                           onContinue: { followUp in model.actions.ask(Self.continuing(entry, followUp)) })
+                    .background(Look.card, in: UnevenRoundedRectangle(topLeadingRadius: first ? 14 : 0, bottomLeadingRadius: last ? 14 : 0,
+                                                                     bottomTrailingRadius: last ? 14 : 0, topTrailingRadius: first ? 14 : 0, style: .continuous))
+                    .overlay(alignment: .bottom) { if !last { Rectangle().fill(Look.line).frame(height: 1).padding(.leading, 62) } }
+                    .padding(.top, first ? 0 : -18) // rows of a day sit together; the page spaces children by 18
             }
         }
+    }
+
+    /// The page as a flat list (a day's title, then its entries), so the scroll view only builds
+    /// the rows on screen.
+    private enum Line: Identifiable {
+        case day(Date, Int)
+        case entry(Activity, first: Bool, last: Bool)
+        var id: String {
+            switch self {
+            case let .day(day, _): "day \(day.timeIntervalSince1970)"
+            case let .entry(entry, _, _): entry.id.uuidString
+            }
+        }
+    }
+
+    private static func lines(_ entries: [Activity]) -> [Line] {
+        let calendar = Calendar.current
+        var lines: [Line] = []
+        var index = 0
+        while index < entries.count {
+            let day = calendar.startOfDay(for: entries[index].date)
+            var end = index
+            while end + 1 < entries.count, calendar.isDate(entries[end + 1].date, inSameDayAs: day) { end += 1 }
+            lines.append(.day(day, end - index + 1))
+            for position in index...end {
+                lines.append(.entry(entries[position], first: position == index, last: position == end))
+            }
+            index = end + 1
+        }
+        return lines
     }
 
     /// A follow-up to an old conversation, with what was said then (sessions aren't kept).
@@ -951,107 +986,6 @@ private struct SearchField: View {
         .frame(width: 240, height: 30)
         .background(Look.card, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Look.line))
-    }
-}
-
-// MARK: - Welcome
-
-/// The first launch: who they are, where notes go, how Joe reaches Claude, and the two
-/// permissions it can't work without. One page, editable later in Settings.
-private struct WelcomePage: View {
-    @ObservedObject var model: DashboardModel
-    @AppStorage("userName") private var name = ""
-    @AppStorage("profileSchool") private var school = ""
-    @AppStorage("profileProgramme") private var programme = ""
-    @AppStorage("profileSubjects") private var subjects = ""
-    @AppStorage("profileProject") private var project = ""
-    @AppStorage("profileSetUp") private var setUp = false
-    @AppStorage("useAPIKey") private var useAPIKey = false
-    @State private var apiKey = ""
-    @State private var refresh = 0
-
-    var body: some View {
-        PageTitle(title: "Welcome to Joe", subtitle: "Hold a key, say what you need, and Joe does it. A minute of setup first.")
-        Card(title: "About you", symbol: "person.crop.circle") {
-            field("Your name", "Raphael", $name)
-            field("School", "Shenzhen International School", $school)
-            field("Programme and year", "IB Diploma, year 1 (DP1)", $programme)
-            field("Subjects and levels", "Math AI HL, Economics HL, ESS SL…", $subjects)
-            field("A business or project of yours (optional)", "WellPrepped", $project)
-        }
-        Card(title: "Your notes", symbol: "folder") {
-            Text(Assistant.vaultURL.map { "Joe keeps notes, your Daybook and his memory in \($0.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))." }
-                 ?? "Joe keeps lecture notes, your daily plan and his memory in a folder. Use your Obsidian vault, or let Joe make one.")
-                .font(.system(size: 13)).foregroundStyle(.secondary)
-            HStack {
-                Button("Use my Obsidian vault…") { model.actions.chooseVault(); refresh += 1 }.buttonStyle(PillButton())
-                Button("Make a Joe folder in Documents") { makeFolder(); refresh += 1 }.buttonStyle(PillButton())
-            }
-        }
-        .id(refresh)
-        Card(title: "Claude", symbol: "sparkle") {
-            if Assistant.executable == nil {
-                Text("Joe thinks with Claude through Claude Code, which isn't installed yet. In Terminal: npm install -g @anthropic-ai/claude-code, then run claude once to sign in.")
-                    .font(.system(size: 13)).foregroundStyle(.orange)
-            } else {
-                Label("Claude Code is installed.", systemImage: "checkmark.circle.fill").font(.system(size: 13)).foregroundStyle(.green)
-            }
-            Toggle("Use an Anthropic API key instead of a Claude plan", isOn: $useAPIKey).font(.system(size: 13))
-            if useAPIKey {
-                HStack {
-                    SecureField("sk-ant-…", text: $apiKey).textFieldStyle(.roundedBorder)
-                    Button("Save") { AIAccount.save(apiKey); apiKey = ""; refresh += 1 }.buttonStyle(PillButton(prominent: true)).disabled(apiKey.count < 20)
-                }
-                if let saved = AIAccount.maskedKey { Text("Saved: \(saved)").font(.system(size: 12)).foregroundStyle(.secondary) }
-            }
-        }
-        Card(title: "Permissions", symbol: "checkmark.shield") {
-            permission("Microphone", "To hear you while you hold a key", AVCaptureDevice.authorizationStatus(for: .audio) == .authorized, "Privacy_Microphone")
-            permission("Accessibility", "To type what you dictate", AXIsProcessTrusted(), "Privacy_Accessibility")
-            Text("Hold right ⌘ to dictate into any app; hold right ⌥ to ask Joe.").font(.system(size: 12.5)).foregroundStyle(.secondary)
-        }
-        .id(refresh)
-        HStack {
-            Spacer()
-            Button("Start using Joe") { setUp = true; model.reload() }
-                .buttonStyle(PillButton(prominent: true))
-                .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
-        }
-    }
-
-    private func field(_ label: String, _ example: String, _ value: Binding<String>) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label).font(.system(size: 12.5, weight: .medium))
-            TextField(example, text: value).textFieldStyle(.roundedBorder)
-        }
-    }
-
-    private func permission(_ label: String, _ detail: String, _ granted: Bool, _ pane: String) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label).font(.system(size: 13.5, weight: .medium))
-                Text(detail).font(.system(size: 12)).foregroundStyle(.secondary)
-            }
-            Spacer()
-            if granted {
-                Label("Allowed", systemImage: "checkmark.circle.fill").font(.system(size: 13, weight: .medium)).foregroundStyle(.green)
-            } else {
-                Button("Allow…") {
-                    if pane == "Privacy_Microphone" { AVCaptureDevice.requestAccess(for: .audio) { _ in } }
-                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")!)
-                }
-                .buttonStyle(PillButton(prominent: true))
-            }
-        }
-    }
-
-    /// ~/Documents/Joe, with the folders Joe files things in.
-    private func makeFolder() {
-        let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Joe", isDirectory: true)
-        for sub in ["School/Lecture Notes", "Meetings", "Notes", "Daybook/History", "People"] {
-            try? FileManager.default.createDirectory(at: folder.appendingPathComponent(sub), withIntermediateDirectories: true)
-        }
-        Assistant.vaultURL = folder
     }
 }
 
@@ -2051,6 +1985,9 @@ private struct SettingsPage: View {
             profileRow("Programme", "e.g. IB Diploma, year 1 (DP1)", $profileProgramme, "IB Diploma, year 1")
             profileRow("Subjects", "Joe’s IB help and daily question use these", $profileSubjects, "Math AI HL, ESS SL…")
             profileRow("Your project", "A business or club Joe should know about", $profileProject, "Optional")
+            row("Welcome tour", "See the first-launch tour again; your settings stay") {
+                Button("Replay") { model.actions.showOnboarding() }.buttonStyle(PillButton())
+            }
             row("Open Joe at login", last: true) {
                 switchOn($login) { on in
                     do { if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() } } catch { NSSound.beep() }

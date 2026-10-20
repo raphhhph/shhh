@@ -36,7 +36,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var lastOwnVoice: Date?
     private var voiceCheckAt = Date.distantPast
     private var checkingVoice = false
-    private lazy var dashboard = Dashboard(actions: DashboardModel.Actions(
+    /// The first-launch tour (and its replay from Settings).
+    private lazy var onboarding: Onboarding = Onboarding(actions: Onboarding.Actions(
+        greet: { [weak self] subject, line in self?.greetAtNotch(subject, line) },
+        chooseVault: { [weak self] in self?.chooseMemoryVault() },
+        finished: { [weak self] in
+            Profile.isSetUp = true
+            self?.onboarding.close()
+            self?.dashboard.show()
+        }))
+
+    /// Joe at the notch, saying a line out loud: for the tour, with no conversation behind it.
+    private func greetAtNotch(_ subject: String, _ line: String) {
+        guard focused == nil, state == .idle else { return }
+        answerPanel.show(question: "", subject: subject, reply: line, status: nil, error: nil, approval: nil,
+                         isDone: true, canFollowUp: false)
+        if SpeechOutput.engine == .off { speech.useForThisReply(.natural) }
+        speech.update(line)
+        speech.finish()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
+            MainActor.assumeIsolated { if self?.focused == nil { self?.answerPanel.hide() } }
+        }
+    }
+
+    private lazy var dashboard: Dashboard = Dashboard(actions: DashboardModel.Actions(
         ask: { [weak self] in self?.askTyped($0) },
         askInBackground: { [weak self] in self?.startInBackground($0) },
         status: { [weak self] in self?.speechStatus ?? "" },
@@ -56,6 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setCleanup: { [weak self] on in if self?.aiCleanup != on { self?.toggleCleanup() } },
         setScreenControl: { [weak self] on in if ScreenControl.isEnabled != on { self?.toggleScreenControl() } },
         chooseVault: { [weak self] in self?.chooseMemoryVault() },
+        showOnboarding: { [weak self] in self?.onboarding.show() },
         openNotepad: { [weak self] in self?.notepad.show() },
         microphones: { [weak self] in self?.microphones.inputs.map { ($0.uid, $0.name) } ?? [] },
         setEnglishOnly: { [weak self] on in
@@ -144,7 +168,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.button?.action = #selector(statusItemClicked)
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         NSApp.mainMenu = Self.mainMenu(target: self)
-        if !launchedAtLogin { dashboard.show() } // first, before the models and the rest load
+        // First, before the models and the rest load: the tour on a first launch, else the dashboard.
+        if !Profile.isSetUp { onboarding.show() } else if !launchedAtLogin { dashboard.show() }
         dashboard.onModeChange = { [weak self] in if Notch.isEnabled { self?.resting.reseat() } }
         // Opened by the person (Finder, Spotlight, the Dock): the dashboard. At login: quietly.
 
@@ -1217,6 +1242,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if asking {
                 guard !text.isEmpty else { return }
                 lastTranscript = text
+                onboarding.heard(text) // the tour's "try it" step
                 guard var task = focused else { return }
                 // "It's resolved", "remove the tick": the answer on the card is cleared ("clear
                 // everything": the side notch's too). Nothing goes to Claude.

@@ -1,0 +1,755 @@
+import AppKit
+import AVFoundation
+import SwiftUI
+
+/// The first launch, as a window of its own: Joe says hi at the notch, learns the user's name,
+/// shows what he does in short animations, sets up school, notes, permissions and Claude, and ends
+/// with the user's first real request. Replayable from Settings → General without losing anything
+/// (everything is prefilled from what's saved).
+@MainActor
+final class Onboarding: NSObject, NSWindowDelegate {
+    struct Actions {
+        /// Joe at the notch, out loud: a subject line and a sentence.
+        var greet: (_ subject: String, _ line: String) -> Void
+        var chooseVault: () -> Void
+        var finished: () -> Void
+    }
+
+    let model: OnboardingModel
+    private var window: NSWindow?
+
+    init(actions: Actions) {
+        model = OnboardingModel(actions: actions)
+    }
+
+    var isVisible: Bool { window?.isVisible == true }
+
+    func show() {
+        model.step = .hello
+        model.heard = nil
+        if window == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 660),
+                                  styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.isMovableByWindowBackground = true
+            window.isReleasedWhenClosed = false
+            window.backgroundColor = NSColor(red: 0.055, green: 0.063, blue: 0.086, alpha: 1)
+            window.delegate = self
+            window.contentView = NSHostingView(rootView: OnboardingView(model: model).environment(\.colorScheme, .dark))
+            window.center()
+            self.window = window
+        }
+        if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// The user asked Joe something while the window is up: the "Try it" step's moment.
+    func heard(_ text: String) {
+        guard isVisible, model.step == .tryIt else { return }
+        withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) { model.heard = text }
+    }
+
+    func close() { window?.close() }
+}
+
+@MainActor
+final class OnboardingModel: ObservableObject {
+    enum Step: Int, CaseIterable { case hello, name, tour, school, notes, permissions, claude, tryIt, done }
+
+    @Published var step: Step = .hello
+    @Published var heard: String?
+    let actions: Onboarding.Actions
+
+    init(actions: Onboarding.Actions) { self.actions = actions }
+
+    func next() {
+        guard let following = Step(rawValue: step.rawValue + 1) else { return }
+        withAnimation(.spring(response: 0.55, dampingFraction: 0.86)) { step = following }
+        arrived()
+    }
+
+    func back() {
+        guard let previous = Step(rawValue: step.rawValue - 1) else { return }
+        withAnimation(.spring(response: 0.55, dampingFraction: 0.86)) { step = previous }
+    }
+
+    /// What Joe says at the notch as each step comes up.
+    private func arrived() {
+        let name = Profile.name
+        switch step {
+        case .tour: actions.greet("Nice to meet you, \(name)", "Nice to meet you, \(name)! Here's what I can do.")
+        case .tryIt: actions.greet("Your turn", "Hold the right Option key and ask me something.")
+        case .done: actions.greet("You're all set, \(name) ✦", "You're all set. I'm up here whenever you need me.")
+        default: break
+        }
+    }
+}
+
+// MARK: - Look
+
+private enum Tint {
+    static let accent = Color(red: 1, green: 0.55, blue: 0.14)
+    static let glow = Color(red: 1, green: 0.45, blue: 0.1)
+    static let card = Color.white.opacity(0.06)
+    static let line = Color.white.opacity(0.1)
+    static let soft = Color.white.opacity(0.62)
+}
+
+private struct OnboardingView: View {
+    @ObservedObject var model: OnboardingModel
+
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: [Color(red: 0.05, green: 0.06, blue: 0.08), Color(red: 0.09, green: 0.1, blue: 0.13)],
+                           startPoint: .top, endPoint: .bottom)
+                .ignoresSafeArea()
+            VStack(spacing: 18) {
+                Group {
+                    switch model.step {
+                    case .hello: HelloStep(model: model)
+                    case .name: NameStep(model: model)
+                    case .tour: TourStep(model: model)
+                    case .school: SchoolStep(model: model)
+                    case .notes: NotesStep(model: model)
+                    case .permissions: PermissionsStep(model: model)
+                    case .claude: ClaudeStep(model: model)
+                    case .tryIt: TryStep(model: model)
+                    case .done: DoneStep(model: model)
+                    }
+                }
+                .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
+                                        removal: .move(edge: .leading).combined(with: .opacity)))
+                .id(model.step)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                progress
+            }
+            .padding(.horizontal, 64)
+            .padding(.top, 44)
+            .padding(.bottom, 28)
+        }
+        .foregroundStyle(.white)
+        .frame(width: 960, height: 660)
+    }
+
+    private var progress: some View {
+        HStack(spacing: 7) {
+            ForEach(OnboardingModel.Step.allCases, id: \.self) { step in
+                Capsule()
+                    .fill(step == model.step ? Tint.accent : Color.white.opacity(step.rawValue < model.step.rawValue ? 0.45 : 0.15))
+                    .frame(width: step == model.step ? 26 : 7, height: 7)
+            }
+        }
+        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: model.step)
+    }
+}
+
+// MARK: - Pieces
+
+/// Joe's star, glowing and turning slowly.
+private struct Star: View {
+    var size: CGFloat = 96
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            ZStack {
+                Circle()
+                    .fill(RadialGradient(colors: [Tint.glow.opacity(0.55), .clear], center: .center, startRadius: 0, endRadius: size * 1.4))
+                    .frame(width: size * 2.8, height: size * 2.8)
+                    .scaleEffect(1 + 0.08 * sin(t * 1.6))
+                Image(systemName: "sparkle")
+                    .font(.system(size: size, weight: .semibold))
+                    .foregroundStyle(LinearGradient(colors: [Color(red: 1, green: 0.75, blue: 0.35), Tint.accent], startPoint: .top, endPoint: .bottom))
+                    .rotationEffect(.degrees(sin(t * 0.8) * 8))
+                    .scaleEffect(1 + 0.04 * sin(t * 2.2))
+            }
+        }
+    }
+}
+
+/// Text that types itself out.
+private struct Typed: View {
+    let text: String
+    var font: Font = .system(size: 44, weight: .bold)
+    @State private var shown = 0
+
+    var body: some View {
+        Text(text.prefix(shown))
+            .font(font)
+            .task(id: text) {
+                shown = 0
+                for index in 0...text.count {
+                    shown = index
+                    try? await Task.sleep(for: .milliseconds(38))
+                }
+            }
+    }
+}
+
+private struct Primary: View {
+    let title: String
+    var enabled = true
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 15, weight: .semibold))
+                .padding(.horizontal, 26)
+                .frame(height: 44)
+                .background(enabled ? Tint.accent : Color.white.opacity(0.12), in: Capsule())
+                .foregroundStyle(enabled ? Color.black : Color.white.opacity(0.4))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .keyboardShortcut(.defaultAction)
+    }
+}
+
+private struct StepFrame<Content: View>: View {
+    @ObservedObject var model: OnboardingModel
+    let title: String
+    var subtitle: String?
+    var canContinue = true
+    var continueTitle = "Continue"
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 26) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(title).font(.system(size: 34, weight: .bold))
+                if let subtitle { Text(subtitle).font(.system(size: 15)).foregroundStyle(Tint.soft) }
+            }
+            content.frame(maxHeight: .infinity, alignment: .top)
+            HStack {
+                Button("Back") { model.back() }.buttonStyle(.plain).foregroundStyle(Tint.soft)
+                Spacer()
+                Primary(title: continueTitle, enabled: canContinue) { model.next() }
+            }
+        }
+        .padding(.top, 24)
+        .padding(.bottom, 18)
+    }
+}
+
+// MARK: - Steps
+
+private struct HelloStep: View {
+    @ObservedObject var model: OnboardingModel
+    @State private var appeared = false
+
+    var body: some View {
+        VStack(spacing: 22) {
+            Spacer()
+            Star(size: 92).frame(height: 230)
+            Typed(text: "Hi, I’m Joe.")
+            Text("I live at the top of your screen. Talk to me, and I’ll take care of the rest.")
+                .font(.system(size: 17)).foregroundStyle(Tint.soft)
+                .opacity(appeared ? 1 : 0)
+                .animation(.easeOut(duration: 0.8).delay(0.9), value: appeared)
+            Spacer()
+            Primary(title: "Hi Joe 👋") { model.next() }
+                .opacity(appeared ? 1 : 0)
+                .animation(.easeOut(duration: 0.6).delay(1.4), value: appeared)
+        }
+        .onAppear {
+            appeared = true
+            model.actions.greet("Hi, I’m Joe ✦", "Hi! I'm Joe. Let's get you set up.")
+        }
+    }
+}
+
+private struct NameStep: View {
+    @ObservedObject var model: OnboardingModel
+    @AppStorage("userName") private var name = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(spacing: 26) {
+            Spacer()
+            Star(size: 44).frame(height: 110)
+            Text("What should I call you?").font(.system(size: 34, weight: .bold))
+            TextField("Your name", text: $name)
+                .textFieldStyle(.plain)
+                .font(.system(size: 30, weight: .medium))
+                .multilineTextAlignment(.center)
+                .padding(.vertical, 14)
+                .frame(width: 420)
+                .background(Tint.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(focused ? Tint.accent : Tint.line, lineWidth: 1.5))
+                .focused($focused)
+                .onSubmit { if !trimmed.isEmpty { model.next() } }
+            Spacer()
+            HStack {
+                Button("Back") { model.back() }.buttonStyle(.plain).foregroundStyle(Tint.soft)
+                Spacer()
+                Primary(title: "Continue", enabled: !trimmed.isEmpty) { model.next() }
+            }
+        }
+        .onAppear { focused = true }
+    }
+
+    private var trimmed: String { name.trimmingCharacters(in: .whitespaces) }
+}
+
+/// Four things Joe does, each a short looping animation; they advance by themselves.
+private struct TourStep: View {
+    @ObservedObject var model: OnboardingModel
+    @State private var page = 0
+    private let pages = [
+        ("Write with your voice", "Hold right ⌘ and talk. Your words appear wherever you’re typing, punctuated.", "command"),
+        ("Ask me anything", "Hold right ⌥ and ask. I answer at the notch, and I can do it for you.", "option"),
+        ("I run your day", "Every morning: your classes, what’s due, and the emails that need you.", "sun.max"),
+        ("Big jobs, in the background", "Hand me a formative or a deck. I work through it while you keep going.", "checklist"),
+    ]
+
+    var body: some View {
+        StepFrame(model: model, title: pages[page].0, subtitle: pages[page].1) {
+            VStack(spacing: 22) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Tint.card)
+                        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Tint.line))
+                    Group {
+                        switch page {
+                        case 0: DictationDemo()
+                        case 1: AskDemo()
+                        case 2: DaybookDemo()
+                        default: ChecklistDemo()
+                        }
+                    }
+                    .id(page)
+                    .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                }
+                .frame(height: 300)
+                HStack(spacing: 8) {
+                    ForEach(0..<pages.count, id: \.self) { index in
+                        Button { withAnimation { page = index } } label: {
+                            Label(pages[index].0, systemImage: pages[index].2)
+                                .font(.system(size: 12.5, weight: page == index ? .semibold : .regular))
+                                .padding(.horizontal, 12).frame(height: 30)
+                                .background(page == index ? Tint.accent.opacity(0.18) : Color.clear, in: Capsule())
+                                .foregroundStyle(page == index ? Tint.accent : Tint.soft)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(4.5))
+                withAnimation(.easeInOut(duration: 0.4)) { page = (page + 1) % pages.count }
+            }
+        }
+    }
+}
+
+private struct KeyCap: View {
+    let label: String
+    let pressed: Bool
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 20, weight: .semibold))
+            .frame(width: 92, height: 64)
+            .background(RoundedRectangle(cornerRadius: 12).fill(pressed ? Tint.accent : Color.white.opacity(0.1)))
+            .foregroundStyle(pressed ? Color.black : .white)
+            .offset(y: pressed ? 3 : 0)
+            .shadow(color: pressed ? Tint.glow.opacity(0.6) : .clear, radius: 14)
+    }
+}
+
+private struct DictationDemo: View {
+    var body: some View {
+        TimelineView(.animation) { context in
+            let t = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 4.5)
+            let sentence = "Dear Ms Marquardt, Tuesday works for me. Thank you!"
+            let typed = t < 0.6 ? 0 : min(sentence.count, Int((t - 0.6) * 22))
+            HStack(spacing: 40) {
+                VStack(spacing: 16) {
+                    KeyCap(label: "⌘", pressed: t > 0.3 && t < 3)
+                    HStack(spacing: 4) {
+                        ForEach(0..<9, id: \.self) { index in
+                            Capsule().fill(Tint.accent)
+                                .frame(width: 5, height: t < 3 ? 8 + 22 * abs(sin(t * 7 + Double(index))) : 6)
+                        }
+                    }
+                    .frame(height: 34)
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Mail").font(.system(size: 12, weight: .semibold)).foregroundStyle(Tint.soft)
+                    Text(sentence.prefix(typed) + (typed < sentence.count ? "▍" : ""))
+                        .font(.system(size: 19)).frame(width: 340, height: 96, alignment: .topLeading)
+                }
+                .padding(20)
+                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
+            }
+        }
+    }
+}
+
+private struct AskDemo: View {
+    var body: some View {
+        TimelineView(.animation) { context in
+            let t = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 4.5)
+            let open = t > 1.2 && t < 4.2
+            VStack(spacing: 0) {
+                // The top of a screen, with the notch dropping an answer.
+                VStack(alignment: .leading, spacing: 6) {
+                    if open {
+                        Text("Econ quiz is Thursday").font(.system(size: 14, weight: .semibold))
+                        Text("Chapter 4 elasticity. I’ve added a 30-minute review to tomorrow.")
+                            .font(.system(size: 12.5)).foregroundStyle(Tint.soft)
+                    }
+                }
+                .padding(.horizontal, 18).padding(.vertical, open ? 14 : 0)
+                .frame(width: open ? 380 : 160, height: open ? 92 : 30, alignment: .topLeading)
+                .background(Color.black, in: UnevenRoundedRectangle(bottomLeadingRadius: 18, bottomTrailingRadius: 18))
+                .animation(.spring(response: 0.5, dampingFraction: 0.75), value: open)
+                Spacer()
+                HStack(spacing: 14) {
+                    KeyCap(label: "⌥", pressed: t > 0.2 && t < 1.2)
+                    Text(t < 1.2 ? "“When’s my Econ quiz?”" : " ").font(.system(size: 16)).foregroundStyle(Tint.soft)
+                }
+                .padding(.bottom, 28)
+            }
+        }
+    }
+}
+
+private struct DaybookDemo: View {
+    var body: some View {
+        TimelineView(.animation) { context in
+            let t = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 4.5)
+            let tasks = ["Math AI homework, due 14:25", "Reply to Ms Marquardt", "ESS formative draft", "Volleyball, leave 15:00"]
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Good morning ✦  Monday, 3 classes").font(.system(size: 15, weight: .semibold))
+                ForEach(Array(tasks.enumerated()), id: \.offset) { index, task in
+                    let done = t > 1 + Double(index) * 0.8
+                    HStack(spacing: 10) {
+                        Image(systemName: done ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(done ? Tint.accent : Tint.soft)
+                            .scaleEffect(done ? 1.15 : 1)
+                            .animation(.spring(response: 0.3, dampingFraction: 0.5), value: done)
+                        Text(task).font(.system(size: 15)).strikethrough(done).foregroundStyle(done ? Tint.soft : .white)
+                    }
+                }
+            }
+            .padding(26)
+            .frame(width: 420, alignment: .leading)
+            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16))
+        }
+    }
+}
+
+private struct ChecklistDemo: View {
+    var body: some View {
+        TimelineView(.animation) { context in
+            let t = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 4.5)
+            let steps = ["Read the ESS task", "Answer questions 1–4", "Draw the food web", "Save it as a new doc"]
+            let current = min(steps.count, Int(t / 1.0))
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    ProgressView().controlSize(.small).tint(Tint.accent)
+                    Text("\(min(current, steps.count))/\(steps.count) · \(steps[min(current, steps.count - 1)])")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                .padding(.horizontal, 14).frame(height: 34)
+                .background(Color.black, in: Capsule())
+                ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                    HStack(spacing: 10) {
+                        Image(systemName: index < current ? "checkmark.circle.fill" : index == current ? "circle.dotted" : "circle")
+                            .foregroundStyle(index < current ? .green : index == current ? Tint.accent : Tint.soft)
+                        Text(step).font(.system(size: 15)).foregroundStyle(index <= current ? .white : Tint.soft)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct SchoolStep: View {
+    @ObservedObject var model: OnboardingModel
+    @AppStorage("profileSchool") private var school = ""
+    @AppStorage("profileProgramme") private var programme = ""
+    @AppStorage("profileSubjects") private var subjects = ""
+    @AppStorage("profileProject") private var project = ""
+
+    private static let programmes = ["IB Diploma, year 1 (DP1)", "IB Diploma, year 2 (DP2)", "IB MYP", "IB Career-related", "Other"]
+    private static let common = ["Math AA", "Math AI", "English A Lang & Lit", "English A Literature", "Economics", "Business Management",
+                                 "Psychology", "History", "Geography", "Biology", "Chemistry", "Physics", "ESS", "Computer Science",
+                                 "Visual Arts", "Chinese B", "Spanish B", "French B", "Mandarin ab initio", "TOK"]
+
+    var body: some View {
+        StepFrame(model: model, title: "Your school", subtitle: "So I know your classes, your deadlines and how you’re assessed.") {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(spacing: 14) {
+                    field("School", "Your school’s name", $school)
+                    field("A project of yours (optional)", "A business, club…", $project)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Programme").font(.system(size: 12.5, weight: .medium)).foregroundStyle(Tint.soft)
+                    HStack(spacing: 8) {
+                        ForEach(Self.programmes, id: \.self) { option in
+                            chip(option.replacingOccurrences(of: "IB Diploma, ", with: "DP ").replacingOccurrences(of: "year ", with: ""), programme == option) { programme = option }
+                        }
+                    }
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Subjects: tap once for SL, twice for HL, again to remove").font(.system(size: 12.5, weight: .medium)).foregroundStyle(Tint.soft)
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 5), spacing: 8) {
+                        ForEach(Self.common, id: \.self) { subject in
+                            let level = level(of: subject)
+                            chip(level.map { "\(subject) \($0)" } ?? subject, level != nil) { cycle(subject) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func field(_ label: String, _ placeholder: String, _ value: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label).font(.system(size: 12.5, weight: .medium)).foregroundStyle(Tint.soft)
+            TextField(placeholder, text: value)
+                .textFieldStyle(.plain).font(.system(size: 15))
+                .padding(.horizontal, 14).frame(height: 40)
+                .background(Tint.card, in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Tint.line))
+        }
+    }
+
+    private func chip(_ title: String, _ on: Bool, _ action: @escaping () -> Void) -> some View {
+        Button(action: { withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) { action() } }) {
+            Text(title)
+                .font(.system(size: 12.5, weight: on ? .semibold : .regular))
+                .lineLimit(1).minimumScaleFactor(0.8)
+                .padding(.horizontal, 10).frame(maxWidth: .infinity).frame(height: 32)
+                .background(on ? Tint.accent : Tint.card, in: Capsule())
+                .foregroundStyle(on ? Color.black : .white)
+                .overlay(Capsule().strokeBorder(on ? Color.clear : Tint.line))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// The subjects as "Math AI HL, ESS SL…", one level each.
+    private var chosen: [(String, String)] {
+        subjects.split(separator: ",").compactMap { part in
+            let words = part.trimmingCharacters(in: .whitespaces)
+            guard let space = words.lastIndex(of: " ") else { return words.isEmpty ? nil : (words, "") }
+            let level = String(words[words.index(after: space)...])
+            return ["HL", "SL"].contains(level) ? (String(words[..<space]), level) : (words, "")
+        }
+    }
+
+    private func level(of subject: String) -> String? {
+        chosen.first { $0.0.caseInsensitiveCompare(subject) == .orderedSame || $0.0.hasPrefix(subject) }.map { $0.1.isEmpty ? "" : $0.1 }
+    }
+
+    private func cycle(_ subject: String) {
+        var list = chosen
+        if let index = list.firstIndex(where: { $0.0.caseInsensitiveCompare(subject) == .orderedSame || $0.0.hasPrefix(subject) }) {
+            if list[index].1 == "SL" { list[index].1 = "HL" } else { list.remove(at: index) }
+        } else {
+            list.append((subject, "SL"))
+        }
+        subjects = list.map { $0.1.isEmpty ? $0.0 : "\($0.0) \($0.1)" }.joined(separator: ", ")
+    }
+}
+
+private struct NotesStep: View {
+    @ObservedObject var model: OnboardingModel
+    @State private var refresh = 0
+
+    var body: some View {
+        StepFrame(model: model, title: "Where should I keep notes?",
+                  subtitle: "Lecture notes, your daily plan and my memory of your days go in one folder you own.",
+                  canContinue: Assistant.vaultURL != nil) {
+            VStack(spacing: 16) {
+                HStack(spacing: 16) {
+                    option("book.closed", "My Obsidian vault", "Use the vault you already have.") { model.actions.chooseVault(); refresh += 1 }
+                    option("folder.badge.plus", "Make a Joe folder", "In Documents. Open it in Obsidian any time.") { makeFolder(); refresh += 1 }
+                }
+                if let vault = Assistant.vaultURL {
+                    Label(vault.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"), systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 13.5, weight: .medium)).foregroundStyle(.green)
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .id(refresh)
+        }
+    }
+
+    private func option(_ symbol: String, _ title: String, _ detail: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: { withAnimation { action() } }) {
+            VStack(alignment: .leading, spacing: 10) {
+                Image(systemName: symbol).font(.system(size: 28)).foregroundStyle(Tint.accent)
+                Text(title).font(.system(size: 18, weight: .semibold))
+                Text(detail).font(.system(size: 13)).foregroundStyle(Tint.soft)
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, minHeight: 170, alignment: .topLeading)
+            .background(Tint.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Tint.line))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func makeFolder() {
+        let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Joe", isDirectory: true)
+        for sub in ["School/Lecture Notes", "Meetings", "Notes", "Daybook/History", "People"] {
+            try? FileManager.default.createDirectory(at: folder.appendingPathComponent(sub), withIntermediateDirectories: true)
+        }
+        Assistant.vaultURL = folder
+    }
+}
+
+/// Each permission ticks itself off the moment it's granted (checked every half second).
+private struct PermissionsStep: View {
+    @ObservedObject var model: OnboardingModel
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.5)) { _ in
+            let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+            let access = AXIsProcessTrusted()
+            StepFrame(model: model, title: "Two quick permissions", subtitle: "So I can hear you and type for you. Nothing is recorded unless you hold a key.",
+                      canContinue: mic && access) {
+                VStack(spacing: 14) {
+                    row("mic.fill", "Microphone", "To hear you while you hold a key", mic) {
+                        AVCaptureDevice.requestAccess(for: .audio) { _ in }
+                    }
+                    row("hand.raised.fill", "Accessibility", "To type what you say, and press keys for you", access) {
+                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+                    }
+                    row("rectangle.dashed", "Screen Recording (optional)", "So I can see what you mean by “this”", CGPreflightScreenCaptureAccess()) {
+                        CGRequestScreenCaptureAccess()
+                    }
+                }
+            }
+        }
+    }
+
+    private func row(_ symbol: String, _ title: String, _ detail: String, _ granted: Bool, _ ask: @escaping () -> Void) -> some View {
+        HStack(spacing: 16) {
+            Image(systemName: symbol).font(.system(size: 20)).foregroundStyle(Tint.accent)
+                .frame(width: 44, height: 44).background(Tint.accent.opacity(0.14), in: Circle())
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.system(size: 16, weight: .semibold))
+                Text(detail).font(.system(size: 13)).foregroundStyle(Tint.soft)
+            }
+            Spacer()
+            if granted {
+                Image(systemName: "checkmark.circle.fill").font(.system(size: 26)).foregroundStyle(.green)
+                    .transition(.scale.combined(with: .opacity))
+            } else {
+                Button("Allow", action: ask)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .padding(.horizontal, 18).frame(height: 34)
+                    .background(Color.white.opacity(0.12), in: Capsule())
+            }
+        }
+        .padding(16)
+        .background(Tint.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .animation(.spring(response: 0.35, dampingFraction: 0.6), value: granted)
+    }
+}
+
+private struct ClaudeStep: View {
+    @ObservedObject var model: OnboardingModel
+    @AppStorage("useAPIKey") private var useAPIKey = false
+    @State private var key = ""
+    @State private var saved = AIAccount.maskedKey
+
+    var body: some View {
+        let installed = Assistant.executable != nil
+        StepFrame(model: model, title: "My brain: Claude", subtitle: "I think with Claude, through Claude Code on this Mac.",
+                  canContinue: installed || (useAPIKey && saved != nil)) {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(spacing: 14) {
+                    Image(systemName: installed ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                        .font(.system(size: 26)).foregroundStyle(installed ? .green : .orange)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(installed ? "Claude Code is installed" : "Claude Code isn’t installed yet").font(.system(size: 16, weight: .semibold))
+                        Text(installed ? "If you haven’t yet, type claude in Terminal once and sign in."
+                                       : "In Terminal: brew install node, then npm install -g @anthropic-ai/claude-code, then claude to sign in.")
+                            .font(.system(size: 13)).foregroundStyle(Tint.soft).textSelection(.enabled)
+                    }
+                }
+                .padding(18)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Tint.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                Toggle("Use an Anthropic API key instead of a Claude plan", isOn: $useAPIKey).font(.system(size: 14)).tint(Tint.accent)
+                if useAPIKey {
+                    HStack(spacing: 10) {
+                        SecureField("sk-ant-…", text: $key)
+                            .textFieldStyle(.plain).padding(.horizontal, 14).frame(height: 40)
+                            .background(Tint.card, in: RoundedRectangle(cornerRadius: 10))
+                        Primary(title: "Save", enabled: key.count >= 20) { AIAccount.save(key); key = ""; saved = AIAccount.maskedKey }
+                    }
+                    if let saved { Text("Saved: \(saved)").font(.system(size: 12.5)).foregroundStyle(.green) }
+                }
+            }
+        }
+    }
+}
+
+private struct TryStep: View {
+    @ObservedObject var model: OnboardingModel
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            if let heard = model.heard {
+                Image(systemName: "checkmark.circle.fill").font(.system(size: 64)).foregroundStyle(.green)
+                    .transition(.scale.combined(with: .opacity))
+                Text("I heard you").font(.system(size: 34, weight: .bold))
+                Text("“\(heard)”").font(.system(size: 18)).foregroundStyle(Tint.soft).multilineTextAlignment(.center).frame(maxWidth: 620)
+                Text("My answer is up at the notch.").font(.system(size: 14)).foregroundStyle(Tint.soft)
+            } else {
+                TimelineView(.animation) { context in
+                    let t = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2.4)
+                    KeyCap(label: "⌥", pressed: t < 1.2).scaleEffect(1.4)
+                }
+                .frame(height: 110)
+                Text("Your turn").font(.system(size: 34, weight: .bold))
+                Text("Hold the right ⌥ key, say “What can you do?”, then let go.")
+                    .font(.system(size: 18)).foregroundStyle(Tint.soft)
+            }
+            Spacer()
+            HStack {
+                Button("Back") { model.back() }.buttonStyle(.plain).foregroundStyle(Tint.soft)
+                Spacer()
+                if model.heard == nil {
+                    Button("Skip for now") { model.next() }.buttonStyle(.plain).foregroundStyle(Tint.soft).padding(.trailing, 16)
+                }
+                Primary(title: "Continue", enabled: model.heard != nil) { model.next() }
+            }
+        }
+    }
+}
+
+private struct DoneStep: View {
+    @ObservedObject var model: OnboardingModel
+
+    var body: some View {
+        VStack(spacing: 22) {
+            Spacer()
+            Star(size: 80).frame(height: 200)
+            Typed(text: "You’re all set, \(Profile.name).")
+            VStack(alignment: .leading, spacing: 10) {
+                tip("command", "Hold right ⌘ to write with your voice")
+                tip("option", "Hold right ⌥ to ask me anything")
+                tip("sparkle", "Click my star in the menu bar for your dashboard")
+            }
+            Spacer()
+            Primary(title: "Start using Joe") { model.actions.finished() }
+        }
+    }
+
+    private func tip(_ symbol: String, _ text: String) -> some View {
+        Label(text, systemImage: symbol).font(.system(size: 15)).foregroundStyle(Tint.soft)
+    }
+}

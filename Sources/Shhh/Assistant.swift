@@ -278,8 +278,11 @@ final class Assistant {
 
     /// Designing slides and the like: Opus at high effort, whatever model is chosen (Haiku can't
     /// design). Starts a new session with it when the request is the first of the conversation.
+    /// Only work where the strongest model clearly pays for itself: designing a deck or page, and
+    /// doing a piece of schoolwork. Not converting, reading or filing (short words like "EE" or
+    /// "Keynote" switched it on for a PDF-to-Keynote request that needed no extra intelligence).
     static func needsStrongModel(_ request: String) -> Bool {
-        request.range(of: #"\b(slides?|slideshow|deck|power ?point|pptx|keynote|presentation|design|redesign|make (it|them|this) look (good|better|nice|professional)|formative|summative|worksheet|inquiry|assignment|homework|essay|lab report|IA|EE)\b"#,
+        request.range(of: #"\b(design|redesign|make (it|them|this) look (good|better|nice|professional)|formative|summative|worksheet|inquiry|assignment|homework|essay|lab report|internal assessment|extended essay)\b"#,
                       options: [.regularExpression, .caseInsensitive]) != nil
     }
 

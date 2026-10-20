@@ -265,6 +265,13 @@ enum CommandLineTool {
             // Joe --prompt "<dictation ending in make it a prompt>": what would be typed.
             guard let said = PromptPolish.request(in: args[1]) else { print("(no \"make it a prompt\" at the end)"); exit(0) }
             run { print(await PromptPolish.polish(said)) }
+        case ("--onboarding-snapshot", 3):
+            MainActor.assumeIsolated {
+                NSApplication.shared.setActivationPolicy(.accessory)
+                Onboarding.snapshot(step: args[1], to: URL(fileURLWithPath: args[2])) { exit(0) }
+            }
+            NSApplication.shared.run()
+            exit(0)
         case ("--challenge", 1...):
             // Joe --challenge [seed] ["what I said"]: a wake-up challenge, and whether that answer passes.
             let seed = args.count > 1 ? Int(args[1]) ?? 0 : 0

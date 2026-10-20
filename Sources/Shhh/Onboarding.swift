@@ -1000,3 +1000,28 @@ private struct DoneStep: View {
         Label(text, systemImage: symbol).font(.system(size: 15)).foregroundStyle(Tint.soft)
     }
 }
+
+// MARK: - Snapshots
+
+extension Onboarding {
+    /// `Joe --onboarding-snapshot <step> <file.png>`: one step of the welcome, drawn off screen.
+    @MainActor static func snapshot(step: String, to file: URL, done: @escaping () -> Void) {
+        let model = OnboardingModel(actions: .init(greet: { _, _ in }, narrate: { _, _ in }, isSpeaking: { false },
+                                                   prepareVoice: {}, chooseVault: {}, finished: {}))
+        model.step = OnboardingModel.Step.allCases.first { "\($0)" == step } ?? .hello
+        let view = NSHostingView(rootView: OnboardingView(model: model).environment(\.colorScheme, .dark))
+        let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 960, height: 660), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.backgroundColor = NSColor(red: 0.055, green: 0.063, blue: 0.086, alpha: 1)
+        window.contentView = view
+        window.orderFrontRegardless()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            MainActor.assumeIsolated {
+                if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                    view.cacheDisplay(in: view.bounds, to: rep)
+                    try? rep.representation(using: .png, properties: [:])?.write(to: file)
+                }
+                done()
+            }
+        }
+    }
+}

@@ -113,7 +113,6 @@ final class DashboardModel: ObservableObject {
         var askInBackground: (String) -> Void
         var status: () -> String
         var setVoice: (SpeechOutput.Engine) -> Void
-        var setNaturalVoice: (String) -> Void
         var setNotch: (Bool) -> Void
         var setCleanup: (Bool) -> Void
         var setScreenControl: (Bool) -> Void
@@ -1916,7 +1915,6 @@ private struct SettingsPage: View {
     @AppStorage("rememberConversations") private var remember = true
     @AppStorage("saveNotesToVault") private var saveNotes = true
     @AppStorage("keepHistory") private var keepHistory = true
-    @AppStorage("expressiveSounds") private var sounds = true
     @AppStorage("speakBriefing") private var speakBriefing = true
     @AppStorage("userName") private var userName = ""
     @AppStorage("joeChattiness") private var chattiness = "normal"
@@ -1927,7 +1925,6 @@ private struct SettingsPage: View {
     @State private var cleanup = UserDefaults.standard.bool(forKey: "aiCleanup")
     @State private var control = ScreenControl.isEnabled
     @State private var voice = SpeechOutput.engine
-    @State private var naturalVoice = SpeechOutput.naturalVoice
     @State private var login = false // read on appear: asking macOS is slow, too slow for every redraw
 
     @AppStorage("settingsTab") private var tab = "general"
@@ -2035,18 +2032,13 @@ private struct SettingsPage: View {
             row("Hype you up", "Joe cheers when you get things done", last: true) { switchOn($hype) }
         }
         section("Voice", "speaker.wave.2") {
-            row("Joe's voice", "Off, or how Joe sounds when he answers") {
-                Choice(options: SpeechOutput.Engine.allCases.map { ($0, $0.title.components(separatedBy: ":")[0]) }, selection: $voice)
+            row("Joe's voice", "Joe answers out loud in Alba's voice") {
+                Choice(options: [(SpeechOutput.Engine.lifelike, "On"), (.off, "Off")], selection: $voice)
                     .onChange(of: voice) { model.actions.setVoice(voice) }
             }
-            row("Natural voice") {
-                Choice(options: SpeechOutput.naturalVoices.map { ($0.id, $0.name) }, selection: $naturalVoice)
-                    .onChange(of: naturalVoice) { model.actions.setNaturalVoice(naturalVoice) }
-            }
-            row("Chinese voice", "Used for sentences in Chinese (Natural voice)") {
+            row("Chinese voice", "Used for sentences in Chinese") {
                 Choice(options: SpeechOutput.chineseVoices.map { ($0.id, $0.name) }, selection: $chineseVoice)
             }
-            row("Laughs and sighs", "In the Expressive voice") { switchOn($sounds) }
             row("Read briefings aloud", last: true) { switchOn($speakBriefing) }
         }
     }

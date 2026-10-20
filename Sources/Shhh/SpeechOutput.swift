@@ -2,22 +2,19 @@ import AVFoundation
 @preconcurrency import FluidAudio
 import NaturalLanguage
 
-/// Reads the assistant's replies aloud, a sentence at a time as they stream in, in the voice chosen
-/// in the menu: **Natural** (Kokoro, clear and quick), **Expressive** (Chatterbox Nano, warm, can
-/// laugh and sigh) or **Apple** (macOS's own voices). Natural and Expressive are open models that
-/// run on the Mac and download the first time they're picked. It stops as soon as a key goes
-/// down, so it never talks into the microphone.
+/// Reads the assistant's replies aloud, a sentence at a time as they stream in: English in Alba's
+/// voice (PocketTTS by Kyutai), Chinese in Kokoro's Mandarin voice, both open models that run on the
+/// Mac and download the first time. Any other language goes to macOS's own voices. It stops as soon
+/// as a key goes down, so it never talks into the microphone.
 @MainActor
 final class SpeechOutput {
     enum Engine: String, CaseIterable {
-        case off, natural, expressive, apple
+        case off, lifelike
 
         var title: String {
             switch self {
             case .off: "Off"
-            case .natural: "Natural: clear, gets to work"
-            case .expressive: "Expressive: warm and friendly"
-            case .apple: "Apple voice"
+            case .lifelike: "On: Alba"
             }
         }
     }
@@ -26,28 +23,19 @@ final class SpeechOutput {
 
     static var engine: Engine {
         get {
-            if let raw = UserDefaults.standard.string(forKey: "voiceEngine"), let engine = Engine(rawValue: raw) { return engine }
-            return UserDefaults.standard.bool(forKey: "speakReplies") ? .apple : .off // the old on/off switch
+            // Any voice that was on before (Natural, Expressive, Apple) is Alba now.
+            if let raw = UserDefaults.standard.string(forKey: "voiceEngine") { return raw == "off" ? .off : .lifelike }
+            return UserDefaults.standard.bool(forKey: "speakReplies") ? .lifelike : .off // the old on/off switch
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "voiceEngine") }
     }
 
     static var isEnabled: Bool { engine != .off }
 
-    /// Natural's voice: a Kokoro voice pack.
-    static var naturalVoice: String {
-        get { UserDefaults.standard.string(forKey: "naturalVoice") ?? "af_heart" }
-        set { UserDefaults.standard.set(newValue, forKey: "naturalVoice") }
-    }
+    /// The English voice: PocketTTS's Alba.
+    static let lifelikeVoice = "alba"
 
-    static let naturalVoices: [(id: String, name: String)] = [
-        ("af_heart", "Heart: US, female"), ("af_bella", "Bella: US, female"), ("af_nicole", "Nicole: US, female, soft"),
-        ("am_michael", "Michael: US, male"), ("am_adam", "Adam: US, male"), ("am_fenrir", "Fenrir: US, male, deep"),
-        ("bf_emma", "Emma: UK, female"), ("bf_isabella", "Isabella: UK, female"),
-        ("bm_george", "George: UK, male"), ("bm_lewis", "Lewis: UK, male"),
-    ]
-
-    /// The voice for sentences in Chinese (Kokoro's Mandarin model); English stays in `naturalVoice`.
+    /// The voice for sentences in Chinese (Kokoro's Mandarin model); English stays Alba's.
     static var chineseVoice: String {
         get { UserDefaults.standard.string(forKey: "chineseVoice") ?? "zf_001" }
         set { UserDefaults.standard.set(newValue, forKey: "chineseVoice") }
@@ -66,24 +54,18 @@ final class SpeechOutput {
         return Double(han) / Double(letters.count) > 0.4
     }
 
-    /// Expressive: whether the assistant may laugh, chuckle or sigh now and then.
-    static var expressiveSounds: Bool {
-        get { UserDefaults.standard.object(forKey: "expressiveSounds") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "expressiveSounds") }
-    }
-
-    /// The morning briefing is read aloud even with the voice off (in Natural's voice then).
+    /// The morning briefing is read aloud even with the voice off.
     static var speakBriefing: Bool {
         get { UserDefaults.standard.object(forKey: "speakBriefing") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "speakBriefing") }
     }
 
-    /// The sounds Expressive can make, written in the reply as `[chuckle]` and so on.
+    /// Sounds an older voice could make (`[chuckle]`…), taken out if a reply still has one.
     static let soundTags = ["laugh", "chuckle", "sigh"]
 
     // MARK: - Speaking
 
-    /// What's happening with a model download, for the menu ("Downloading Expressive… 40%").
+    /// What's happening with a model download, for the menu ("Getting the voice ready…").
     var status: String? { neural.status }
 
     private let apple = AVSpeechSynthesizer()
@@ -146,33 +128,30 @@ final class SpeechOutput {
     /// Gets the chosen model ready (downloading it the first time), or lets go of the others.
     func prepare() {
         let engine = Self.engine
-        Task { await neural.prepare(engine, voice: Self.naturalVoice) }
+        Task { await neural.prepare(engine) }
     }
 
     /// For `Shhh --get-voice`: downloads and loads a voice, and says whether it worked.
     func prepareNow(_ engine: Engine) async -> String? {
-        await neural.prepare(engine, voice: Self.naturalVoice)
+        await neural.prepare(engine)
         return neural.status
     }
 
     private func say(_ text: String) {
         let engine = current
-        // Sentence by sentence, so the models (Expressive takes about ten seconds of speech per
-        // go) and the queue both stay short.
+        // Sentence by sentence, so the first one starts soon and the queue stays short.
         let sentences = text.components(separatedBy: .newlines)
             .flatMap { Self.sentences(in: $0) }
             .filter { $0.contains(where: \.isLetter) }
         for sentence in sentences {
-            // The new voices speak English, and Natural also Chinese (Kokoro's Mandarin model);
-            // anything else goes to Apple's.
+            // Alba speaks English, Kokoro Chinese; anything else goes to macOS's own voices.
             let english = (NLLanguageRecognizer.dominantLanguage(for: Self.withoutSounds(sentence)) ?? .english) == .english
-            let chinese = engine == .natural && Self.isChinese(sentence)
-            if engine == .apple || (!english && !chinese) {
+            if !english && !Self.isChinese(sentence) {
                 let utterance = AVSpeechUtterance(string: Self.withoutSounds(sentence))
                 utterance.voice = Self.appleVoice(for: sentence)
                 apple.speak(utterance)
             } else {
-                pending.append(engine == .expressive && Self.expressiveSounds ? sentence : Self.withoutSounds(sentence))
+                pending.append(Self.withoutSounds(sentence))
             }
         }
         startWorking(engine)
@@ -182,21 +161,13 @@ final class SpeechOutput {
     /// last one plays, so there are no gaps.
     private func startWorking(_ engine: Engine) {
         guard worker == nil, !pending.isEmpty else { return }
-        let voice = Self.naturalVoice
         worker = Task { [weak self] in
             while let self, !Task.isCancelled, !self.pending.isEmpty {
-                var sentence = self.pending.removeFirst()
-                // Expressive is slower than the speech itself, with a second and a half each go on
-                // top, and long pieces are slower still. So the first sentence goes alone, to start
-                // soon, and after it short sentences waiting are said together, up to a line or so.
-                while engine == .expressive, self.player.isPlaying, let next = self.pending.first,
-                      sentence.count + next.count < 120 {
-                    sentence += " " + self.pending.removeFirst()
-                }
+                let sentence = self.pending.removeFirst()
                 let started = Date()
                 let audio: NeuralVoices.Audio
                 do {
-                    audio = try await self.neural.speak(sentence, engine: engine, voice: voice)
+                    audio = try await self.neural.speak(sentence)
                 } catch {
                     if ProcessInfo.processInfo.environment["SHHH_VOICE_LOG"] != nil { print("voice error:", error) }
                     continue
@@ -214,8 +185,8 @@ final class SpeechOutput {
 
     // MARK: - Text
 
-    /// "One. Two? Three!" → ["One.", "Two?", "Three!"]. Long ones are split at commas too, so
-    /// Expressive never gets more than it can say in one go.
+    /// "One. Two? Three!" → ["One.", "Two?", "Three!"]. Long ones are split at commas too, so a
+    /// voice never gets more than it can say in one go.
     static func sentences(in text: String) -> [String] {
         var sentences: [String] = []
         text.enumerateSubstrings(in: text.startIndex..., options: .bySentences) { sentence, _, _, _ in
@@ -275,61 +246,43 @@ final class SpeechOutput {
     }
 }
 
-/// The open voice models, loaded when picked and let go when not, so only the one in use takes
-/// memory (Expressive takes about a gigabyte).
+/// The open voice models: Alba (PocketTTS) for English, loaded when the voice is on and let go
+/// when it's off, and Kokoro's Mandarin model, loaded the first time a sentence in Chinese is read.
 @MainActor
 private final class NeuralVoices {
     private(set) var status: String?
-    private var kokoro: KokoroAneManager?
-    private var kokoroVoice: String?
-    /// Kokoro's Mandarin model, loaded the first time a sentence in Chinese is read.
+    private var pocket: PocketTtsManager?
     private var kokoroChinese: KokoroAneManager?
     private var kokoroChineseVoice: String?
-    /// A `ChatterboxNanoManager`, which needs macOS 15.
-    private var nano: AnyObject?
 
     struct Audio {
         let samples: [Float]
         let sampleRate: Int
     }
 
-    func prepare(_ engine: SpeechOutput.Engine, voice: String) async {
-        if engine != .natural, let kokoro {
-            await kokoro.cleanup()
-            self.kokoro = nil
-        }
-        if engine != .expressive { nano = nil }
-        do {
-            switch engine {
-            case .natural: _ = try await naturalManager(voice: voice)
-            case .expressive:
-                guard #available(macOS 15, *) else {
-                    status = "The Expressive voice needs macOS 15 or later"
-                    return
-                }
-                _ = try await expressiveManager()
-            case .off, .apple: break
-            }
-        } catch {
-            status = "Couldn't load the voice: \(error.localizedDescription)"
-        }
+    func prepare(_ engine: SpeechOutput.Engine) async {
+        guard engine == .lifelike else { pocket = nil; return }
+        do { _ = try await englishManager() } catch { status = "Couldn't load the voice: \(error.localizedDescription)" }
     }
 
-    func speak(_ text: String, engine: SpeechOutput.Engine, voice: String) async throws -> Audio {
-        switch engine {
-        case .expressive:
-            guard #available(macOS 15, *) else { throw CancellationError() }
-            let audio = try await expressiveManager().synthesize(text: text)
-            return Audio(samples: audio.samples, sampleRate: audio.sampleRate)
-        default:
-            if SpeechOutput.isChinese(text) {
-                let chinese = SpeechOutput.chineseVoice
-                let result = try await chineseManager(voice: chinese).synthesizeDetailed(text: text, voice: chinese)
-                return Audio(samples: result.samples, sampleRate: result.sampleRate)
-            }
-            let result = try await naturalManager(voice: voice).synthesizeDetailed(text: text, voice: voice)
+    func speak(_ text: String) async throws -> Audio {
+        if SpeechOutput.isChinese(text) {
+            let chinese = SpeechOutput.chineseVoice
+            let result = try await chineseManager(voice: chinese).synthesizeDetailed(text: text, voice: chinese)
             return Audio(samples: result.samples, sampleRate: result.sampleRate)
         }
+        let result = try await englishManager().synthesizeDetailed(text: text, voice: SpeechOutput.lifelikeVoice)
+        return Audio(samples: result.samples, sampleRate: 24_000)
+    }
+
+    private func englishManager() async throws -> PocketTtsManager {
+        if let pocket { return pocket }
+        status = "Getting the voice ready…"
+        defer { status = nil }
+        let manager = PocketTtsManager(defaultVoice: SpeechOutput.lifelikeVoice)
+        try await manager.initialize()
+        pocket = manager
+        return manager
     }
 
     private func chineseManager(voice: String) async throws -> KokoroAneManager {
@@ -341,33 +294,6 @@ private final class NeuralVoices {
         try await manager.initialize(preloadVoices: [voice])
         kokoroChinese = manager
         kokoroChineseVoice = voice
-        return manager
-    }
-
-    private func naturalManager(voice: String) async throws -> KokoroAneManager {
-        if let kokoro, kokoroVoice == voice { return kokoro }
-        status = "Getting the Natural voice ready…"
-        defer { status = nil }
-        // The faster v3 pipeline needs macOS 15.
-        let version: KokoroAneVersion = if #available(macOS 15, *) { .v3 } else { .legacy }
-        let manager = kokoro ?? KokoroAneManager(defaultVoice: voice, version: version)
-        try await manager.initialize(preloadVoices: [voice])
-        kokoro = manager
-        kokoroVoice = voice
-        return manager
-    }
-
-    @available(macOS 15, *)
-    private func expressiveManager() async throws -> ChatterboxNanoManager {
-        if let nano = nano as? ChatterboxNanoManager { return nano }
-        status = "Getting the Expressive voice ready…"
-        defer { status = nil }
-        let manager = ChatterboxNanoManager()
-        try await manager.initialize { [weak self] progress in
-            let percent = Int(progress.fractionCompleted * 100)
-            Task { @MainActor in self?.status = "Downloading the Expressive voice… \(percent)%" }
-        }
-        nano = manager
         return manager
     }
 }

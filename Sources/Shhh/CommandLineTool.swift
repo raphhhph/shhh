@@ -66,7 +66,7 @@ enum CommandLineTool {
             }
         case ("--say", 2...):
             // Shhh --say "<text>" [natural|expressive|apple]: speaks it in that voice, timing it.
-            let engine = args.count > 2 ? SpeechOutput.Engine(rawValue: args[2]) ?? .natural : .natural
+            let engine = args.count > 2 ? SpeechOutput.Engine(rawValue: args[2]) ?? .lifelike : .lifelike
             setvbuf(stdout, nil, _IOLBF, 0) // timings show up as they happen
             let start = Date()
             MainActor.assumeIsolated {

@@ -881,16 +881,10 @@ private final class Session {
         // With a voice on, replies are written to be heard, in the voice's character.
         let spoken = switch SpeechOutput.engine {
         case .off: ""
-        case .natural, .apple: """
+        case .lifelike: """
              Your replies are read aloud, so write them to be heard: short sentences, no bullet lists, \
             tables or links, times and numbers the way people say them, and under about 80 words unless \
             they ask for detail. Be clear and get to the point.
-            """
-        case .expressive: """
-             Your replies are read aloud by a warm, expressive voice, so write them to be heard: short \
-            sentences, no bullet lists, tables or links, times and numbers the way people say them, and \
-            under about 80 words unless they ask for detail. Be friendly and relaxed.\(SpeechOutput.expressiveSounds
-                ? " Where a person naturally would, you may write [chuckle], [laugh] or [sigh] (at most one per reply, usually none)." : "")
             """
         }
         let pace = switch effort {

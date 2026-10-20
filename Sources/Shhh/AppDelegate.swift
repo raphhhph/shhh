@@ -52,7 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func greetAtNotch(_ subject: String, _ line: String) {
         guard state == .idle else { return }
         greeting.show(subject)
-        if SpeechOutput.engine == .off { speech.useForThisReply(.natural) }
+        if SpeechOutput.engine == .off { speech.useForThisReply(.lifelike) }
         speech.update(line)
         speech.finish()
     }
@@ -65,10 +65,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.speech.stop()
             SpeechOutput.engine = engine
             self?.speech.prepare()
-        },
-        setNaturalVoice: { [weak self] voice in
-            SpeechOutput.naturalVoice = voice
-            if SpeechOutput.engine == .natural { self?.speech.prepare() }
         },
         setNotch: { [weak self] on in
             Notch.isEnabled = on
@@ -728,7 +724,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         answerPanel.reset()
         task.beginTurn("Good morning")
         answerPanel.beginTurn(question: "Good morning")
-        if SpeechOutput.speakBriefing, SpeechOutput.engine == .off { speech.useForThisReply(.natural) }
+        if SpeechOutput.speakBriefing, SpeechOutput.engine == .off { speech.useForThisReply(.lifelike) }
         Daybook.archiveIfOld()
         task.assistant.ask(Assistant.vaultURL == nil ? """
             [Morning briefing: I've just opened my Mac.] Greet me by name: "Good morning, <my name>." Then, \
@@ -792,7 +788,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         answerPanel.reset()
         task.beginTurn("Night shutdown")
         answerPanel.beginTurn(question: "Night shutdown")
-        if SpeechOutput.speakBriefing, SpeechOutput.engine == .off { speech.useForThisReply(.natural) }
+        if SpeechOutput.speakBriefing, SpeechOutput.engine == .off { speech.useForThisReply(.lifelike) }
         task.assistant.ask("[Night shutdown: it's \(now.formatted(date: .omitted, time: .shortened)).] Run my Night shutdown routine.")
     }
 
@@ -1626,8 +1622,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshResting()
     }
 
-    /// "Voice": off, Natural, Expressive or Apple; Natural's voice; whether Expressive may laugh and
-    /// sigh; and whether the morning briefing is read aloud.
+    /// "Voice": Alba or off, and whether the morning briefing is read aloud.
     private func voiceMenu() -> NSMenuItem {
         var items: [NSMenuItem] = []
         if let status = speech.status {
@@ -1642,15 +1637,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             items.append(item)
         }
         items.append(.separator())
-        items.append(submenu("Natural voice", items: SpeechOutput.naturalVoices.map { voice in
-            let item = item(voice.name, #selector(selectNaturalVoice(_:)))
-            item.representedObject = voice.id
-            item.state = voice.id == SpeechOutput.naturalVoice ? .on : .off
-            return item
-        }))
-        let sounds = item("Expressive can laugh and sigh", #selector(toggleExpressiveSounds))
-        sounds.state = SpeechOutput.expressiveSounds ? .on : .off
-        items.append(sounds)
         let briefing = item("Read the morning briefing aloud", #selector(toggleSpeakBriefing))
         briefing.state = SpeechOutput.speakBriefing ? .on : .off
         items.append(briefing)
@@ -1663,16 +1649,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         speech.stop()
         SpeechOutput.engine = engine
         speech.prepare() // downloads the model the first time; lets go of the other
-    }
-
-    @objc private func selectNaturalVoice(_ sender: NSMenuItem) {
-        guard let voice = sender.representedObject as? String else { return }
-        SpeechOutput.naturalVoice = voice
-        if SpeechOutput.engine == .natural { speech.prepare() }
-    }
-
-    @objc private func toggleExpressiveSounds() {
-        SpeechOutput.expressiveSounds.toggle()
     }
 
     @objc private func toggleSpeakBriefing() {

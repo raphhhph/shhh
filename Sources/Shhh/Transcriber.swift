@@ -32,16 +32,26 @@ actor Transcriber {
         guard manager == nil else { return }
         let models = try await AsrModels.downloadAndLoad(version: Self.languages == .european ? .redux : .v2,
                                                          progressHandler: { progress($0.fractionCompleted) })
-        if Self.languages == .chinese {
-            // Text-norm 14 ("withitn"): punctuation and numbers as digits, like Parakeet's output.
-            chinese = SenseVoiceManager(models: try await SenseVoiceModels.downloadAndLoad(), textNorm: 14)
-        }
         let manager = AsrManager(config: .default)
         try await manager.loadModels(models)
         self.manager = manager
         // Warm up so the first real dictation is fast.
         _ = try? await transcribe([Float](repeating: 0, count: 16_000))
+        // Chinese comes after, without holding up the keys: after an update macOS recompiles it for
+        // the Neural Engine, which can take minutes. Until then everything goes to Parakeet.
+        if Self.languages == .chinese { Task { await self.loadChinese() } }
     }
+
+    private func loadChinese() async {
+        guard chinese == nil else { return }
+        // Text-norm 14 ("withitn"): punctuation and numbers as digits, like Parakeet's output.
+        if let models = try? await SenseVoiceModels.downloadAndLoad() {
+            chinese = SenseVoiceManager(models: models, textNorm: 14)
+        }
+    }
+
+    /// Whether Chinese is ready too (it loads after English).
+    var chineseReady: Bool { chinese != nil }
 
     func transcribe(_ samples: [Float]) async throws -> String {
         guard let manager else { throw TranscriberError.notLoaded }

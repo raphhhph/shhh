@@ -426,7 +426,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task {
             do {
                 try await transcriber.load { fraction in
-                    Task { @MainActor in self.speechStatus = "Downloading speech model… \(Int(fraction * 100))%" }
+                    // Also reported while macOS prepares a model it already has (after an update).
+                    Task { @MainActor in
+                        self.speechStatus = fraction < 1 ? "Getting speech ready… \(Int(fraction * 100))%" : "Getting speech ready…"
+                    }
                 }
                 guard transcriber === self.transcriber else { return } // replaced meanwhile
                 speechLoading = false

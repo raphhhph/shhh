@@ -36,6 +36,9 @@ enum CommandLineTool {
             guard let style = WritingStyle(rawValue: args[1]) else { fail("Unknown style: \(args[1])") }
             print(style.apply(args[2]))
             exit(0)
+        case ("--voice-samples", 2):
+            // Joe --voice-samples <folder>: one sentence in each on-device voice, to compare by ear.
+            run { await VoiceSamples.run(args[1]) }
         case ("--denoise", 3):
             // Joe --denoise in.wav out.wav: the noise filter on a file, for testing it.
             run {

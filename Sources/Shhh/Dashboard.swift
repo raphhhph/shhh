@@ -1773,8 +1773,12 @@ private struct StudyPage: View {
         .frame(height: 50)
         .background(Look.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Look.line))
-        Text("Answer by holding right ⌥ while the question is on screen. Joe marks it, explains, and asks the next one.")
+        Text("Questions open on the whiteboard: type your answer, or hold right ⌥ and say it. Joe marks it like an examiner and gives a model answer.")
             .font(.system(size: 12)).foregroundStyle(.secondary).padding(.leading, 4)
+        Card(title: "Real past papers", symbol: "doc.text.magnifyingglass") {
+            Text("IB papers are sold by the IB, so Joe can't ship them. Put the ones you have (from school, IB Questionbank or a teacher) in your notes under _files/School/<subject>/Past papers, with their markschemes, and Joe asks those real questions and marks with the real markscheme. Otherwise he writes questions in the exact style of each paper.")
+                .font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
 
         let columns = narrow ? 1 : 2
         let rows = stride(from: 0, to: subjects.count, by: columns).map { Array(subjects[$0..<min($0 + columns, subjects.count)]) }
@@ -2466,6 +2470,7 @@ private struct SettingsPage: View {
     @State private var voiceLearned = 0
     @AppStorage("useAPIKey") private var useAPIKey = false
     @AppStorage("ibQuestion") private var ibQuestion = true
+    @AppStorage("wakeChallenge") private var wakeChallenge = true
     @AppStorage("reduceNoise") private var reduceNoise = true
     @AppStorage("chineseVoice") private var chineseVoice = "zf_001"
     @AppStorage("modelMirrorChina") private var chinaMirror = false
@@ -2631,7 +2636,8 @@ private struct SettingsPage: View {
             row("Morning briefing", "On your first wake of the day") { switchOn($morning) }
             row("Evening check", "19:30: new ManageBac tasks and grades into your Daybook") { switchOn($evening) }
             row("Night shutdown", "21:30 on school nights") { switchOn($night) }
-            row("IB question of the day", "One short question from your subjects, at the end of the morning brief", last: true) { switchOn($ibQuestion) }
+            row("IB question of the day", "One short question from your subjects, at the end of the morning brief") { switchOn($ibQuestion) }
+            row("Wake-up challenge", "Morning alarms only stop once you read a verse or a fact aloud, or answer a question (right ⌥)", last: true) { switchOn($wakeChallenge) }
         }
         section("iPhone", "iphone") {
             row("Alarms on iPhone", "Copies alarms to a “Joe” list in Reminders") { switchOn($toReminders) }

@@ -266,7 +266,7 @@ enum AlarmRequest {
     }
 
     /// "five minutes" → "5 minutes", "an hour" → "1 hour", "half an hour" → "30 minutes".
-    private static func numbers(in text: String) -> String {
+    static func numbers(in text: String) -> String {
         var text = text
             .replacingOccurrences(of: #"\bhalf an? hour\b"#, with: "30 minutes", options: .regularExpression)
             .replacingOccurrences(of: #"\ban? (hour|minute|second)\b"#, with: "1 $1", options: .regularExpression)
@@ -326,6 +326,39 @@ final class AlarmClock {
 
     /// The alarms still to come, soonest first.
     var pending: [Alarm] { known }
+
+    /// A morning alarm's challenge passed: time for the briefing.
+    var onWokeUp: () -> Void = {}
+
+    /// Ringing with a wake-up challenge still to do.
+    var challengeActive: Bool { ringing != nil && model.challenge != nil }
+
+    /// Beeping paused while they hold a key to answer (so the microphone hears them, not the alarm).
+    func quiet(_ on: Bool) {
+        guard ringing != nil else { return }
+        if on { player.pause() } else if !player.isPlaying { player.play() }
+    }
+
+    /// What they said for the challenge. Passing stops the alarm; missing sets it beeping again.
+    @discardableResult
+    func answer(_ heard: String) -> Bool {
+        guard let challenge = model.challenge else { return false }
+        model.heard = heard
+        if challenge.check(heard) {
+            model.challenge = nil
+            stop()
+            onWokeUp()
+            return true
+        }
+        misses += 1
+        // Two misses on a question: a different one, so nobody's stuck on a fact they never learnt.
+        if misses % 2 == 0, challenge.kind == .question { model.challenge = challenge.another() }
+        model.feedback = challenge.kind == .question ? "Not quite. Try again." : "Read all of it, clearly."
+        quiet(false)
+        return false
+    }
+
+    private var misses = 0
 
     /// An alarm stopped by the user (not snoozed, not missed): for a focus timer's wrap-up.
     var onStopped: (Alarm) -> Void = { _ in }
@@ -397,6 +430,13 @@ final class AlarmClock {
     private func ring(_ alarm: Alarm) {
         ringing = alarm
         model.alarm = alarm
+        // A morning alarm only stops once they've read the verse or fact, or answered the question.
+        let challenge = WakeChallenge.applies(to: alarm)
+        model.challenge = challenge ? WakeChallenge.today() : nil
+        model.feedback = nil
+        model.heard = nil
+        model.canSnooze = !challenge || !snoozedThisMorning
+        misses = 0
         showPanel()
         // Music off while it rings; the volume up if it's low, so it's heard.
         if script("tell application \"System Events\" to (name of processes) contains \"Spotify\"") == "true",
@@ -413,7 +453,8 @@ final class AlarmClock {
         stopWork?.cancel()
         let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.stop(missed: true) } }
         stopWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + (alarm.kind == .reminder ? 20 : 180), execute: work)
+        // With a challenge it keeps going (twenty minutes at most): giving up is how they fall back asleep.
+        DispatchQueue.main.asyncAfter(deadline: .now() + (alarm.kind == .reminder ? 20 : challenge ? 1200 : 180), execute: work)
     }
 
     func stop(missed: Bool = false) {
@@ -435,9 +476,16 @@ final class AlarmClock {
     }
 
     private var snoozing = false
+    /// A challenge alarm can be snoozed once a morning.
+    private var snoozedThisMorning = false
 
     func snooze(minutes: Int) {
         guard var alarm = ringing else { return }
+        if model.challenge != nil {
+            guard !snoozedThisMorning else { return }
+            snoozedThisMorning = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3600) { [weak self] in self?.snoozedThisMorning = false }
+        }
         snoozing = true
         stop()
         snoozing = false
@@ -490,7 +538,7 @@ final class AlarmClock {
     private func showPanel() {
         panel?.orderOut(nil)
         guard let screen = Notch.screenUnderMouse ?? NSScreen.main else { return }
-        let size = NSSize(width: 440, height: 210)
+        let size = NSSize(width: 480, height: model.challenge == nil ? 210 : 380)
         let frame = screen.visibleFrame
         let panel = NSPanel(contentRect: NSRect(x: frame.midX - size.width / 2, y: frame.maxY - size.height - 40, width: size.width, height: size.height),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
@@ -508,6 +556,10 @@ final class AlarmClock {
 
 final class AlarmModel: ObservableObject {
     @Published var alarm: Alarm?
+    @Published var challenge: WakeChallenge?
+    @Published var feedback: String?
+    @Published var heard: String?
+    @Published var canSnooze = true
     var onStop: () -> Void = {}
     var onSnooze: () -> Void = {}
 }
@@ -539,13 +591,41 @@ private struct AlarmView: View {
             }
             .padding(18)
             Rectangle().fill(Color.white.opacity(0.1)).frame(height: 0.5)
-            HStack(spacing: 10) {
-                Text("Say “stop” or “snooze”").font(.system(size: 12)).foregroundStyle(Color.white.opacity(0.45))
-                Spacer()
-                Button("Snooze 5 min", action: model.onSnooze).buttonStyle(AlarmButton(prominent: false))
-                Button("Stop", action: model.onStop).buttonStyle(AlarmButton(prominent: true))
+            if let challenge = model.challenge {
+                // No Stop button: it stops when the challenge is done.
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(challenge.instruction.uppercased())
+                        .font(.system(size: 11, weight: .bold)).foregroundStyle(.orange)
+                    Text(challenge.prompt)
+                        .font(.system(size: challenge.kind == .question ? 19 : 16, weight: .semibold, design: challenge.kind == .verse ? .serif : .default))
+                        .foregroundStyle(.white)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if challenge.kind == .verse {
+                        Text(challenge.source).font(.system(size: 12, weight: .medium)).foregroundStyle(Color.white.opacity(0.5))
+                    }
+                    if let feedback = model.feedback {
+                        Text(feedback + (model.heard.map { " I heard: “\($0)”" } ?? ""))
+                            .font(.system(size: 12)).foregroundStyle(Color.orange.opacity(0.9)).lineLimit(2)
+                    }
+                    Spacer(minLength: 0)
+                    HStack {
+                        Text("Hold right ⌥, say it, let go").font(.system(size: 12)).foregroundStyle(Color.white.opacity(0.45))
+                        Spacer()
+                        if model.canSnooze {
+                            Button("Snooze 5 min (once)", action: model.onSnooze).buttonStyle(AlarmButton(prominent: false))
+                        }
+                    }
+                }
+                .padding(18)
+            } else {
+                HStack(spacing: 10) {
+                    Text("Say “stop” or “snooze”").font(.system(size: 12)).foregroundStyle(Color.white.opacity(0.45))
+                    Spacer()
+                    Button("Snooze 5 min", action: model.onSnooze).buttonStyle(AlarmButton(prominent: false))
+                    Button("Stop", action: model.onStop).buttonStyle(AlarmButton(prominent: true))
+                }
+                .padding(.horizontal, 16).padding(.vertical, 14)
             }
-            .padding(.horizontal, 16).padding(.vertical, 14)
         }
         .background(Color(white: 0.1), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Color.orange.opacity(pulse ? 0.9 : 0.3), lineWidth: 1.5))

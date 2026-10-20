@@ -267,10 +267,14 @@ final class Assistant {
         cancel()
         self.onEvent = onEvent
         guard let executable = Self.executable else { return } // reported by ask()
-        session = Session(executable: executable, model: modelOverride, effort: effortOverride, onEvent: { [weak self] in self?.relay($0) })
+        session = Session(executable: executable, model: modelOverride, effort: effortOverride, tutor: tutorPrompt, onEvent: { [weak self] in self?.relay($0) })
     }
 
     // MARK: Hard jobs
+
+    /// The whiteboard's tutor: a short quiz-only prompt instead of Joe's, no connectors or browser,
+    /// so each question and mark comes back in a few seconds.
+    var tutorPrompt: String?
 
     /// Set for a job that needs the strongest model (designing slides), whatever's chosen in Settings.
     private var modelOverride: Model?
@@ -324,7 +328,7 @@ final class Assistant {
 
     private func resend(_ request: String, _ screenshot: Data?) {
         if session?.isRunning != true, let executable = Self.executable {
-            session = Session(executable: executable, model: modelOverride, effort: effortOverride, onEvent: { [weak self] in self?.relay($0) }) // a fresh connection
+            session = Session(executable: executable, model: modelOverride, effort: effortOverride, tutor: tutorPrompt, onEvent: { [weak self] in self?.relay($0) }) // a fresh connection
         }
         guard let session, session.isRunning else {
             onEvent(.failed("The connection to Claude dropped twice. Check your internet or proxy, then try again."))
@@ -422,7 +426,7 @@ final class Session {
 
     var isRunning: Bool { !stopped && process.isRunning }
 
-    init(executable: URL, model: Assistant.Model? = nil, effort: Assistant.Effort? = nil,
+    init(executable: URL, model: Assistant.Model? = nil, effort: Assistant.Effort? = nil, tutor: String? = nil,
          onEvent: @escaping @MainActor (Assistant.Event) -> Void) {
         self.onEvent = onEvent
         modelName = (model ?? Assistant.model).rawValue
@@ -453,7 +457,25 @@ final class Session {
             "--effort", effort.rawValue,
             "--system-prompt", Self.systemPrompt(effort, autonomy: autonomy, instructions: instructions.text, vault: vault),
         ]
-        process.environment = Self.environment()
+        if let tutor {
+            // Tutoring: their notes and Joe's PDF tools only, nothing else loaded.
+            process.arguments = [
+                "-p",
+                "--input-format", "stream-json",
+                "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+                "--tools", vault == nil ? "Bash" : "Read,Grep,Glob,Bash",
+                "--strict-mcp-config",
+                "--setting-sources", "user",
+                "--permission-mode", "default",
+                "--permission-prompt-tool", "stdio",
+                "--disable-slash-commands",
+                "--no-session-persistence",
+                "--model", (model ?? Assistant.model).rawValue,
+                "--effort", effort.rawValue,
+                "--system-prompt", tutor,
+            ]
+        }
+                process.environment = Self.environment()
         // Work in the vault, so note paths are relative to it. Without one, an empty folder, so no
         // project's instructions get picked up.
         let folder = vault ?? FileManager.default.temporaryDirectory.appendingPathComponent("shhh-ask", isDirectory: true)

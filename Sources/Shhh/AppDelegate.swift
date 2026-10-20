@@ -65,6 +65,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }))
 
     private let greeting = NotchGreeting()
+    private let studyBoard = StudyBoard()
+
+    /// "Quiz me on econ externalities", "test me on…": the study whiteboard, not the notch.
+    private func openStudy(_ request: String) -> Bool {
+        guard request.range(of: #"^\W*((hey|ok|okay),?\s+)?(joe,?\s+)?(can you\s+)?(quiz|test) me\b|give me (a|an|one) (full )?exam(-style)? question"#,
+                            options: [.regularExpression, .caseInsensitive]) != nil else { return false }
+        let subject = StudyBoard.subject(in: request) ?? Profile.subjects.components(separatedBy: ",").first?.trimmingCharacters(in: .whitespaces) ?? "Economics"
+        let exam = request.range(of: "exam", options: .caseInsensitive) != nil
+        studyBoard.show(subject: subject, request: request, mode: exam ? .exam : .quiz)
+        return true
+    }
 
     /// Joe at the notch, saying a line out loud: for the tour, with no conversation behind it.
     private func greetAtNotch(_ subject: String, _ line: String) {
@@ -199,7 +210,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         watchForMorning()
         speech.prepare()
         alarms.onNotice = { [weak self] text in self?.toast.show(text, symbol: "alarm.fill", tint: .orange) }
+        studyBoard.speak = { [weak self] text in
+            guard let self, !text.isEmpty else { return }
+            self.speech.stop()
+            if SpeechOutput.engine == .off { self.speech.useForThisReply(.lifelike) }
+            self.speech.update(text)
+            self.speech.finish()
+        }
+        studyBoard.stopSpeaking = { [weak self] in self?.speech.stop() }
         alarms.onChange = { [weak self] in self?.refreshShelf() }
+        // The wake-up challenge done: straight into the morning briefing.
+        alarms.onWokeUp = { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                MainActor.assumeIsolated { self?.greetIfMorning(afterAlarm: true) }
+            }
+        }
         // A focus session over: Joe asks what got done, to tick it off.
         alarms.onStopped = { [weak self] alarm in
             guard alarm.title.hasPrefix("Focus"), Assistant.vaultURL != nil else { return }
@@ -362,6 +387,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// anything else to Joe, with its card at the notch).
     private func askTyped(_ text: String) {
         if let request = AlarmRequest.parse(text) { alarms.handle(request); return }
+        if openStudy(text) { return }
         if let music = Spotify.command(in: text) {
             Task.detached { [weak self] in
                 let result = Spotify.run(music)
@@ -445,13 +471,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// A transcription that never finished leaves the model stuck: start over with a fresh one.
+    /// A transcription that never finished may have left the model stuck: a fresh one loads in the
+    /// background and takes over when it's ready. The keys keep working meanwhile (a timeout is
+    /// usually the Neural Engine busy with something else, and the next try works).
     private func reloadSpeechModel() {
-        transcriber = Transcriber()
-        speechReady = false
-        speechLoading = false
-        speechStatus = "Loading speech model…"
-        loadSpeechModel()
+        guard speechReady, !speechLoading else {
+            transcriber = Transcriber()
+            speechReady = false
+            speechLoading = false
+            speechStatus = "Getting speech ready…"
+            loadSpeechModel()
+            return
+        }
+        speechLoading = true
+        let fresh = Transcriber()
+        Task {
+            if (try? await fresh.load { _ in }) != nil { transcriber = fresh }
+            speechLoading = false
+        }
     }
 
     private func loadCleanupModel() {
@@ -563,6 +600,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         state = .recording
         self.key = key
+        alarms.quiet(true) // answering the wake-up challenge: the beeping waits
         speech.stop() // never talk into the microphone
         pauseMusic() // nor over music
         if notepad.isListening { notepad.stopListening() } // one recording at a time
@@ -759,13 +797,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         check()
     }
 
-    private func greetIfMorning() {
+    private func greetIfMorning(afterAlarm: Bool = false) {
         let now = Date()
         let calendar = Calendar.current
         let today = now.formatted(.localDay)
         guard morningBriefing, Assistant.executable != nil,
               // School days from 5:00; a day off from 7:00 (a lie-in shouldn't wake to a briefing).
-              (Daybook.isSchoolDay(now) ? 5..<12 : 7..<13).contains(calendar.component(.hour, from: now)),
+              // Woken by their alarm: whenever it is.
+              afterAlarm || (Daybook.isSchoolDay(now) ? 5..<12 : 7..<13).contains(calendar.component(.hour, from: now)),
               UserDefaults.standard.string(forKey: "lastMorningBriefing") != today,
               state == .idle, !answerPanel.isVisible else { return }
         UserDefaults.standard.set(today, forKey: "lastMorningBriefing")
@@ -1219,6 +1258,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             answerPanel.setListening(false)
         dropNewConversation()
         state = .idle
+        alarms.quiet(false)
         let start = startTask
         Task { if let recording = await start?.value { recorder.cancel(recording) } }
     }
@@ -1254,6 +1294,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 panel.hide()
             answerPanel.setListening(false)
                 state = .idle
+                alarms.quiet(false) // still ringing: back to beeping
                 if asking, !asked, !followingUp { dropNewConversation() }
             }
             guard let recording = await start?.value else { return } // already beeped
@@ -1293,6 +1334,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }) ?? TextCleaner.removeFillers(raw)
             }
             text = Vocabulary.apply(text) // the user's names and words, spelled their way
+            // A morning alarm's challenge: whatever key they held, this is their answer.
+            if alarms.challengeActive {
+                alarms.answer(text)
+                return
+            }
             if handsFreeTake { text = EndListener.withoutEndPhrase(text) } // "…, end prompt"
             if asking {
                 guard !text.isEmpty else { return }
@@ -1301,6 +1347,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 guard var task = focused else { return }
                 // "It's resolved", "remove the tick": the answer on the card is cleared ("clear
                 // everything": the side notch's too). Nothing goes to Claude.
+                // The whiteboard in front: this is their answer to its question.
+                if studyBoard.isTakingAnswers {
+                    studyBoard.answer(byVoice: text)
+                    return
+                }
+                if openStudy(text) { return }
                 if Self.isDismissRequest(text) {
                     if Self.isClearAll(text) { for other in tasks where other !== task { end(other) } }
                     // Said with nothing on the card: "it" is the finished answers waiting at the notch.

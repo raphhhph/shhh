@@ -47,6 +47,80 @@ final class SpeechOutput {
     ]
 
     /// Mostly Chinese characters: read with the Mandarin voice.
+    /// Any Chinese characters at all.
+    nonisolated static func hasHan(_ text: String) -> Bool {
+        text.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) || (0x3400...0x4DBF).contains($0.value) }
+    }
+
+    /// Text for macOS's own voices: another script (Cyrillic, Korean, Arabic, Japanese kana…), or,
+    /// with European languages on, a Latin-script language other than English that's clearly that.
+    /// Latin text otherwise stays with Alba: "HL A310" once came out in a Russian voice.
+    nonisolated static func isOtherLanguage(_ text: String) -> Bool {
+        let letters = text.unicodeScalars.filter { CharacterSet.letters.contains($0) }
+        guard !letters.isEmpty else { return false }
+        let latin = letters.filter { $0.value < 0x250 }.count
+        if Double(latin) / Double(letters.count) < 0.5 { return true }
+        guard Transcriber.languages == .european else { return false }
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(text)
+        guard let (language, confidence) = recognizer.languageHypotheses(withMaximum: 1).first else { return false }
+        return language != .english && confidence > 0.8 && text.split(separator: " ").count >= 4
+    }
+
+    /// "明天第一节是数学 AI HL，08:30–09:30。" → ["明天第一节是数学", "AI HL", "，八点三十到九点三十。"]:
+    /// English words go to Alba, the rest to the Mandarin voice with numbers in Chinese.
+    nonisolated static func chineseParts(_ text: String) -> [String] {
+        var parts: [String] = []
+        var rest = Substring(text)
+        let latin = #"[A-Za-z][A-Za-z0-9'’&.+\-]*(?:\s+[A-Za-z0-9][A-Za-z0-9'’&.+\-]*)*"#
+        while let range = rest.range(of: latin, options: .regularExpression) {
+            parts.append(chineseNumbers(String(rest[..<range.lowerBound])))
+            parts.append(String(rest[range]))
+            rest = rest[range.upperBound...]
+        }
+        parts.append(chineseNumbers(String(rest)))
+        return parts.map { $0.trimmingCharacters(in: .whitespaces) }.filter { $0.contains(where: { $0.isLetter || $0.isNumber }) }
+    }
+
+    /// Times, ranges and numbers the way they're said in Chinese: "08:30–09:30" → "八点三十到九点三十".
+    nonisolated static func chineseNumbers(_ text: String) -> String {
+        var text = text
+        text = text.replacingOccurrences(of: #"([0-9])\s*[–—~-]\s*([0-9])"#, with: "$1到$2", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"([0-9]{1,2})[:：]([0-9]{2})"#, with: "$1点$2", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"([0-9]+(\.[0-9]+)?)\s*%"#, with: "百分之$1", options: .regularExpression)
+        // Each run of digits (with a decimal part) in words. [0-9], not \d: \d also matches 八 and 零.
+        while let range = text.range(of: #"[0-9]+(\.[0-9]+)?"#, options: .regularExpression) {
+            let number = String(text[range])
+            let parts = number.split(separator: ".")
+            var words = chineseInteger(Int(parts[0]) ?? 0)
+            if parts.count > 1 { words += "点" + parts[1].map { chineseDigit(Int(String($0)) ?? 0) }.joined() }
+            text.replaceSubrange(range, with: words)
+        }
+        return text
+    }
+
+    nonisolated private static func chineseDigit(_ digit: Int) -> String {
+        ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九"][digit]
+    }
+
+    /// 0–99,999 in words (larger numbers digit by digit, like a phone number).
+    nonisolated private static func chineseInteger(_ value: Int) -> String {
+        guard value >= 10 else { return chineseDigit(value) }
+        guard value < 100_000 else { return String(value).map { chineseDigit(Int(String($0)) ?? 0) }.joined() }
+        let units = ["", "十", "百", "千", "万"]
+        let digits = String(value).map { Int(String($0)) ?? 0 }
+        var result = ""
+        var zero = false
+        for (index, digit) in digits.enumerated() {
+            let place = digits.count - 1 - index
+            if digit == 0 { zero = true; continue }
+            if zero, !result.isEmpty { result += "零" }
+            zero = false
+            result += (digit == 1 && place == 1 && result.isEmpty ? "" : chineseDigit(digit)) + units[place]
+        }
+        return result
+    }
+
     nonisolated static func isChinese(_ text: String) -> Bool {
         let letters = text.unicodeScalars.filter { CharacterSet.letters.contains($0) }
         guard !letters.isEmpty else { return false }
@@ -149,14 +223,17 @@ final class SpeechOutput {
             .flatMap { Self.sentences(in: $0) }
             .filter { $0.contains(where: \.isLetter) }
         for sentence in sentences {
-            // Alba speaks English, Kokoro Chinese; anything else goes to macOS's own voices.
-            let english = (NLLanguageRecognizer.dominantLanguage(for: Self.withoutSounds(sentence)) ?? .english) == .english
-            if !english && !Self.isChinese(sentence) {
-                let utterance = AVSpeechUtterance(string: Self.withoutSounds(sentence))
+            let clean = Self.withoutSounds(sentence)
+            if Self.hasHan(clean) {
+                // Chinese, often with English in it ("数学 AI HL，08:30"): the Chinese parts in the
+                // Mandarin voice with numbers said in Chinese, the English words in Alba's.
+                pending += Self.chineseParts(clean)
+            } else if Self.isOtherLanguage(clean) {
+                let utterance = AVSpeechUtterance(string: clean)
                 utterance.voice = Self.appleVoice(for: sentence)
                 apple.speak(utterance)
             } else {
-                pending.append(Self.withoutSounds(sentence))
+                pending.append(clean)
             }
         }
         startWorking(engine)

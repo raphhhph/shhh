@@ -241,6 +241,25 @@ enum CommandLineTool {
             }
             NSApplication.shared.run()
             exit(0)
+        case ("--challenge", 1...):
+            // Joe --challenge [seed] ["what I said"]: a wake-up challenge, and whether that answer passes.
+            let seed = args.count > 1 ? Int(args[1]) ?? 0 : 0
+            let challenge = MainActor.assumeIsolated { WakeChallenge.today(seed: seed) }
+            print("\(challenge.kind.rawValue) · \(challenge.source)\n\(challenge.prompt)\nanswers: \(challenge.answers)")
+            if args.count > 2 { print(challenge.check(args[2]) ? "PASS" : "FAIL") }
+            exit(0)
+        case ("--speech-parts", 2):
+            // Joe --speech-parts "<text>": which voice says which part.
+            for part in SpeechOutput.hasHan(args[1]) ? SpeechOutput.chineseParts(args[1]) : [args[1]] {
+                print(SpeechOutput.isChinese(part) ? "Mandarin: " + part : SpeechOutput.isOtherLanguage(part) ? "Mac voice: " + part : "Alba: " + part)
+            }
+            exit(0)
+        case ("--study", 3...):
+            // Joe --study "<subject>" "<request>" ["<answer>" …]: a whiteboard session, without the window.
+            MainActor.assumeIsolated { study(subject: args[1], turns: Array(args.dropFirst(2))) }
+            NSApplication.shared.setActivationPolicy(.accessory)
+            NSApplication.shared.run()
+            exit(0)
         case ("--system-prompt", 1):
             // Joe --system-prompt: what Claude is told before every conversation.
             MainActor.assumeIsolated { print(Session.currentSystemPrompt()) }
@@ -354,6 +373,28 @@ enum CommandLineTool {
 
     /// Shows the answer card as the app would, and prints its height as the reply streams in.
     /// Actions that need the user's OK are denied (set SHHH_ALLOW=1 to allow them).
+    @MainActor private static let board = StudyBoardModel()
+
+    @MainActor private static func study(subject: String, turns: [String]) {
+        var turns = turns
+        let start = Date()
+        var printed = 0
+        board.readAloud = false
+        var check: Timer?
+        check = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                guard !board.isBusy else { return }
+                for item in board.items.dropFirst(printed) { print(String(format: "[%.1fs] ", Date().timeIntervalSince(start)) + "\(item)") }
+                printed = board.items.count
+                guard turns.count > 0 else { check?.invalidate(); exit(0) }
+                let next = turns.removeFirst()
+                if printed == 0 { board.start(subject: subject, request: next, mode: next.lowercased().contains("exam") ? .exam : .quiz) }
+                else { board.submit(next) }
+                printed = board.items.count
+            }
+        }
+    }
+
     @MainActor
     private static func ask(_ requests: [String]) {
         var requests = requests

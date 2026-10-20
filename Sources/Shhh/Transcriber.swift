@@ -55,7 +55,7 @@ actor Transcriber {
         guard chinese == nil, !loadingChinese else { return }
         loadingChinese = true
         // Text-norm 14 ("withitn"): punctuation and numbers as digits, like Parakeet's output.
-        if let models = try? await SenseVoiceModels.downloadAndLoad() {
+        if let models = try? await Self.loadSenseVoiceOnGPU() {
             let manager = SenseVoiceManager(models: models, textNorm: 14)
             // Its first run is when macOS compiles it for the Neural Engine (minutes after an
             // update). Done here, on silence, before it's used: a real request used to wait behind it,
@@ -66,11 +66,37 @@ actor Transcriber {
         loadingChinese = false
     }
 
+    /// SenseVoice with its encoder on the GPU. FluidAudio puts it on the Neural Engine, where each
+    /// new length of recording can mean another compile by macOS (one ran for over an hour after an
+    /// update), and requests hung behind it. The GPU needs no such compile.
+    private static func loadSenseVoiceOnGPU() async throws -> SenseVoiceModels {
+        let directory = try await SenseVoiceModels.download() // already there: returns at once
+        let cpu = MLModelConfiguration()
+        cpu.computeUnits = .cpuOnly // the preprocessor needs fp32 on the CPU
+        let gpu = MLModelConfiguration()
+        gpu.computeUnits = .cpuAndGPU
+        let preprocessor = try MLModel(contentsOf: directory.appendingPathComponent("SenseVoicePreprocessor.mlmodelc"), configuration: cpu)
+        let encoder = try MLModel(contentsOf: directory.appendingPathComponent("SenseVoiceSmall.mlmodelc"), configuration: gpu)
+        let data = try Data(contentsOf: directory.appendingPathComponent("vocab.json"))
+        var vocabulary: [Int: String] = [:]
+        if let tokens = try JSONSerialization.jsonObject(with: data) as? [String] {
+            for (index, token) in tokens.enumerated() { vocabulary[index] = token }
+        } else if let tokens = try JSONSerialization.jsonObject(with: data) as? [String: String] {
+            for (key, token) in tokens { if let index = Int(key) { vocabulary[index] = token } }
+        }
+        return SenseVoiceModels(preprocessor: preprocessor, encoder: encoder, vocabulary: vocabulary)
+    }
+
     /// Whether Chinese is ready too (it loads after English).
     var chineseReady: Bool { chinese != nil }
 
     func transcribe(_ samples: [Float]) async throws -> String {
         guard let manager else { throw TranscriberError.notLoaded }
+        // Chinese still loading (just after launch): wait for it rather than have Parakeet turn
+        // Chinese into made-up English.
+        for _ in 0..<250 where Self.languages == .chinese && chinese == nil && loadingChinese {
+            try await Task.sleep(for: .milliseconds(100))
+        }
         // English and Chinese: Chinese (or mixed) speech is SenseVoice's; English stays with
         // Parakeet, which is more accurate on English. SenseVoice takes up to ~100 s at a time.
         if let chinese, samples.count < 16_000 * 100,

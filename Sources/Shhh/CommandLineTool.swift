@@ -307,7 +307,12 @@ enum CommandLineTool {
 
     private static func transcribe(file: String) async throws {
         let transcriber = Transcriber()
+        let loading = Date()
         try await transcriber.load { _ in }
+        if Transcriber.languages == .chinese {
+            for _ in 0..<1200 where !(await transcriber.chineseReady) { try await Task.sleep(for: .milliseconds(100)) }
+            print(String(format: "(Chinese ready %.1fs after loading began)", Date().timeIntervalSince(loading)))
+        }
         let start = Date()
         let text = try await transcriber.transcribe(fileURL: URL(fileURLWithPath: file))
         print(String(format: "[%.2fs] %@", Date().timeIntervalSince(start), text))

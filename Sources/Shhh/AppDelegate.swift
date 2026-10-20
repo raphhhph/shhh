@@ -1324,7 +1324,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // Normally well under a second. Far longer means the model is stuck.
                 let seconds = Double(samples.count) / 16_000
                 let heard = await NoiseFilter.shared.clean(samples) // background noise out (Settings)
-                text = try await withTimeout(15 + seconds) { try await transcriber.transcribe(heard) }
+                text = try await withTimeout(40 + seconds) { try await transcriber.transcribe(heard) } // may wait for Chinese just after launch
             } catch {
                 NSSound.beep()
                 if error is WatchdogError, transcriber === self.transcriber { reloadSpeechModel() }

@@ -130,7 +130,7 @@ enum CommandLineTool {
             // Shhh --alarm-check "<request>"…: what each would set (testing the phrases).
             for text in args.dropFirst() {
                 switch AlarmRequest.parse(text) {
-                case let .add(alarm)?: print("⏰ \(alarm.kind.rawValue) \(alarm.fireAt.formatted(.dateTime.weekday(.abbreviated).hour().minute().second())) “\(alarm.title)” · \(text)")
+                case let .add(alarm)?: print("Set: \(alarm.kind.rawValue) \(alarm.fireAt.formatted(.dateTime.weekday(.abbreviated).hour().minute().second())) “\(alarm.title)” · \(text)")
                 case .list?: print("list · \(text)")
                 case let .cancel(words, kind)?: print("cancel \(kind?.rawValue ?? "any") \(words ?? "all") · \(text)")
                 case nil: print("→ Claude · \(text)")
@@ -143,7 +143,7 @@ enum CommandLineTool {
             exit(0)
         case ("--music-check", 2...):
             // Shhh --music-check "<request>"…: whether each would go straight to Spotify (testing the phrases).
-            for text in args.dropFirst() { print(Spotify.command(in: text).map { "♪ \($0)" } ?? "→ Claude", "·", text) }
+            for text in args.dropFirst() { print(Spotify.command(in: text).map { "Spotify: \($0)" } ?? "→ Claude", "·", text) }
             exit(0)
         case ("--spotify", 2...):
             // Shhh --spotify "play fly me to the moon" | pause | next | "volume 40" …: music in Spotify.

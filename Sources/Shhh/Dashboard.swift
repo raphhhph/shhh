@@ -473,7 +473,7 @@ private struct HomePage: View {
             stat("\(model.stats.wordsToday)", "words dictated today", "waveform")
             stat("\(model.stats.minutesSaved) min", "saved this week", "bolt")
             stat("\(model.stats.asksThisWeek)", "requests to Joe this week", "sparkle")
-            stat("\(model.stats.streak) 🔥", "day streak", "flame")
+            stat("\(model.stats.streak)", "day streak", "flame")
         }
 
         Card(title: "Timeline", symbol: "calendar.day.timeline.left") {

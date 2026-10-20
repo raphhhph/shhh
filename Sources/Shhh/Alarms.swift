@@ -382,7 +382,7 @@ final class AlarmClock {
             AlarmStore.add(alarm)
             tick()
             let left = alarm.kind == .alarm ? "" : " (in \(AlarmStore.remaining(alarm.fireAt)))"
-            onNotice("⏰ \(alarm.kind == .timer ? "Timer" : alarm.kind == .reminder ? "Reminder" : "Alarm") \(alarm.when)\(left): \(alarm.title)")
+            onNotice("\(alarm.kind == .timer ? "Timer" : alarm.kind == .reminder ? "Reminder" : "Alarm") \(alarm.when)\(left): \(alarm.title)")
         case .list:
             onNotice(AlarmStore.summary)
         case let .cancel(words, kind):
@@ -429,7 +429,7 @@ final class AlarmClock {
         if resumeSpotify { _ = script("tell application \"Spotify\" to play") }
         resumeSpotify = false
         // A reminder that rang out stays on screen as a toast; an alarm nobody stopped says so.
-        if missed { onNotice(alarm.kind == .reminder ? "⏰ \(alarm.title)" : "⏰ Missed: \(alarm.title) (\(alarm.when))") }
+        if missed { onNotice(alarm.kind == .reminder ? "\(alarm.title)" : "Missed: \(alarm.title) (\(alarm.when))") }
         else if !snoozing { onStopped(alarm) }
         tick() // the next one, if it's due too
     }
@@ -445,7 +445,7 @@ final class AlarmClock {
         alarm.fireAt = Date().addingTimeInterval(Double(minutes) * 60)
         AlarmStore.add(alarm)
         tick()
-        onNotice("💤 Snoozed \(minutes) min: \(alarm.title)")
+        onNotice("Snoozed \(minutes) min: \(alarm.title)")
     }
 
     // MARK: Sound: beep-beep-beep-beep, pause, again

@@ -112,22 +112,22 @@ enum Spotify {
             }
             return "▶ \(found.title)"
         case .resume: return script("play") != nil ? "▶ Playing" : "Spotify didn't respond."
-        case .pause: return script("pause") != nil ? "⏸ Paused" : "Spotify didn't respond."
+        case .pause: return script("pause") != nil ? "Paused" : "Spotify didn't respond."
         case .next:
             _ = script("next track")
             return "⏭ " + (current() ?? "Next")
         case .previous:
             _ = script("previous track")
             return "⏮ " + (current() ?? "Previous")
-        case .nowPlaying: return current().map { "♪ \($0)" } ?? "Nothing's playing."
+        case .nowPlaying: return current().map { "Playing \($0)" } ?? "Nothing's playing."
         case let .shuffle(on):
             _ = script("set shuffling to \(on)")
-            return on ? "🔀 Shuffle on" : "Shuffle off"
+            return on ? "Shuffle on" : "Shuffle off"
         case let .volume(level, change):
             let now = script("sound volume").flatMap { Int($0) } ?? 50
             let target = max(0, min(100, level ?? now + change))
             _ = script("set sound volume to \(target)")
-            return "🔊 Volume \(target)%"
+            return "Volume \(target)%"
         }
     }
 
@@ -488,7 +488,7 @@ enum Spotify {
             var code = 0
             api("PUT", "/me/library?uris=spotify:track:\(id)", status: &code) // Spotify's current "save to library"
             if (200..<300).contains(code) { UndoJournal.add(["liked", "spotify:track:\(id)"]) }
-            return (200..<300).contains(code) ? "♥ Saved \(Spotify.script("name of current track") ?? "it") to your liked songs" : "Couldn't save it."
+            return (200..<300).contains(code) ? "Saved \(Spotify.script("name of current track") ?? "it") to your liked songs" : "Couldn't save it."
         }
     }
 }

@@ -81,7 +81,7 @@ final class OnboardingModel: ObservableObject {
         switch step {
         case .tour: actions.greet("Nice to meet you, \(name)", "Nice to meet you, \(name)! Here's what I can do.")
         case .tryIt: actions.greet("Your turn", "Hold the right Option key and ask me something.")
-        case .done: actions.greet("You're all set, \(name) ✦", "You're all set. I'm up here whenever you need me.")
+        case .done: actions.greet("You're all set, \(name)", "You're all set. I'm up here whenever you need me.")
         default: break
         }
     }
@@ -254,13 +254,13 @@ private struct HelloStep: View {
                 .opacity(appeared ? 1 : 0)
                 .animation(.easeOut(duration: 0.8).delay(0.9), value: appeared)
             Spacer()
-            Primary(title: "Hi Joe 👋") { model.next() }
+            Primary(title: "Hi, Joe") { model.next() }
                 .opacity(appeared ? 1 : 0)
                 .animation(.easeOut(duration: 0.6).delay(1.4), value: appeared)
         }
         .onAppear {
             appeared = true
-            model.actions.greet("Hi, I’m Joe ✦", "Hi! I'm Joe. Let's get you set up.")
+            model.actions.greet("Hi, I’m Joe", "Hi! I'm Joe. Let's get you set up.")
         }
     }
 }
@@ -428,7 +428,7 @@ private struct DaybookDemo: View {
             let t = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 4.5)
             let tasks = ["Math AI homework, due 14:25", "Reply to Ms Marquardt", "ESS formative draft", "Volleyball, leave 15:00"]
             VStack(alignment: .leading, spacing: 12) {
-                Text("Good morning ✦  Monday, 3 classes").font(.system(size: 15, weight: .semibold))
+                Text("Good morning · Monday, 3 classes").font(.system(size: 15, weight: .semibold))
                 ForEach(Array(tasks.enumerated()), id: \.offset) { index, task in
                     let done = t > 1 + Double(index) * 0.8
                     HStack(spacing: 10) {

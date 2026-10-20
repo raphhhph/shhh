@@ -146,7 +146,7 @@ final class Assistant {
         default: "Be direct: say what you think and push back when something's off."
         }
         let hype = UserDefaults.standard.bool(forKey: "joeHype") ? " Hype them up when they get something done." : ""
-        return "\n\nYour personality: \(length) \(manner)\(hype)"
+        return "\n\nYour personality: \(length) \(manner)\(hype) Never use emojis or decorative symbols, in answers, notes or files: plain words only."
     }
 
     static var autonomy: Autonomy {

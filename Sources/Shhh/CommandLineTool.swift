@@ -261,6 +261,10 @@ enum CommandLineTool {
             }
             if args[1] == "list" { print(CalendarFeed.links.joined(separator: "\n")); exit(0) }
             run { print(await CalendarFeed.refreshLinks()) }
+        case ("--prompt", 2):
+            // Joe --prompt "<dictation ending in make it a prompt>": what would be typed.
+            guard let said = PromptPolish.request(in: args[1]) else { print("(no \"make it a prompt\" at the end)"); exit(0) }
+            run { print(await PromptPolish.polish(said)) }
         case ("--challenge", 1...):
             // Joe --challenge [seed] ["what I said"]: a wake-up challenge, and whether that answer passes.
             let seed = args.count > 1 ? Int(args[1]) ?? 0 : 0
@@ -414,6 +418,7 @@ enum CommandLineTool {
                 guard turns.count > 0 else { check?.invalidate(); exit(0) }
                 let next = turns.removeFirst()
                 if printed == 0 { board.start(subject: subject, request: next, mode: next.lowercased().contains("exam") ? .exam : .quiz) }
+                else if next.hasPrefix("@"), let image = FileManager.default.contents(atPath: String(next.dropFirst())) { board.submit("", image: image) }
                 else { board.submit(next) }
                 printed = board.items.count
             }

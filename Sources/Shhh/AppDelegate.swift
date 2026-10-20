@@ -1502,7 +1502,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 asked = true
                 return
             }
-            text = style.apply(text)
+            // "… make it a prompt": rewritten as a clear prompt for an AI app before it's typed.
+            if let said = PromptPolish.request(in: text) {
+                panel.showProcessing()
+                text = await PromptPolish.polish(said)
+            } else {
+                text = style.apply(text)
+            }
             guard !text.isEmpty else { return }
             lastTranscript = text
             ActivityLog.record(.dictation, text) // the dashboard's history and stats

@@ -187,8 +187,15 @@ enum Spotify {
     }
 
     fileprivate static var keys: (id: String, secret: String)? {
-        guard let id = read("client-id"), let secret = read("client-secret") else { return nil }
+        guard let id = clientID, let secret = read("client-secret") else { return nil }
         return (id, secret)
+    }
+
+    /// Joe's Spotify app: from this Mac's Spotify.json, or built into the app (the login uses PKCE,
+    /// so the ID alone is enough and every Mac can connect; the secret never leaves the developer's).
+    fileprivate static var clientID: String? {
+        read("client-id") ?? Bundle.main.url(forResource: "SpotifyClientID", withExtension: "txt")
+            .flatMap { try? String(contentsOf: $0, encoding: .utf8) }?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static var token: (value: String, expires: Date)?
@@ -208,7 +215,7 @@ enum Spotify {
 
     /// The best match: for a plain request, the top song, unless an artist matches the words exactly.
     static func search(_ query: String, kind: Kind?) -> (uri: String, title: String)? {
-        guard let token = accessToken() else { return nil }
+        guard let token = accessToken() ?? Account.userToken() else { return nil }
         var components = URLComponents(string: "https://api.spotify.com/v1/search")!
         let types = kind.map { [$0] } ?? [.track, .artist]
         components.queryItems = [URLQueryItem(name: "q", value: query), URLQueryItem(name: "type", value: types.map(\.rawValue).joined(separator: ",")),
@@ -257,26 +264,25 @@ enum Spotify {
         /// Opens Spotify's consent page in the browser and waits (up to three minutes) for the
         /// redirect back to 127.0.0.1:8888, then keeps the refresh token.
         static func login() -> String {
-            guard let keys = Spotify.keys else { return "Spotify's developer keys are missing." }
+            guard let id = Spotify.clientID else { return "This copy of Joe has no Spotify app ID built in." }
             let verifier = (0..<64).map { _ in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~".randomElement()! }.map(String.init).joined()
             let challenge = Data(SHA256.hash(data: Data(verifier.utf8))).base64EncodedString()
                 .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
             let state = UUID().uuidString
             var components = URLComponents(string: "https://accounts.spotify.com/authorize")!
             components.queryItems = [
-                .init(name: "client_id", value: keys.id), .init(name: "response_type", value: "code"),
+                .init(name: "client_id", value: id), .init(name: "response_type", value: "code"),
                 .init(name: "redirect_uri", value: redirect), .init(name: "scope", value: scopes),
                 .init(name: "code_challenge_method", value: "S256"), .init(name: "code_challenge", value: challenge),
                 .init(name: "state", value: state),
             ]
-            guard let code = waitForCode(state: state, opening: components.url!) else {
-                return "No answer from Spotify's login page within three minutes. Try again."
-            }
+            let answer = waitForCode(state: state, opening: components.url!)
+            guard let code = answer.code else { return answer.problem }
             var request = URLRequest(url: URL(string: "https://accounts.spotify.com/api/token")!, timeoutInterval: 15)
             request.httpMethod = "POST"
             request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
             request.httpBody = form(["grant_type": "authorization_code", "code": code, "redirect_uri": redirect,
-                                     "client_id": keys.id, "code_verifier": verifier])
+                                     "client_id": id, "code_verifier": verifier])
             guard let json = Spotify.fetch(request), let refresh = json["refresh_token"] as? String else {
                 return "Spotify didn't accept the login. Try again."
             }
@@ -295,8 +301,15 @@ enum Spotify {
         }
 
         /// A tiny one-shot web server on 127.0.0.1:8888 for Spotify's redirect.
-        private static func waitForCode(state: String, opening url: URL) -> String? {
-            guard let listener = try? NWListener(using: .tcp, on: 8888) else { return nil }
+        /// The sign-in waiting for its answer: a second click closes it and starts again.
+        nonisolated(unsafe) private static var waiting: (listener: NWListener, done: DispatchSemaphore)?
+
+        private static func waitForCode(state: String, opening url: URL) -> (code: String?, problem: String) {
+            if let waiting { waiting.listener.cancel(); waiting.done.signal() }
+            Thread.sleep(forTimeInterval: 0.3) // let the port go
+            guard let listener = try? NWListener(using: .tcp, on: 8888) else {
+                return (nil, "Something else on this Mac is using port 8888, which Spotify's sign-in needs. Quit it and try again.")
+            }
             var code: String?
             let done = DispatchSemaphore(value: 0)
             listener.newConnectionHandler = { connection in
@@ -320,23 +333,28 @@ enum Spotify {
                 }
             }
             listener.start(queue: .global())
+            waiting = (listener, done)
             NSWorkspace.shared.open(url)
             _ = done.wait(timeout: .now() + 180)
             listener.cancel()
-            return code
+            waiting = nil
+            return (code, "No answer from Spotify's sign-in page within three minutes. Click Connect to try again.")
         }
 
         // MARK: Calls
 
         private static var token: (value: String, expires: Date)?
 
+        /// The signed-in user's token (also used for search when there's no app secret on this Mac).
+        static func userToken() -> String? { accessToken() }
+
         private static func accessToken() -> String? {
             if let token, token.expires > Date() { return token.value }
-            guard let keys = Spotify.keys, let refresh = Spotify.read("refresh-token") else { return nil }
+            guard let id = Spotify.clientID, let refresh = Spotify.read("refresh-token") else { return nil }
             var request = URLRequest(url: URL(string: "https://accounts.spotify.com/api/token")!, timeoutInterval: 10)
             request.httpMethod = "POST"
             request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-            request.httpBody = form(["grant_type": "refresh_token", "refresh_token": refresh, "client_id": keys.id])
+            request.httpBody = form(["grant_type": "refresh_token", "refresh_token": refresh, "client_id": id])
             guard let json = Spotify.fetch(request), let value = json["access_token"] as? String else { return nil }
             if let rotated = json["refresh_token"] as? String { Spotify.store(rotated, as: "refresh-token") }
             token = (value, Date().addingTimeInterval(Double(json["expires_in"] as? Int ?? 3600) - 60))

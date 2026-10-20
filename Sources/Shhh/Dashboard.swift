@@ -275,13 +275,18 @@ final class DashboardModel: ObservableObject {
         }
     }
 
+    /// What the last Connect said ("Connected as Raph", "No answer…").
+    @Published var spotifyMessage: String?
+
     func connectSpotify() {
         spotifyBusy = true
+        spotifyMessage = "Spotify's sign-in page is open in your browser: log in and press Agree."
         Task.detached {
-            _ = Spotify.Account.login()
+            let result = Spotify.Account.login()
             await MainActor.run {
                 self.spotifyBusy = false
                 self.spotifyConnected = Spotify.Account.isConnected
+                self.spotifyMessage = result
             }
         }
     }
@@ -1509,7 +1514,12 @@ private struct CalendarPage: View {
             .overlay(Capsule().strokeBorder(Look.line))
             Button {
                 syncStarted = Date()
-                model.actions.askInBackground(CalendarFeed.syncInstructions)
+                if CalendarFeed.links.isEmpty {
+                    model.actions.askInBackground(CalendarFeed.syncInstructions)
+                } else {
+                    // Calendar links: read them directly, in a second, no Claude needed.
+                    Task { await CalendarFeed.refreshLinks(); syncStarted = nil; model.reload() }
+                }
             } label: { Label(syncing(now) ? "Syncing…" : "Sync", systemImage: "arrow.triangle.2.circlepath") }
                 .buttonStyle(PillButton(prominent: true))
                 .disabled(syncing(now))
@@ -1528,7 +1538,8 @@ private struct CalendarPage: View {
     }
 
     private func syncLabel(_ now: Date) -> String {
-        guard let synced = CalendarFeed.syncedAt else { return "Sync to add Google Calendar and ManageBac" }
+        if !CalendarFeed.links.isEmpty, let read = CalendarFeed.linksReadAt { return "calendar links read " + read.formatted(.relative(presentation: .named)) }
+        guard let synced = CalendarFeed.syncedAt else { return "Add your ManageBac link in Settings, or Sync" }
         return "synced " + synced.formatted(.relative(presentation: .named))
     }
 
@@ -2410,8 +2421,12 @@ private struct MusicPage: View {
                 Text(model.spotifyConnected ? "Connected: your liked songs and playlists work." : "Not connected: only search-and-play works.")
                     .font(.system(size: 13))
                 Spacer()
-                Button(model.spotifyBusy ? "Waiting for Spotify…" : model.spotifyConnected ? "Reconnect" : "Connect") { model.connectSpotify() }
-                    .disabled(model.spotifyBusy)
+                // Never disabled: clicking again while it waits opens the sign-in page again.
+                Button(model.spotifyBusy ? "Open sign-in again" : model.spotifyConnected ? "Reconnect" : "Connect") { model.connectSpotify() }
+                    .buttonStyle(PillButton(prominent: !model.spotifyConnected))
+            }
+            if let message = model.spotifyMessage {
+                Text(message).font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -2534,6 +2549,17 @@ private struct SettingsPage: View {
 
     @AppStorage("settingsTab") private var tab = "general"
     @AppStorage(AppAppearance.key) private var appearance = AppAppearance.system.rawValue
+    @State private var newLink = ""
+    @State private var calendarLinks = CalendarFeed.links
+
+    private func addLink() {
+        let link = newLink.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard link.contains("://") else { return }
+        CalendarFeed.links = Array(Set(CalendarFeed.links + [link]))
+        calendarLinks = CalendarFeed.links
+        newLink = ""
+        Task { await CalendarFeed.refreshLinks() }
+    }
     @AppStorage("alarmsAtNotch") private var alarmsAtNotch = "full"
 
     private static let tabs: [(id: String, title: String, symbol: String)] = [
@@ -2593,6 +2619,19 @@ private struct SettingsPage: View {
             profileRow("Your project", "A business or club Joe should know about", $profileProject, "Optional")
             row("Welcome tour", "See the first-launch tour again; your settings stay") {
                 Button("Replay") { model.actions.showOnboarding() }.buttonStyle(PillButton())
+            }
+            row("Calendar links", calendarLinks.isEmpty ? "ManageBac: Calendar → Subscribe → copy the link. Google: settings → Secret address in iCal format" : "\(calendarLinks.count) added: read every half hour") {
+                HStack(spacing: 6) {
+                    TextField("Paste a calendar link", text: $newLink)
+                        .textFieldStyle(.plain).font(.system(size: 12.5))
+                        .padding(.horizontal, 10).frame(width: 200, height: 28)
+                        .background(Color.primary.opacity(0.06), in: Capsule())
+                        .onSubmit(addLink)
+                    Button("Add", action: addLink).buttonStyle(PillButton()).disabled(!newLink.contains("://"))
+                    if !calendarLinks.isEmpty {
+                        Button("Clear") { CalendarFeed.links = []; calendarLinks = [] }.buttonStyle(PillButton(destructive: true))
+                    }
+                }
             }
             row("Appearance", "Light, dark, or follow the Mac") {
                 Choice(options: AppAppearance.allCases.map { ($0.rawValue, $0.title) }, selection: $appearance)

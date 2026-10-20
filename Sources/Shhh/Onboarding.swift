@@ -1,3 +1,4 @@
+import EventKit
 import AppKit
 import AVFoundation
 import SwiftUI
@@ -63,7 +64,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
 
 @MainActor
 final class OnboardingModel: ObservableObject {
-    enum Step: Int, CaseIterable { case hello, name, tour, school, notes, permissions, claude, tryIt, done }
+    enum Step: Int, CaseIterable { case hello, name, tour, school, notes, permissions, claude, connect, tryIt, done }
 
     @Published var step: Step = .hello
     @Published var heard: String?
@@ -121,6 +122,7 @@ private struct OnboardingView: View {
                     case .tour: TourStep(model: model)
                     case .school: SchoolStep(model: model)
                     case .notes: NotesStep(model: model)
+                    case .connect: ConnectStep(model: model)
                     case .permissions: PermissionsStep(model: model)
                     case .claude: ClaudeStep(model: model)
                     case .tryIt: TryStep(model: model)
@@ -676,6 +678,91 @@ private struct SchoolStep: View {
     }
 }
 
+/// Everything Joe reads, connected here once: ManageBac and Google by their calendar links (or the
+/// Mac's Calendar), and Spotify. All optional; each is one paste or one click.
+private struct ConnectStep: View {
+    @ObservedObject var model: OnboardingModel
+    @State private var link = ""
+    @State private var links = CalendarFeed.links
+    @State private var linkStatus: String?
+    @State private var macCalendar = EKEventStore.authorizationStatus(for: .event) == .fullAccess
+    @State private var spotify = Spotify.Account.isConnected
+    @State private var spotifyStatus: String?
+
+    var body: some View {
+        StepFrame(model: model, title: "Your school, connected", subtitle: "One paste or one click each. Skip any and add it later in Settings.") {
+            VStack(alignment: .leading, spacing: 14) {
+                card(icon: "flag.fill", tint: .red, title: "ManageBac deadlines",
+                     detail: "In ManageBac: Calendar → Subscribe (or Export) → copy the link, and paste it here. Google works too: Calendar settings → your calendar → Secret address in iCal format.") {
+                    HStack(spacing: 10) {
+                        TextField("webcal://…managebac.com/… or a Google iCal link", text: $link)
+                            .textFieldStyle(.plain).padding(.horizontal, 12).frame(height: 36)
+                            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+                        Primary(title: "Add", enabled: link.contains("://")) { add() }.frame(width: 90)
+                    }
+                    if let linkStatus { Text(linkStatus).font(.system(size: 12.5)).foregroundStyle(Tint.soft) }
+                    if !links.isEmpty { Text("\(links.count) calendar link\(links.count == 1 ? "" : "s") added").font(.system(size: 12.5)).foregroundStyle(.green) }
+                }
+                card(icon: "calendar", tint: .blue, title: "Classes and events", detail: "If your Google or school calendar is in the Mac's Calendar app, Joe can read it.") {
+                    if macCalendar {
+                        Label("Connected", systemImage: "checkmark.circle.fill").foregroundStyle(.green).font(.system(size: 13))
+                    } else {
+                        Primary(title: "Use my Mac's Calendar", enabled: true) {
+                            CalendarFeed.requestMacCalendar { macCalendar = EKEventStore.authorizationStatus(for: .event) == .fullAccess }
+                        }.frame(width: 220)
+                    }
+                }
+                card(icon: "music.note", tint: .green, title: "Spotify", detail: "For “play…”, your liked songs and playlists. Optional.") {
+                    if spotify {
+                        Label("Connected", systemImage: "checkmark.circle.fill").foregroundStyle(.green).font(.system(size: 13))
+                    } else {
+                        Primary(title: "Connect Spotify", enabled: true) { connectSpotify() }.frame(width: 180)
+                        if let spotifyStatus { Text(spotifyStatus).font(.system(size: 12.5)).foregroundStyle(Tint.soft) }
+                    }
+                }
+            }
+        }
+    }
+
+    private func card<Content: View>(icon: String, tint: Color, title: String, detail: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: icon).font(.system(size: 16, weight: .semibold)).foregroundStyle(tint)
+                .frame(width: 34, height: 34).background(tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 9))
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title).font(.system(size: 15, weight: .semibold))
+                Text(detail).font(.system(size: 12.5)).foregroundStyle(Tint.soft).fixedSize(horizontal: false, vertical: true)
+                content()
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Tint.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private func add() {
+        let new = link.trimmingCharacters(in: .whitespacesAndNewlines)
+        CalendarFeed.links = Array(Set(CalendarFeed.links + [new]))
+        links = CalendarFeed.links
+        link = ""
+        linkStatus = "Reading it…"
+        Task {
+            let result = await CalendarFeed.refreshLinks()
+            linkStatus = result.hasSuffix("items") ? "Found \(result)." : "Couldn't read it: \(result)"
+        }
+    }
+
+    private func connectSpotify() {
+        spotifyStatus = "The sign-in page is open in your browser: log in and press Agree."
+        Task.detached {
+            let result = Spotify.Account.login()
+            await MainActor.run {
+                spotify = Spotify.Account.isConnected
+                spotifyStatus = result
+            }
+        }
+    }
+}
+
 private struct NotesStep: View {
     @ObservedObject var model: OnboardingModel
     @State private var refresh = 0
@@ -776,28 +863,47 @@ private struct PermissionsStep: View {
 
 private struct ClaudeStep: View {
     @ObservedObject var model: OnboardingModel
+    @StateObject private var claude = ClaudeSetup()
     @AppStorage("useAPIKey") private var useAPIKey = false
     @State private var key = ""
+    @State private var code = ""
     @State private var saved = AIAccount.maskedKey
 
     var body: some View {
-        let installed = Assistant.executable != nil
-        StepFrame(model: model, title: "My brain: Claude", subtitle: "I think with Claude, through Claude Code on this Mac.",
-                  canContinue: installed || (useAPIKey && saved != nil)) {
+        StepFrame(model: model, title: "My brain: Claude", subtitle: "I think with Claude. One click and I'll set it up, on your own Claude plan.",
+                  canContinue: claude.isReady || (useAPIKey && saved != nil)) {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(spacing: 14) {
-                    Image(systemName: installed ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                        .font(.system(size: 26)).foregroundStyle(installed ? .green : .orange)
+                    Group {
+                        switch claude.state {
+                        case .ready: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                        case .installing, .signingIn, .checking: ProgressView().controlSize(.small).frame(width: 26)
+                        case .failed: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        default: Image(systemName: "sparkle").foregroundStyle(Tint.accent)
+                        }
+                    }
+                    .font(.system(size: 26))
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(installed ? "Claude Code is installed" : "Claude Code isn’t installed yet").font(.system(size: 16, weight: .semibold))
-                        Text(installed ? "If you haven’t yet, type claude in Terminal once and sign in."
-                                       : "In Terminal: brew install node, then npm install -g @anthropic-ai/claude-code, then claude to sign in.")
-                            .font(.system(size: 13)).foregroundStyle(Tint.soft).textSelection(.enabled)
+                        Text(title).font(.system(size: 16, weight: .semibold))
+                        Text(subtitle).font(.system(size: 13)).foregroundStyle(Tint.soft).fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                    if [.notInstalled, .signedOut].contains(claude.state) || { if case .failed = claude.state { return true }; return false }() {
+                        Primary(title: claude.state == .notInstalled ? "Install and connect" : "Connect Claude", enabled: true) { claude.connect() }
+                            .frame(width: 190)
                     }
                 }
                 .padding(18)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Tint.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                if claude.needsCode {
+                    HStack(spacing: 10) {
+                        TextField("Paste the code from the Claude page", text: $code)
+                            .textFieldStyle(.plain).padding(.horizontal, 14).frame(height: 40)
+                            .background(Tint.card, in: RoundedRectangle(cornerRadius: 10))
+                        Primary(title: "Send", enabled: code.count >= 6) { claude.send(code: code); code = "" }
+                    }
+                }
                 Toggle("Use an Anthropic API key instead of a Claude plan", isOn: $useAPIKey).font(.system(size: 14)).tint(Tint.accent)
                 if useAPIKey {
                     HStack(spacing: 10) {
@@ -809,6 +915,29 @@ private struct ClaudeStep: View {
                     if let saved { Text("Saved: \(saved)").font(.system(size: 12.5)).foregroundStyle(.green) }
                 }
             }
+        }
+    }
+
+    private var title: String {
+        switch claude.state {
+        case .checking: "Checking for Claude…"
+        case .notInstalled: "Claude isn't set up yet"
+        case .signedOut: "Claude is installed: sign in"
+        case .installing: "Installing Claude Code…"
+        case .signingIn: "Signing in…"
+        case .ready: "Claude is connected"
+        case .failed: "That didn't work"
+        }
+    }
+
+    private var subtitle: String {
+        switch claude.state {
+        case .notInstalled: "I'll install Claude Code (Anthropic's app for the Mac) and open the sign-in page. No Terminal."
+        case .signedOut: "Click Connect and log in with your Claude account in the browser."
+        case .installing, .signingIn: claude.detail
+        case .ready: "I'll use your Claude plan, so there's nothing extra to pay."
+        case .failed(let message): message
+        case .checking: ""
         }
     }
 }

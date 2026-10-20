@@ -21,6 +21,9 @@ cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp Resources/slides.py "$APP/Contents/Resources/slides.py"
 cp Resources/mathdoc.js "$APP/Contents/Resources/mathdoc.js"
 cp -R Resources/Syllabus "$APP/Contents/Resources/Syllabus"
+# Joe's Spotify app ID, from the developer's own Spotify.json (not in git): lets every copy connect.
+SPOTIFY_KEYS="$HOME/Library/Application Support/Shhh/Spotify.json"
+[ -f "$SPOTIFY_KEYS" ] && python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("client-id",""))' "$SPOTIFY_KEYS" > "$APP/Contents/Resources/SpotifyClientID.txt" || true
 cp -R "$BIN/llama.framework" "$APP/Contents/Frameworks/"
 for bundle in "$BIN"/*.bundle; do
   [ -e "$bundle" ] && cp -R "$bundle" "$APP/Contents/Resources/"

@@ -199,13 +199,14 @@ final class Assistant {
     }
 
     /// Where `claude` is installed. A Finder-launched app doesn't get the shell's PATH.
-    static let executable: URL? = {
+    /// Looked up each time: onboarding can install it while Joe runs.
+    nonisolated static var executable: URL? {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return ["\(home)/.local/bin/claude", "/opt/homebrew/bin/claude", "/usr/local/bin/claude",
                 "\(home)/.claude/local/claude"]
             .first { FileManager.default.isExecutableFile(atPath: $0) }
             .map { URL(fileURLWithPath: $0) }
-    }()
+    }
 
     /// The user's own notes for the assistant (who they are, which sites they use, how they like
     /// things done). Added to its instructions; opened from the menu. See `Instructions`.
@@ -1060,7 +1061,10 @@ final class Session {
             has no Stop button: it stops only once they read a Bible verse or an IB fact aloud, or answer a \
             question from their subjects, holding right Option. Each alarm on the same morning gets a different \
             challenge, so for "another alarm with another question" just set another one titled "Wake up …". \
-            After midnight, "tomorrow morning" means the coming morning (today's date): check the date and time.
+            After midnight, "tomorrow morning" means the coming morning (today's date): check the date and time. \
+            Calendar links: when they give a ManageBac or Google calendar link (webcal://… or an .ics address), \
+            save it with "\(Bundle.main.executablePath ?? "Joe")" --calendar-link add "<link>", then run --calendar-link refresh \
+            and say how many items it found. Joe reads them every half hour, so their deadlines and events show by themselves.
             """
         let files = vault == nil ? "" : """
 
@@ -1321,7 +1325,7 @@ struct ToolPolicy {
             return ["draft", "open"].contains(words[2]) ? Action(key: "message:draft", verdict: .allow, title: "Open a chat or draft a message")
                 : Action(key: "message:send:\(input["command"] as? String ?? "")", verdict: .ask, title: "Send a message")
         case "Bash" where Self.shellWords(input["command"] as? String ?? "").map({
-            $0.count >= 2 && $0[0] == Bundle.main.executablePath && ["--pdf-find", "--pdf-text", "--prereading", "--workspace", "--workspace-reset", "--spotify", "--alarm", "--slides", "--recap", "--plan", "--math-pdf", "--whatsapp"].contains($0[1]) }) == true:
+            $0.count >= 2 && $0[0] == Bundle.main.executablePath && ["--pdf-find", "--pdf-text", "--prereading", "--workspace", "--workspace-reset", "--spotify", "--alarm", "--slides", "--recap", "--plan", "--math-pdf", "--whatsapp", "--calendar-link"].contains($0[1]) }) == true:
             return Action(key: "shhh-tools", verdict: .allow, title: "Use Joe's tools")
         case "Bash" where FileCommands.judge(input["command"] as? String ?? "",
                                              cwd: vault ?? FileManager.default.temporaryDirectory) != nil:

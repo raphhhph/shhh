@@ -248,6 +248,19 @@ enum CommandLineTool {
             }
             NSApplication.shared.run()
             exit(0)
+        case ("--calendar-link", 2...):
+            // Joe --calendar-link add <link> | remove <link> | list | refresh | parse <file.ics>
+            switch args[1] {
+            case "add" where args.count > 2: CalendarFeed.links = Array(Set(CalendarFeed.links + [args[2]]))
+            case "remove" where args.count > 2: CalendarFeed.links.removeAll { $0 == args[2] }
+            case "parse" where args.count > 2:
+                let text = (try? String(contentsOfFile: args[2], encoding: .utf8)) ?? ""
+                for item in CalendarFeed.parseICS(text, deadlines: true) { print(item) }
+                exit(0)
+            default: break
+            }
+            if args[1] == "list" { print(CalendarFeed.links.joined(separator: "\n")); exit(0) }
+            run { print(await CalendarFeed.refreshLinks()) }
         case ("--challenge", 1...):
             // Joe --challenge [seed] ["what I said"]: a wake-up challenge, and whether that answer passes.
             let seed = args.count > 1 ? Int(args[1]) ?? 0 : 0

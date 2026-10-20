@@ -228,6 +228,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard alarm.title.hasPrefix("Focus"), Assistant.vaultURL != nil else { return }
             self?.startInBackground("[Focus session over: \(alarm.title).] In one or two short lines: well done, and ask me what I finished so you can tick it in my Daybook.")
         }
+        // ManageBac and Google calendar links: read at launch and every half hour.
+        Task { await CalendarFeed.refreshLinks() }
+        let calendarLinks = Timer(timeInterval: 1800, repeats: true) { _ in Task { await CalendarFeed.refreshLinks() } }
+        RunLoop.main.add(calendarLinks, forMode: .common)
         let alarmTicks = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.alarms.tick()

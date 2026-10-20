@@ -3,6 +3,7 @@ import Speech
 import AppKit
 import AVFoundation
 import ServiceManagement
+import Charts
 import SwiftUI
 
 /// Joe's own window: opening the app shows it. A sidebar like Claude's, and pages for the day
@@ -299,6 +300,8 @@ private enum Look {
 private struct Card<Content: View>: View {
     var title: String?
     var symbol: String?
+    /// Fill the height it's given, so cards side by side end level.
+    var stretch = false
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -312,7 +315,7 @@ private struct Card<Content: View>: View {
             content
         }
         .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: stretch ? .infinity : nil, alignment: .topLeading)
         .background(Look.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Look.line))
     }
@@ -423,6 +426,8 @@ private struct DashboardView: View {
                     HStack(spacing: 6) {
                         Circle().fill(trouble ? Color.orange : Color.green).frame(width: 7, height: 7)
                         Text(trouble ? model.status : "Ready").font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
+                        Spacer()
+                        AppearanceToggle()
                     }
                     shortcut("Dictate", "right ⌘")
                     shortcut("Ask Joe", "right ⌥")
@@ -553,13 +558,19 @@ private struct HomePage: View {
             }
         }
 
-        TimelineView(.periodic(from: .now, by: 30)) { context in
-            NowNext(slots: model.timeline, now: context.date)
+        HStack(alignment: .top, spacing: 16) {
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                NowNext(slots: model.timeline, now: context.date)
+            }
+            if !narrow, !model.alarms.isEmpty || model.nowPlaying != nil {
+                status.frame(width: 320)
+            }
         }
+        .fixedSize(horizontal: false, vertical: true)
 
         let layout = narrow ? AnyLayout(VStackLayout(alignment: .leading, spacing: 16)) : AnyLayout(HStackLayout(alignment: .top, spacing: 16))
         layout {
-            Card(title: "Today's five", symbol: "checklist") {
+            Card(title: "Today's five", symbol: "checklist", stretch: true) {
                 if let focus = model.focus {
                     Text(focus).font(.system(size: 14, weight: .medium)).fixedSize(horizontal: false, vertical: true)
                 }
@@ -589,31 +600,12 @@ private struct HomePage: View {
                     }
                 }
             }
-            VStack(spacing: 16) {
-                DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil) { model.page = .calendar }
-                if !model.alarms.isEmpty || model.nowPlaying != nil {
-                    Card {
-                        ForEach(model.alarms.prefix(3)) { alarm in
-                            HStack(spacing: 8) {
-                                Image(systemName: "alarm").font(.system(size: 12)).foregroundStyle(.secondary)
-                                Text(alarm.when).font(.system(size: 13, weight: .semibold).monospacedDigit())
-                                Text(alarm.title).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
-                            }
-                        }
-                        if let playing = model.nowPlaying {
-                            HStack(spacing: 8) {
-                                Image(systemName: "music.note").font(.system(size: 12)).foregroundStyle(.green)
-                                Text(playing).font(.system(size: 12.5)).foregroundStyle(.secondary).lineLimit(1)
-                                Spacer(minLength: 4)
-                                Button { model.music(.pause) } label: { Image(systemName: "pause.fill") }.buttonStyle(.plain).foregroundStyle(.secondary)
-                                Button { model.music(.next) } label: { Image(systemName: "forward.fill") }.buttonStyle(.plain).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-            }
-            .frame(width: narrow ? nil : 320)
+            DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil, stretch: true) { model.page = .calendar }
+                .frame(width: narrow ? nil : 320)
         }
+        .fixedSize(horizontal: false, vertical: true)
+        if narrow, !model.alarms.isEmpty || model.nowPlaying != nil { status }
+
 
         Card(title: "Today", symbol: "calendar.day.timeline.left") {
             TodayTimeline(slots: model.timeline + model.alarms
@@ -646,6 +638,36 @@ private struct HomePage: View {
         guard !text.isEmpty else { return }
         model.actions.ask(text)
         request = ""
+    }
+
+    /// The next alarm and what's playing, small, beside Now/Next.
+    private var status: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let alarm = model.alarms.first {
+                HStack(spacing: 8) {
+                    Image(systemName: "alarm").font(.system(size: 12)).foregroundStyle(Look.accent)
+                    Text(alarm.when).font(.system(size: 13, weight: .semibold).monospacedDigit())
+                    Text(alarm.title).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer(minLength: 0)
+                    if model.alarms.count > 1 {
+                        Text("+\(model.alarms.count - 1)").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            if let playing = model.nowPlaying {
+                HStack(spacing: 8) {
+                    Image(systemName: "music.note").font(.system(size: 12)).foregroundStyle(.green)
+                    Text(playing).font(.system(size: 12.5)).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer(minLength: 4)
+                    Button { model.music(.pause) } label: { Image(systemName: "pause.fill") }.buttonStyle(.plain).foregroundStyle(.secondary)
+                    Button { model.music(.next) } label: { Image(systemName: "forward.fill") }.buttonStyle(.plain).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .background(Look.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Look.line))
     }
 
     private func stat(_ value: String, _ label: String) -> some View {
@@ -681,7 +703,7 @@ private struct NowNext: View {
                         .font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
                 }
                 .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: 78, maxHeight: .infinity, alignment: .leading)
                 .background(Look.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Look.line))
             }
@@ -708,7 +730,7 @@ private struct NowNext: View {
                 .background(color.opacity(0.12), in: Capsule())
         }
         .padding(14)
-        .frame(maxWidth: .infinity, minHeight: 78, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 78, maxHeight: .infinity, alignment: .leading)
         .background(Look.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Look.line))
     }
@@ -722,10 +744,11 @@ private struct NowNext: View {
 private struct DueSoon: View {
     let deadlines: [CalendarFeed.Item]
     let synced: Bool
+    var stretch = false
     var open: () -> Void
 
     var body: some View {
-        Card(title: "Due soon", symbol: "flag") {
+        Card(title: "Due soon", symbol: "flag", stretch: stretch) {
             if deadlines.isEmpty {
                 Text(synced ? "Nothing due in the next two weeks." : "Sync the calendar to bring in ManageBac.")
                     .font(.system(size: 13)).foregroundStyle(.secondary)
@@ -740,7 +763,7 @@ private struct DueSoon: View {
                         }
                         .frame(width: 34)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(item.title).font(.system(size: 13, weight: .medium)).lineLimit(2)
+                            Text(item.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
                             if let group = SubjectGroup.of(item.title) ?? SubjectGroup.of(item.detail) {
                                 Text(group.name).font(.system(size: 11)).foregroundStyle(group.color)
                             }
@@ -934,6 +957,7 @@ private struct TodayTimeline: View {
         .frame(width: width, height: 60, alignment: .leading)
         .background(alignment: .leading) { Rectangle().fill(color).frame(width: 3) }
         .background(color.opacity(lit ? 0.3 : 0.16))
+        .background(Look.card) // solid underneath: the hour lines don't show through
         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(color.opacity(selected == slot.id ? 0.8 : 0), lineWidth: 1.5))
         .opacity(past ? 0.5 : 1)
@@ -959,29 +983,8 @@ private struct TodayTimeline: View {
             }
             .padding(12)
             .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        } else {
-            let upcoming = slots.filter { ($0.end ?? $0.start) > now }.prefix(4)
-            if slots.isEmpty {
-                Text("Nothing on today: no classes, events or alarms.").font(.system(size: 13)).foregroundStyle(.secondary)
-            } else if upcoming.isEmpty {
-                Text("That's everything for today.").font(.system(size: 13)).foregroundStyle(.secondary)
-            }
-            VStack(spacing: 0) {
-                ForEach(Array(upcoming)) { slot in
-                    HStack(spacing: 10) {
-                        RoundedRectangle(cornerRadius: 2).fill(slot.kind == .lesson ? SubjectGroup.color(for: slot.title) : slot.kind == .alarm ? Look.accent : personal).frame(width: 4, height: 18)
-                        Text(slot.start.formatted(date: .omitted, time: .shortened)).font(.system(size: 13, weight: .semibold).monospacedDigit()).frame(width: 52, alignment: .leading)
-                        Text(slot.title).font(.system(size: 13)).lineLimit(1)
-                        if !slot.detail.isEmpty { Text(slot.detail).font(.system(size: 12)).foregroundStyle(.secondary) }
-                        Spacer(minLength: 0)
-                        Text(Self.relative(slot, now)).font(.system(size: 11, weight: slot.start <= now ? .semibold : .regular))
-                            .foregroundStyle(slot.start <= now ? Look.accent : .secondary)
-                    }
-                    .frame(height: 28)
-                    .contentShape(Rectangle())
-                    .onTapGesture { selected = slot.id }
-                }
-            }
+        } else if slots.isEmpty {
+            Text("Nothing on today: no classes, events or alarms.").font(.system(size: 13)).foregroundStyle(.secondary)
         }
     }
 
@@ -1010,7 +1013,7 @@ private struct TodayTimeline: View {
         // Overnight things (sleep, an alarm at 6) don't stretch it: the day starts at 6 at the earliest.
         for slot in slots where slot.start >= day.addingTimeInterval(6 * 3600) {
             start = min(start, slot.start)
-            end = max(end, slot.end ?? slot.start)
+            end = max(end, slot.end ?? slot.start.addingTimeInterval(1800)) // as long as it's drawn
         }
         start = calendar.dateInterval(of: .hour, for: start)?.start ?? start
         end = calendar.dateInterval(of: .hour, for: end.addingTimeInterval(3599))?.start ?? end
@@ -1281,6 +1284,44 @@ private struct UsagePage: View {
             stat("\(week.count)", "requests, last 7 days", "sparkle")
             stat(Self.dollars(days == 0 ? 0 : week.reduce(0) { $0 + $1.cost } / Double(days) * 30), "a month at this rate", "chart.line.uptrend.xyaxis")
         }
+        let layout = narrow ? AnyLayout(VStackLayout(spacing: 16)) : AnyLayout(HStackLayout(alignment: .top, spacing: 16))
+        layout {
+            Card(title: "Each day, last 7 days", symbol: "chart.bar", stretch: true) {
+                Chart(Self.daily(week)) { bar in
+                    BarMark(x: .value("Day", bar.day, unit: .day), y: .value("Cost", bar.cost))
+                        .foregroundStyle(by: .value("Model", bar.model))
+                        .cornerRadius(4)
+                }
+                .chartForegroundStyleScale(["Haiku": Color.green, "Sonnet": Color.blue, "Opus": Look.accent])
+                // Always the whole week, so one busy day is a bar, not the whole chart.
+                .chartXScale(domain: Calendar.current.date(byAdding: .day, value: -6, to: Calendar.current.startOfDay(for: Date()))!
+                             ... Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: Date()))!)
+                .chartYAxis { AxisMarks { value in
+                    AxisGridLine()
+                    AxisValueLabel { if let cost = value.as(Double.self) { Text(cost == 0 ? "$0" : Self.dollars(cost)) } }
+                } }
+                .chartXAxis { AxisMarks(values: .stride(by: .day)) { _ in AxisValueLabel(format: .dateTime.weekday(.abbreviated)) } }
+                .frame(height: 170)
+            }
+            Card(title: "By model, last 7 days", symbol: "cpu", stretch: true) {
+                ForEach(Self.byModel(week), id: \.model) { group in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(group.model).font(.system(size: 13.5, weight: .medium))
+                            Spacer()
+                            Text(Self.dollars(group.total)).font(.system(size: 13.5, weight: .semibold).monospacedDigit())
+                        }
+                        Text("\(group.count) requests · avg \(Self.dollars(group.total / Double(group.count)))")
+                            .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 3)
+                }
+                Text("Joe uses Haiku for most things and Opus only for designing and doing schoolwork.")
+                    .font(.system(size: 11.5)).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(width: narrow ? nil : 300)
+        }
+        .fixedSize(horizontal: false, vertical: true)
         Card(title: "By kind, last 7 days", symbol: "square.grid.2x2") {
             if week.isEmpty { Text("Nothing logged yet: costs appear after Joe's next request.").font(.system(size: 13)).foregroundStyle(.secondary) }
             ForEach(Self.byKind(week), id: \.kind) { group in
@@ -1303,6 +1344,38 @@ private struct UsagePage: View {
             }
         }
         .onAppear { entries = UsageLog.load() }
+    }
+
+    /// "claude-haiku-5-5" → "Haiku".
+    private static func family(_ model: String) -> String {
+        ["Opus", "Sonnet", "Haiku"].first { model.lowercased().contains($0.lowercased()) } ?? "Other"
+    }
+
+    private struct DayBar: Identifiable {
+        let day: Date
+        let model: String
+        let cost: Double
+        var id: String { "\(day.timeIntervalSince1970)\(model)" }
+    }
+
+    private static func daily(_ entries: [UsageLog.Entry]) -> [DayBar] {
+        var totals: [String: (Date, String, Double)] = [:]
+        for entry in entries {
+            let day = Calendar.current.startOfDay(for: entry.date)
+            let model = family(entry.model)
+            let key = "\(day.timeIntervalSince1970)\(model)"
+            totals[key] = (day, model, (totals[key]?.2 ?? 0) + entry.cost)
+        }
+        return totals.values.map { DayBar(day: $0.0, model: $0.1, cost: $0.2) }.sorted { $0.day < $1.day }
+    }
+
+    private static func byModel(_ entries: [UsageLog.Entry]) -> [(model: String, count: Int, total: Double)] {
+        var groups: [String: (count: Int, total: Double)] = [:]
+        for entry in entries {
+            let current = groups[family(entry.model)] ?? (0, 0)
+            groups[family(entry.model)] = (current.count + 1, current.total + entry.cost)
+        }
+        return groups.map { (model: $0.key, count: $0.value.count, total: $0.value.total) }.sorted { $0.total > $1.total }
     }
 
     private static func byKind(_ entries: [UsageLog.Entry]) -> [(kind: String, count: Int, total: Double)] {
@@ -1671,34 +1744,57 @@ private struct CalendarPage: View {
 
 private struct RoutinesPage: View {
     @ObservedObject var model: DashboardModel
+    @Environment(\.narrow) private var narrow
     @State private var idea = ""
 
     var body: some View {
         PageTitle(title: "Routines", subtitle: "Say a routine's phrase and Joe runs it. Tell him to change one any time.")
-        Card(title: "New routine", symbol: "plus") {
-            HStack {
-                TextField("When I say “let's work on WellPrepped”, open my creator pipeline and Business Workspace…", text: $idea)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(save)
-                Button("Save", action: save).disabled(idea.isEmpty)
-            }
+        HStack(spacing: 10) {
+            Image(systemName: "plus.circle.fill").font(.system(size: 16)).foregroundStyle(Look.accent)
+            TextField("New routine: when I say “let's work on WellPrepped”, open my creator pipeline…", text: $idea)
+                .textFieldStyle(.plain)
+                .font(.system(size: 14))
+                .onSubmit(save)
+            Button("Save", action: save).buttonStyle(PillButton(prominent: !idea.isEmpty)).disabled(idea.isEmpty)
         }
-        LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)], spacing: 14) {
-            ForEach(model.routines, id: \.name) { routine in
-                Card {
-                    Text(routine.name).font(.system(size: 15, weight: .semibold))
-                    Text(routine.trigger).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(3)
-                    HStack {
-                        Button("Run") { model.actions.ask("Run my “\(routine.name)” routine.") }
-                            .buttonStyle(.borderedProminent)
-                        Spacer()
-                        if let url = Daybook.routinesURL {
-                            Button("Edit") { model.openInObsidian(url) }.buttonStyle(.borderless)
-                        }
-                    }
+        .padding(.horizontal, 16)
+        .frame(height: 50)
+        .background(Look.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Look.line))
+        // Two to a row, each row as tall as its taller card, so the grid lines up.
+        let columns = narrow ? 1 : 2
+        let rows = stride(from: 0, to: model.routines.count, by: columns).map { Array(model.routines[$0..<min($0 + columns, model.routines.count)]) }
+        Grid(horizontalSpacing: 14, verticalSpacing: 14) {
+            ForEach(rows.indices, id: \.self) { index in
+                GridRow {
+                    ForEach(rows[index], id: \.name) { routine in card(routine) }
+                    if rows[index].count < columns { Color.clear }
                 }
             }
         }
+    }
+
+    private func card(_ routine: (name: String, trigger: String)) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "wand.and.stars").font(.system(size: 12)).foregroundStyle(Look.accent)
+                Text(routine.name).font(.system(size: 14.5, weight: .semibold))
+            }
+            Text(routine.trigger).font(.system(size: 12.5)).foregroundStyle(.secondary).lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            HStack(spacing: 8) {
+                Button { model.actions.ask("Run my “\(routine.name)” routine.") } label: { Label("Run", systemImage: "play.fill") }
+                    .buttonStyle(PillButton(prominent: true))
+                if let url = Daybook.routinesURL {
+                    Button("Edit") { model.openInObsidian(url) }.buttonStyle(PillButton())
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Look.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Look.line))
     }
 
     private func save() {
@@ -1892,32 +1988,60 @@ private struct AlarmsPage: View {
 
 private struct NotesPage: View {
     @ObservedObject var model: DashboardModel
+    @State private var kind = "All"
 
     var body: some View {
         PageTitle(title: "Notes", subtitle: "Lecture and meeting notes from the notepad, saved in your Obsidian vault.")
-        HStack {
+        HStack(spacing: 10) {
             Button { model.actions.openNotepad() } label: { Label("Open the notepad", systemImage: "square.and.pencil") }
-                .buttonStyle(.borderedProminent)
-            Text("Or say “take notes, this is a lecture”.").font(.system(size: 13)).foregroundStyle(.secondary)
+                .buttonStyle(PillButton(prominent: true))
+            Text("Or say “take notes, this is a lecture”.").font(.system(size: 12.5)).foregroundStyle(.secondary)
+            Spacer()
+            Picker("", selection: $kind) {
+                ForEach(["All", "Lecture", "Meeting", "Notes"], id: \.self) { Text($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 280)
         }
-        Card {
-            if model.notes.isEmpty { Text("No saved notes yet.").foregroundStyle(.secondary).font(.system(size: 13)) }
-            ForEach(model.notes, id: \.url) { note in
-                Button { model.openInObsidian(note.url) } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: note.kind.hasPrefix("Lecture") ? "graduationcap" : note.kind.hasPrefix("Meeting") ? "person.2" : "note.text")
-                            .foregroundStyle(Look.accent).frame(width: 20)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(note.title).font(.system(size: 14))
-                            Text(note.kind).font(.system(size: 11)).foregroundStyle(.secondary)
+        let shown = model.notes.filter { kind == "All" || $0.kind.hasPrefix(kind) }
+        let calendar = Calendar.current
+        let days = Dictionary(grouping: shown) { calendar.startOfDay(for: $0.date) }.sorted { $0.key > $1.key }
+        if shown.isEmpty {
+            Card { Text(model.notes.isEmpty ? "No saved notes yet." : "None of this kind yet.").foregroundStyle(.secondary).font(.system(size: 13)) }
+        }
+        ForEach(days, id: \.key) { day, notes in
+            VStack(alignment: .leading, spacing: 8) {
+                Text(calendar.isDateInToday(day) ? "Today" : calendar.isDateInYesterday(day) ? "Yesterday" : day.formatted(.dateTime.weekday(.wide).day().month(.wide)))
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
+                    .padding(.leading, 4)
+                VStack(spacing: 0) {
+                    ForEach(Array(notes.enumerated()), id: \.element.url) { index, note in
+                        if index > 0 { Divider().padding(.leading, 52) }
+                        Button { model.openInObsidian(note.url) } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: note.kind.hasPrefix("Lecture") ? "graduationcap" : note.kind.hasPrefix("Meeting") ? "person.2" : "note.text")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(Look.accent)
+                                    .frame(width: 28, height: 28)
+                                    .background(Look.accent.opacity(0.1), in: RoundedRectangle(cornerRadius: 7))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(note.title).font(.system(size: 13.5, weight: .medium)).lineLimit(1)
+                                    Text(note.kind).font(.system(size: 11.5)).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Text(note.date.formatted(date: .omitted, time: .shortened)).font(.system(size: 11.5).monospacedDigit()).foregroundStyle(.tertiary)
+                                Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                            .contentShape(Rectangle())
                         }
-                        Spacer()
-                        Text(note.date.formatted(.dateTime.day().month(.abbreviated))).font(.system(size: 12)).foregroundStyle(.tertiary)
+                        .buttonStyle(.plain)
                     }
-                    .padding(.vertical, 4)
-                    .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .background(Look.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Look.line))
             }
         }
     }
@@ -2247,6 +2371,7 @@ private struct SettingsPage: View {
     @State private var login = false // read on appear: asking macOS is slow, too slow for every redraw
 
     @AppStorage("settingsTab") private var tab = "general"
+    @AppStorage(AppAppearance.key) private var appearance = AppAppearance.system.rawValue
     @AppStorage("alarmsAtNotch") private var alarmsAtNotch = "full"
 
     private static let tabs: [(id: String, title: String, symbol: String)] = [
@@ -2306,6 +2431,10 @@ private struct SettingsPage: View {
             profileRow("Your project", "A business or club Joe should know about", $profileProject, "Optional")
             row("Welcome tour", "See the first-launch tour again; your settings stay") {
                 Button("Replay") { model.actions.showOnboarding() }.buttonStyle(PillButton())
+            }
+            row("Appearance", "Light, dark, or follow the Mac") {
+                Choice(options: AppAppearance.allCases.map { ($0.rawValue, $0.title) }, selection: $appearance)
+                    .onChange(of: appearance) { AppAppearance.apply() }
             }
             row("Open Joe at login", last: true) {
                 switchOn($login) { on in
@@ -2542,5 +2671,54 @@ extension Dashboard {
                 done()
             }
         }
+    }
+}
+
+// MARK: - Appearance
+
+/// Light, dark, or whatever the Mac is set to, for all of Joe's windows.
+enum AppAppearance: String, CaseIterable {
+    case system, light, dark
+    static let key = "appearance"
+
+    var title: String {
+        switch self {
+        case .system: "Auto"
+        case .light: "Light"
+        case .dark: "Dark"
+        }
+    }
+
+    static var current: AppAppearance {
+        AppAppearance(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .system
+    }
+
+    @MainActor static func apply() {
+        NSApp.appearance = switch current {
+        case .system: nil
+        case .light: NSAppearance(named: .aqua)
+        case .dark: NSAppearance(named: .darkAqua)
+        }
+    }
+}
+
+/// The sun/moon at the bottom of the sidebar: flips between light and dark.
+private struct AppearanceToggle: View {
+    @AppStorage(AppAppearance.key) private var appearance = AppAppearance.system.rawValue
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        Button {
+            appearance = (scheme == .dark ? AppAppearance.light : .dark).rawValue
+            AppAppearance.apply()
+        } label: {
+            Image(systemName: scheme == .dark ? "sun.max" : "moon")
+                .font(.system(size: 12, weight: .medium))
+                .frame(width: 24, height: 22)
+                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help(scheme == .dark ? "Light mode" : "Dark mode")
     }
 }

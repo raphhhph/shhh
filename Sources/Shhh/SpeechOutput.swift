@@ -131,6 +131,11 @@ final class SpeechOutput {
         Task { await neural.prepare(engine) }
     }
 
+    /// Loads Alba even with the voice off, for the welcome tour, so she's ready when Joe speaks.
+    func prepareForTour() {
+        Task { await neural.prepare(.lifelike) }
+    }
+
     /// For `Shhh --get-voice`: downloads and loads a voice, and says whether it worked.
     func prepareNow(_ engine: Engine) async -> String? {
         await neural.prepare(engine)

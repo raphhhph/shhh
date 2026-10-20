@@ -45,6 +45,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// The first-launch tour (and its replay from Settings).
     private lazy var onboarding: Onboarding = Onboarding(actions: Onboarding.Actions(
         greet: { [weak self] subject, line in self?.greetAtNotch(subject, line) },
+        narrate: { [weak self] subject, line in
+            guard let self, self.state == .idle else { return }
+            self.speech.stop()
+            guard !line.isEmpty else { self.greeting.hide(); return }
+            // Shown at the notch for about as long as it takes to say.
+            self.greeting.show(subject, for: max(4, Double(line.split(separator: " ").count) / 2.6 + 1.5))
+            self.speech.useForThisReply(.lifelike)
+            self.speech.update(line)
+            self.speech.finish()
+        },
+        isSpeaking: { [weak self] in self?.speech.isSpeaking ?? false },
+        prepareVoice: { [weak self] in if SpeechOutput.engine == .off { self?.speech.prepareForTour() } },
         chooseVault: { [weak self] in self?.chooseMemoryVault() },
         finished: { [weak self] in
             Profile.isSetUp = true
@@ -154,6 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ModelDownloads.apply() // Hugging Face or the China mirror, before any model loads
+        AppAppearance.apply() // light, dark or the Mac's
         Task.detached(priority: .utility) { await NoiseFilter.shared.prepare() }
         phone.run = { [weak self] request, done in self?.startInBackground(request, onFinished: done) }
         wake.canListen = { [weak self] in

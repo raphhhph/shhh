@@ -11,6 +11,12 @@ final class Onboarding: NSObject, NSWindowDelegate {
     struct Actions {
         /// Joe at the notch, out loud: a subject line and a sentence.
         var greet: (_ subject: String, _ line: String) -> Void
+        /// Joe talking over the tour: stops whatever he was saying and says this instead.
+        var narrate: (_ subject: String, _ line: String) -> Void
+        /// Whether he's still talking, to move on when he's done.
+        var isSpeaking: () -> Bool
+        /// Loads his voice early, so the tour isn't silent while it loads.
+        var prepareVoice: () -> Void
         var chooseVault: () -> Void
         var finished: () -> Void
     }
@@ -25,6 +31,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
     var isVisible: Bool { window?.isVisible == true }
 
     func show() {
+        model.actions.prepareVoice()
         model.step = .hello
         model.heard = nil
         if window == nil {
@@ -66,6 +73,7 @@ final class OnboardingModel: ObservableObject {
 
     func next() {
         guard let following = Step(rawValue: step.rawValue + 1) else { return }
+        if step == .tour { actions.narrate("", "") } // moving on: he stops mid-sentence
         withAnimation(.easeInOut(duration: 0.35)) { step = following }
         arrived()
     }
@@ -79,7 +87,6 @@ final class OnboardingModel: ObservableObject {
     private func arrived() {
         let name = Profile.name
         switch step {
-        case .tour: actions.greet("Nice to meet you, \(name)", "Nice to meet you, \(name)! Here's what I can do.")
         case .tryIt: actions.greet("Your turn", "Hold the right Option key and ask me something.")
         case .done: actions.greet("You're all set, \(name)", "You're all set. I'm up here whenever you need me.")
         default: break
@@ -301,6 +308,16 @@ private struct NameStep: View {
 private struct TourStep: View {
     @ObservedObject var model: OnboardingModel
     @State private var page = 0
+    /// What Joe says over each page: the feature, in his words.
+    private var commentary: [String] {
+        let name = Profile.name.isEmpty ? "" : ", \(Profile.name)"
+        return [
+            "Nice to meet you\(name). First trick: hold right Command and just talk. Whatever you say lands wherever you're typing, punctuation and all. Essays, emails, the group chat. Your keyboard's about to get jealous.",
+            "This one's my favourite. Hold right Option and ask me anything. What's due tomorrow, find that worksheet, reply to your teacher. I answer up here at the notch, and if it's a job, I just do it.",
+            "Every morning I build your day for you: your classes, what's due on ManageBac, and the emails that actually need you. No more checking five apps before first period.",
+            "And the big stuff, like a formative or a slide deck, I take into the background and work through while you get on with your evening. I'll tell you when it's done.",
+        ]
+    }
     private let pages = [
         ("Write with your voice", "Hold right ⌘ and talk. Your words appear wherever you’re typing, punctuated.", "command"),
         ("Ask me anything", "Hold right ⌥ and ask. I answer at the notch, and I can do it for you.", "option"),
@@ -340,11 +357,18 @@ private struct TourStep: View {
                 }
             }
         }
-        .task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(4.5))
-                withAnimation(.easeInOut(duration: 0.4)) { page = (page + 1) % pages.count }
+        // Joe talks over each page, and it moves on when he's done (or when they pick another).
+        .task(id: page) {
+            model.actions.narrate(pages[page].0, commentary[page])
+            let started = Date()
+            try? await Task.sleep(for: .seconds(2))
+            // Until he's finished, but never stuck on a page: a voice still loading gets 25 seconds.
+            while !Task.isCancelled, model.actions.isSpeaking(), Date().timeIntervalSince(started) < 25 {
+                try? await Task.sleep(for: .milliseconds(300))
             }
+            try? await Task.sleep(for: .seconds(Date().timeIntervalSince(started) < 4 ? 3 : 0.9))
+            guard !Task.isCancelled, page < pages.count - 1 else { return }
+            withAnimation(.easeInOut(duration: 0.4)) { page += 1 }
         }
     }
 }

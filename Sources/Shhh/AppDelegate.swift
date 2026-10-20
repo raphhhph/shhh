@@ -46,17 +46,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.dashboard.show()
         }))
 
+    private let greeting = NotchGreeting()
+
     /// Joe at the notch, saying a line out loud: for the tour, with no conversation behind it.
     private func greetAtNotch(_ subject: String, _ line: String) {
-        guard focused == nil, state == .idle else { return }
-        answerPanel.show(question: "", subject: subject, reply: line, status: nil, error: nil, approval: nil,
-                         isDone: true, canFollowUp: false)
+        guard state == .idle else { return }
+        greeting.show(subject)
         if SpeechOutput.engine == .off { speech.useForThisReply(.natural) }
         speech.update(line)
         speech.finish()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
-            MainActor.assumeIsolated { if self?.focused == nil { self?.answerPanel.hide() } }
-        }
     }
 
     private lazy var dashboard: Dashboard = Dashboard(actions: DashboardModel.Actions(

@@ -178,3 +178,81 @@ private struct RestingView: View {
                    value: model.open)
     }
 }
+
+/// A short line from Joe that grows out of the notch band and tucks back in: the onboarding's
+/// greetings. Same width as the band (wider for a longer line), centred on the notch, its own
+/// window, so it never fights the answer card or shows the "done" tick.
+@MainActor
+final class NotchGreeting {
+    private let model = GreetingModel()
+    private var panel: NotchPanel?
+    private var hideWork: DispatchWorkItem?
+
+    func show(_ line: String, for seconds: TimeInterval = 4) {
+        guard let screen = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) ?? NSScreen.main else { return }
+        let notch = Notch.rect(on: screen)
+        let band = notch.width + 2 * RestingNotch.ear
+        let width = max(band, min(520, CGFloat(line.count) * 8.2 + 72))
+        let height = notch.height + 46
+        let frame = NSRect(x: notch.midX - width / 2, y: notch.maxY - height, width: width, height: height)
+        if panel == nil {
+            let panel = NotchPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            panel.level = .aboveResting
+            panel.isOpaque = false
+            panel.backgroundColor = .clear
+            panel.hasShadow = false
+            panel.ignoresMouseEvents = true
+            panel.isMovable = false
+            panel.hidesOnDeactivate = false
+            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+            panel.contentView = NSHostingView(rootView: GreetingView(model: model, notchHeight: notch.height, band: band))
+            self.panel = panel
+        }
+        panel?.setFrame(frame, display: true)
+        panel?.orderFrontRegardless()
+        if let panel { NotchSpace.pin(panel) }
+        model.line = line
+        model.open = true
+        hideWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.hide() } }
+        hideWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+    }
+
+    func hide() {
+        model.open = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            MainActor.assumeIsolated { if self?.model.open == false { self?.panel?.orderOut(nil) } }
+        }
+    }
+}
+
+final class GreetingModel: ObservableObject {
+    @Published var line = ""
+    @Published var open = false
+}
+
+private struct GreetingView: View {
+    @ObservedObject var model: GreetingModel
+    let notchHeight: CGFloat
+    let band: CGFloat
+
+    var body: some View {
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                Color.clear.frame(height: notchHeight)
+                HStack(spacing: 9) {
+                    Image(systemName: "sparkle").font(.system(size: 13, weight: .semibold)).foregroundStyle(.orange)
+                    Text(model.line).font(.system(size: 13.5, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(model.open ? 1 : 0)
+                .animation(model.open ? .easeOut(duration: 0.25).delay(0.15) : .easeIn(duration: 0.12), value: model.open)
+            }
+            .frame(width: model.open ? geometry.size.width : band, height: model.open ? geometry.size.height : notchHeight)
+            .background(Color.black, in: UnevenRoundedRectangle(bottomLeadingRadius: 18, bottomTrailingRadius: 18, style: .continuous))
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .animation(model.open ? .spring(response: 0.45, dampingFraction: 0.78) : .easeIn(duration: 0.25), value: model.open)
+        }
+    }
+}

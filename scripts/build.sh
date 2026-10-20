@@ -42,11 +42,15 @@ echo "Built $APP"
 
 case "$MODE" in
   --install)
-    { pkill -x Joe; pkill -x Shhh; } 2>/dev/null && sleep 1 || true
+    { pkill -x Joe; pkill -x Shhh; } 2>/dev/null || true
+    # Wait until the old one has really quit (up to 10 s): opening it while it's still closing
+    # fails (error -600) and left Joe not running.
+    for _ in $(seq 1 50); do pgrep -x Joe >/dev/null || pgrep -x Shhh >/dev/null || break; sleep 0.2; done
     rm -rf /Applications/Joe.app /Applications/Shhh.app # Shhh.app: the app's old name
     cp -R "$APP" /Applications/Joe.app
-    open /Applications/Joe.app
-    echo "Installed to /Applications and launched."
+    for _ in 1 2 3; do open /Applications/Joe.app && break; sleep 1; done
+    sleep 1
+    pgrep -x Joe >/dev/null && echo "Installed to /Applications and launched." || echo "Installed, but Joe didn't start: open it from Applications."
     ;;
   --release)
     rm -f build/Joe.zip

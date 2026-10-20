@@ -66,13 +66,13 @@ final class OnboardingModel: ObservableObject {
 
     func next() {
         guard let following = Step(rawValue: step.rawValue + 1) else { return }
-        withAnimation(.spring(response: 0.55, dampingFraction: 0.86)) { step = following }
+        withAnimation(.easeInOut(duration: 0.35)) { step = following }
         arrived()
     }
 
     func back() {
         guard let previous = Step(rawValue: step.rawValue - 1) else { return }
-        withAnimation(.spring(response: 0.55, dampingFraction: 0.86)) { step = previous }
+        withAnimation(.easeInOut(duration: 0.35)) { step = previous }
     }
 
     /// What Joe says at the notch as each step comes up.
@@ -106,7 +106,8 @@ private struct OnboardingView: View {
                            startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
             VStack(spacing: 18) {
-                Group {
+                ZStack {
+                    Group {
                     switch model.step {
                     case .hello: HelloStep(model: model)
                     case .name: NameStep(model: model)
@@ -118,11 +119,14 @@ private struct OnboardingView: View {
                     case .tryIt: TryStep(model: model)
                     case .done: DoneStep(model: model)
                     }
+                    }
+                    .transition(.asymmetric(insertion: .opacity.combined(with: .offset(x: 36)),
+                                            removal: .opacity.combined(with: .offset(x: -36))))
+                    .id(model.step)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
-                                        removal: .move(edge: .leading).combined(with: .opacity)))
-                .id(model.step)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
                 progress
             }
             .padding(.horizontal, 64)
@@ -279,8 +283,7 @@ private struct NameStep: View {
                 .frame(width: 420)
                 .background(Tint.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(focused ? Tint.accent : Tint.line, lineWidth: 1.5))
-                .focused($focused)
-                .onSubmit { if !trimmed.isEmpty { model.next() } }
+                .focused($focused) // Return presses Continue (its keyboard shortcut): one step, not two
             Spacer()
             HStack {
                 Button("Back") { model.back() }.buttonStyle(.plain).foregroundStyle(Tint.soft)
@@ -470,41 +473,134 @@ private struct ChecklistDemo: View {
     }
 }
 
+/// School, programme and subjects. Subjects are picked by IB group (left), from that group's
+/// subjects (middle), into "Your subjects" (right), each with an SL / HL switch.
 private struct SchoolStep: View {
     @ObservedObject var model: OnboardingModel
     @AppStorage("profileSchool") private var school = ""
     @AppStorage("profileProgramme") private var programme = ""
     @AppStorage("profileSubjects") private var subjects = ""
     @AppStorage("profileProject") private var project = ""
+    @State private var group = 0
 
-    private static let programmes = ["IB Diploma, year 1 (DP1)", "IB Diploma, year 2 (DP2)", "IB MYP", "IB Career-related", "Other"]
-    private static let common = ["Math AA", "Math AI", "English A Lang & Lit", "English A Literature", "Economics", "Business Management",
-                                 "Psychology", "History", "Geography", "Biology", "Chemistry", "Physics", "ESS", "Computer Science",
-                                 "Visual Arts", "Chinese B", "Spanish B", "French B", "Mandarin ab initio", "TOK"]
+    private static let programmes = ["IB Diploma, year 1 (DP1)", "IB Diploma, year 2 (DP2)", "IB Career-related", "IB MYP", "Other"]
+    private static let groups: [(name: String, symbol: String, subjects: [String])] = [
+        ("Language & literature", "book", ["English A Lang & Lit", "English A Literature", "Chinese A Lang & Lit", "Chinese A Literature", "Literature & Performance"]),
+        ("Language acquisition", "character.bubble", ["Chinese B", "English B", "Spanish B", "French B", "Mandarin ab initio", "Spanish ab initio", "French ab initio"]),
+        ("Individuals & societies", "person.3", ["Economics", "Business Management", "Psychology", "History", "Geography", "Global Politics", "Digital Society", "Philosophy"]),
+        ("Sciences", "atom", ["Biology", "Chemistry", "Physics", "ESS", "Computer Science", "Sports, Exercise & Health", "Design Technology"]),
+        ("Mathematics", "function", ["Math AA", "Math AI"]),
+        ("The arts", "paintpalette", ["Visual Arts", "Music", "Theatre", "Film", "Dance"]),
+    ]
 
     var body: some View {
-        StepFrame(model: model, title: "Your school", subtitle: "So I know your classes, your deadlines and how you’re assessed.") {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(spacing: 14) {
+        StepFrame(model: model, title: "Your school", subtitle: "So I know your classes, your deadlines and how each subject is assessed.") {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(spacing: 12) {
                     field("School", "Your school’s name", $school)
-                    field("A project of yours (optional)", "A business, club…", $project)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Programme").font(.system(size: 12, weight: .medium)).foregroundStyle(Tint.soft)
+                        Menu {
+                            ForEach(Self.programmes, id: \.self) { option in Button(option) { programme = option } }
+                        } label: {
+                            HStack {
+                                Text(programme.isEmpty ? "Choose" : programme).font(.system(size: 14)).lineLimit(1)
+                                Spacer()
+                                Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .bold)).foregroundStyle(Tint.soft)
+                            }
+                            .padding(.horizontal, 12).frame(height: 38)
+                            .background(Tint.card, in: RoundedRectangle(cornerRadius: 10))
+                            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Tint.line))
+                        }
+                        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+                    }
+                    .frame(width: 240)
+                    field("A project of yours (optional)", "A business, club…", $project).frame(width: 220)
                 }
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Programme").font(.system(size: 12.5, weight: .medium)).foregroundStyle(Tint.soft)
-                    HStack(spacing: 8) {
-                        ForEach(Self.programmes, id: \.self) { option in
-                            chip(option.replacingOccurrences(of: "IB Diploma, ", with: "DP ").replacingOccurrences(of: "year ", with: ""), programme == option) { programme = option }
+                HStack(alignment: .top, spacing: 14) {
+                    // The six groups.
+                    VStack(spacing: 4) {
+                        ForEach(Self.groups.indices, id: \.self) { index in
+                            let count = Self.groups[index].subjects.filter { level(of: $0) != nil }.count
+                            Button { withAnimation(.easeOut(duration: 0.2)) { group = index } } label: {
+                                HStack(spacing: 9) {
+                                    Image(systemName: Self.groups[index].symbol).frame(width: 18)
+                                    Text(Self.groups[index].name).font(.system(size: 13, weight: group == index ? .semibold : .regular)).lineLimit(1)
+                                    Spacer(minLength: 4)
+                                    if count > 0 { Circle().fill(Tint.accent).frame(width: 7, height: 7) }
+                                }
+                                .padding(.horizontal, 10).frame(height: 34)
+                                .background(group == index ? Color.white.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 8))
+                                .foregroundStyle(group == index ? .white : Tint.soft)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Subjects: tap once for SL, twice for HL, again to remove").font(.system(size: 12.5, weight: .medium)).foregroundStyle(Tint.soft)
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 5), spacing: 8) {
-                        ForEach(Self.common, id: \.self) { subject in
-                            let level = level(of: subject)
-                            chip(level.map { "\(subject) \($0)" } ?? subject, level != nil) { cycle(subject) }
+                    .frame(width: 214)
+                    // That group's subjects.
+                    VStack(alignment: .leading, spacing: 8) {
+                        LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                            ForEach(Self.groups[group].subjects, id: \.self) { subject in
+                                let picked = level(of: subject) != nil
+                                Button { withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) { toggle(subject) } } label: {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: picked ? "checkmark" : "plus").font(.system(size: 11, weight: .bold))
+                                        Text(subject).font(.system(size: 13, weight: picked ? .semibold : .regular)).lineLimit(1).minimumScaleFactor(0.85)
+                                        Spacer(minLength: 0)
+                                    }
+                                    .padding(.horizontal, 12).frame(height: 36)
+                                    .background(picked ? Tint.accent.opacity(0.2) : Tint.card, in: RoundedRectangle(cornerRadius: 10))
+                                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(picked ? Tint.accent : Tint.line))
+                                    .foregroundStyle(picked ? Tint.accent : .white)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .id(group)
+                        .transition(.opacity)
+                    }
+                    .frame(maxWidth: .infinity)
+                    // Their picks.
+                    VStack(alignment: .leading, spacing: 6) {
+                        let list = chosen
+                        HStack {
+                            Text("Your subjects").font(.system(size: 13, weight: .semibold))
+                            Spacer()
+                            Text("\(list.count) of 6 · \(list.filter { $0.1 == "HL" }.count) HL")
+                                .font(.system(size: 11.5).monospacedDigit()).foregroundStyle(list.count == 6 ? .green : Tint.soft)
+                        }
+                        if list.isEmpty {
+                            Text("Pick from the groups on the left.").font(.system(size: 12.5)).foregroundStyle(Tint.soft).padding(.top, 6)
+                        }
+                        ForEach(list, id: \.0) { subject, level in
+                            HStack(spacing: 6) {
+                                Text(subject).font(.system(size: 12.5)).lineLimit(1)
+                                Spacer(minLength: 4)
+                                HStack(spacing: 0) {
+                                    ForEach(["SL", "HL"], id: \.self) { option in
+                                        Button { setLevel(subject, option) } label: {
+                                            Text(option).font(.system(size: 10.5, weight: .bold))
+                                                .frame(width: 28, height: 20)
+                                                .background(level == option ? Tint.accent : .clear, in: RoundedRectangle(cornerRadius: 5))
+                                                .foregroundStyle(level == option ? Color.black : Tint.soft)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                                .padding(2)
+                                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+                                Button { withAnimation { toggle(subject) } } label: { Image(systemName: "xmark").font(.system(size: 9, weight: .bold)) }
+                                    .buttonStyle(.plain).foregroundStyle(Tint.soft)
+                            }
+                            .frame(height: 30)
+                            .transition(.opacity.combined(with: .move(edge: .trailing)))
                         }
                     }
+                    .padding(14)
+                    .frame(width: 270, alignment: .topLeading)
+                    .background(Tint.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Tint.line))
                 }
             }
         }
@@ -512,50 +608,47 @@ private struct SchoolStep: View {
 
     private func field(_ label: String, _ placeholder: String, _ value: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(label).font(.system(size: 12.5, weight: .medium)).foregroundStyle(Tint.soft)
+            Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(Tint.soft)
             TextField(placeholder, text: value)
-                .textFieldStyle(.plain).font(.system(size: 15))
-                .padding(.horizontal, 14).frame(height: 40)
+                .textFieldStyle(.plain).font(.system(size: 14))
+                .padding(.horizontal, 12).frame(height: 38)
                 .background(Tint.card, in: RoundedRectangle(cornerRadius: 10))
                 .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Tint.line))
         }
     }
 
-    private func chip(_ title: String, _ on: Bool, _ action: @escaping () -> Void) -> some View {
-        Button(action: { withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) { action() } }) {
-            Text(title)
-                .font(.system(size: 12.5, weight: on ? .semibold : .regular))
-                .lineLimit(1).minimumScaleFactor(0.8)
-                .padding(.horizontal, 10).frame(maxWidth: .infinity).frame(height: 32)
-                .background(on ? Tint.accent : Tint.card, in: Capsule())
-                .foregroundStyle(on ? Color.black : .white)
-                .overlay(Capsule().strokeBorder(on ? Color.clear : Tint.line))
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// The subjects as "Math AI HL, ESS SL…", one level each.
+    /// The subjects as saved ("Math AI HL, ESS SL…"), each with its level.
     private var chosen: [(String, String)] {
         subjects.split(separator: ",").compactMap { part in
             let words = part.trimmingCharacters(in: .whitespaces)
-            guard let space = words.lastIndex(of: " ") else { return words.isEmpty ? nil : (words, "") }
-            let level = String(words[words.index(after: space)...])
-            return ["HL", "SL"].contains(level) ? (String(words[..<space]), level) : (words, "")
+            guard !words.isEmpty else { return nil }
+            for level in ["HL", "SL"] where words.hasSuffix(" " + level) {
+                return (String(words.dropLast(3)), level)
+            }
+            return (words, "SL")
         }
+    }
+
+    private func save(_ list: [(String, String)]) {
+        subjects = list.map { "\($0.0) \($0.1)" }.joined(separator: ", ")
     }
 
     private func level(of subject: String) -> String? {
-        chosen.first { $0.0.caseInsensitiveCompare(subject) == .orderedSame || $0.0.hasPrefix(subject) }.map { $0.1.isEmpty ? "" : $0.1 }
+        chosen.first { $0.0.caseInsensitiveCompare(subject) == .orderedSame }?.1
     }
 
-    private func cycle(_ subject: String) {
+    private func toggle(_ subject: String) {
         var list = chosen
-        if let index = list.firstIndex(where: { $0.0.caseInsensitiveCompare(subject) == .orderedSame || $0.0.hasPrefix(subject) }) {
-            if list[index].1 == "SL" { list[index].1 = "HL" } else { list.remove(at: index) }
+        if let index = list.firstIndex(where: { $0.0.caseInsensitiveCompare(subject) == .orderedSame }) {
+            list.remove(at: index)
         } else {
             list.append((subject, "SL"))
         }
-        subjects = list.map { $0.1.isEmpty ? $0.0 : "\($0.0) \($0.1)" }.joined(separator: ", ")
+        save(list)
+    }
+
+    private func setLevel(_ subject: String, _ level: String) {
+        save(chosen.map { $0.0 == subject ? ($0.0, level) : $0 })
     }
 }
 

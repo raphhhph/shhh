@@ -1273,9 +1273,25 @@ private struct SearchField: View {
 private struct UsagePage: View {
     @Environment(\.narrow) private var narrow
     @State private var entries: [UsageLog.Entry] = []
+    @AppStorage("usageCurrency") private var currency = "USD"
+
+    /// Yuan per US dollar, for the RMB view: a reference, not a live rate.
+    static let yuanPerDollar = 7.1
 
     var body: some View {
-        PageTitle(title: "Usage", subtitle: AIAccount.usesAPIKey ? "Billed to your API key, per request." : "On your Claude plan. Costs show what the same use would cost on the API.")
+        HStack(alignment: .top) {
+            PageTitle(title: "Usage", subtitle: (AIAccount.usesAPIKey ? "Billed to your API key, per request." : "On your Claude plan. Costs show what the same use would cost on the API.")
+                + (currency == "CNY" ? " RMB at ¥\(String(format: "%.1f", Self.yuanPerDollar)) per $1." : ""))
+            Spacer()
+            Picker("", selection: $currency) {
+                Text("USD $").tag("USD")
+                Text("RMB ¥").tag("CNY")
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 150)
+            .padding(.top, 6)
+        }
         let calendar = Calendar.current
         let today = entries.filter { calendar.isDateInToday($0.date) }
         let weekAgo = Date().addingTimeInterval(-7 * 86_400)
@@ -1390,8 +1406,13 @@ private struct UsagePage: View {
         return groups.map { (kind: $0.key, count: $0.value.count, total: $0.value.total) }.sorted { $0.total > $1.total }
     }
 
+    /// In dollars, or yuan when RMB is picked.
     private static func dollars(_ value: Double) -> String {
-        value < 1 ? String(format: "$%.3f", value) : String(format: "$%.2f", value)
+        if UserDefaults.standard.string(forKey: "usageCurrency") == "CNY" {
+            let yuan = value * yuanPerDollar
+            return yuan < 1 ? String(format: "¥%.3f", yuan) : String(format: "¥%.2f", yuan)
+        }
+        return value < 1 ? String(format: "$%.3f", value) : String(format: "$%.2f", value)
     }
 
     private func stat(_ value: String, _ label: String, _ symbol: String) -> some View {

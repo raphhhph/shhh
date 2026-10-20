@@ -354,6 +354,7 @@ final class AlarmClock {
         // Two misses on a question: a different one, so nobody's stuck on a fact they never learnt.
         if misses % 2 == 0, challenge.kind == .question { model.challenge = challenge.another() }
         model.feedback = challenge.kind == .question ? "Not quite. Try again." : "Read all of it, clearly."
+        DispatchQueue.main.async { [weak self] in self?.fitPanel() }
         quiet(false)
         return false
     }
@@ -538,9 +539,12 @@ final class AlarmClock {
     private func showPanel() {
         panel?.orderOut(nil)
         guard let screen = Notch.screenUnderMouse ?? NSScreen.main else { return }
-        let size = NSSize(width: 480, height: model.challenge == nil ? 210 : 380)
+        // As tall as what's on it (the challenge card is taller), under the menu bar, centred.
+        let host = NSHostingView(rootView: AlarmView(model: model))
+        let size = host.fittingSize // measured first: without sizing options it reports nothing
+        host.sizingOptions = []
         let frame = screen.visibleFrame
-        let panel = NSPanel(contentRect: NSRect(x: frame.midX - size.width / 2, y: frame.maxY - size.height - 40, width: size.width, height: size.height),
+        let panel = NSPanel(contentRect: NSRect(x: frame.midX - size.width / 2, y: frame.maxY - size.height - 30, width: size.width, height: size.height),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         panel.level = .screenSaver
         panel.isOpaque = false
@@ -548,9 +552,17 @@ final class AlarmClock {
         panel.hasShadow = true
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        panel.contentView = NSHostingView(rootView: AlarmView(model: model))
+        panel.contentView = host
         panel.orderFrontRegardless()
         self.panel = panel
+    }
+
+    /// The card after its text changed ("Not quite…"): same top, new height.
+    private func fitPanel() {
+        guard let panel, let view = panel.contentView else { return }
+        view.layoutSubtreeIfNeeded()
+        let size = view.fittingSize
+        panel.setFrame(NSRect(x: panel.frame.midX - size.width / 2, y: panel.frame.maxY - size.height, width: size.width, height: size.height), display: true)
     }
 }
 
@@ -600,6 +612,9 @@ private struct AlarmView: View {
                         .font(.system(size: challenge.kind == .question ? 19 : 16, weight: .semibold, design: challenge.kind == .verse ? .serif : .default))
                         .foregroundStyle(.white)
                         .fixedSize(horizontal: false, vertical: true)
+                    if challenge.kind == .fact, let topic = challenge.source.components(separatedBy: " · ").dropFirst().first {
+                        Text("For " + topic).font(.system(size: 12, weight: .medium)).foregroundStyle(Color.white.opacity(0.5))
+                    }
                     if challenge.kind == .verse {
                         Text(challenge.source).font(.system(size: 12, weight: .medium)).foregroundStyle(Color.white.opacity(0.5))
                     }
@@ -607,7 +622,6 @@ private struct AlarmView: View {
                         Text(feedback + (model.heard.map { " I heard: “\($0)”" } ?? ""))
                             .font(.system(size: 12)).foregroundStyle(Color.orange.opacity(0.9)).lineLimit(2)
                     }
-                    Spacer(minLength: 0)
                     HStack {
                         Text("Hold right ⌥, say it, let go").font(.system(size: 12)).foregroundStyle(Color.white.opacity(0.45))
                         Spacer()
@@ -627,6 +641,7 @@ private struct AlarmView: View {
                 .padding(.horizontal, 16).padding(.vertical, 14)
             }
         }
+        .frame(width: 460)
         .background(Color(white: 0.1), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Color.orange.opacity(pulse ? 0.9 : 0.3), lineWidth: 1.5))
         .padding(10)
@@ -649,5 +664,37 @@ private struct AlarmButton: ButtonStyle {
             }
             .opacity(configuration.isPressed ? 0.75 : 1)
             .contentShape(Capsule())
+    }
+}
+
+// MARK: - Preview
+
+extension AlarmClock {
+    /// `Joe --alarm-preview <file.png> [missed]`: the ringing card with today's challenge, drawn off
+    /// screen, to check it without ringing.
+    static func preview(to file: URL, missed: Bool, done: @escaping () -> Void) {
+        let model = AlarmModel()
+        model.alarm = Alarm(fireAt: Date(), title: "Wake up", kind: .alarm)
+        model.challenge = WakeChallenge.today()
+        if missed { model.feedback = "Read all of it, clearly."; model.heard = "Zimbabwe inflation hit" }
+        model.canSnooze = true
+        let host = NSHostingView(rootView: AlarmView(model: model))
+        let size = host.fittingSize // measured first: without sizing options it reports nothing
+        host.sizingOptions = []
+        let window = NSWindow(contentRect: NSRect(origin: NSPoint(x: -20_000, y: -20_000), size: size),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = host
+        window.orderFrontRegardless()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            MainActor.assumeIsolated {
+                host.layoutSubtreeIfNeeded()
+                if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                    host.cacheDisplay(in: host.bounds, to: rep)
+                    try? rep.representation(using: .png, properties: [:])?.write(to: file)
+                }
+                print("Card \(Int(size.width))×\(Int(size.height)) pt")
+                done()
+            }
+        }
     }
 }

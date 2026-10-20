@@ -241,6 +241,13 @@ enum CommandLineTool {
             }
             NSApplication.shared.run()
             exit(0)
+        case ("--alarm-preview", 2...):
+            MainActor.assumeIsolated {
+                NSApplication.shared.setActivationPolicy(.accessory)
+                AlarmClock.preview(to: URL(fileURLWithPath: args[1]), missed: args.count > 2) { exit(0) }
+            }
+            NSApplication.shared.run()
+            exit(0)
         case ("--challenge", 1...):
             // Joe --challenge [seed] ["what I said"]: a wake-up challenge, and whether that answer passes.
             let seed = args.count > 1 ? Int(args[1]) ?? 0 : 0

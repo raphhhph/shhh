@@ -16,7 +16,7 @@ Joe acting on other apps and services.
 ## Decisions
 - Sending, deleting, submitting, inviting pause for the user's OK; Joe never reads secrets.
 - Spotify button never disabled; a second click reopens sign-in; port conflicts named.
-- Guided walkthroughs (21 Oct 2026): "show me how…", "walk me through…", "step by step" set `AssistantTask.walkthrough`. Claude gives one "Step N" per reply with one [POINT], never clicks; "next", "done", "what now" (`ScreenCapture.isNextStep`) send a fresh screenshot for the next step, and in a walkthrough "next" is never Spotify's next track.
+- Guided walkthroughs (21 Oct 2026): "show me how…", "walk me through…", "step by step" set `AssistantTask.walkthrough`. Claude gives one "Step N" per reply with one [POINT], never clicks; "next", "done", "what now" (`ScreenCapture.isNextStep`) send a fresh screenshot for the next step, and in a walkthrough "next" is never Spotify's next track.  Finished walkthroughs are saved as notes in the vault's `Walkthroughs/` (`Assistant.walkthroughNotes`) and read first next time.
 
 ## Known issues / to-do
 - Spotify for other users: add their emails in the Spotify developer dashboard (dev mode, 25 users) or apply for extended quota.

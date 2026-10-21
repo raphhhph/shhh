@@ -271,6 +271,18 @@ final class Assistant {
         session = Session(executable: executable, model: modelOverride, effort: effortOverride, tutor: tutorPrompt, onEvent: { [weak self] in self?.relay($0) })
     }
 
+    /// Where finished walkthroughs are kept, so the next "show me how to submit on ManageBac" starts
+    /// from the steps that worked last time.
+    nonisolated static var walkthroughNotes: String {
+        guard let folder = NoteSaver.root?.appendingPathComponent("Walkthroughs", isDirectory: true) else { return "" }
+        return """
+             Finished walkthroughs are saved in \(Daybook.relative(folder))/: after the last step, write the steps \
+            that worked there as "<Task>.md" (the site or app, then numbered steps naming each button as it's \
+            labelled), without asking. When a walkthrough starts, look there first; if one fits, follow it, \
+            still checking each step against the screen, and fix the note if something has changed.
+            """
+    }
+
     // MARK: Hard jobs
 
     /// The whiteboard's tutor: a short quiz-only prompt instead of Joe's, no connectors or browser,
@@ -1122,7 +1134,7 @@ final class Session {
         don't click. They say "next" when they've done it, and you get a fresh screenshot. If the right app or \
         page isn't open, the first step is getting there (the site to open, or open it in Bash with open \
         "<url>"). Say plainly when a step submits, sends or deletes something ("This hands it in"). If the \
-        screen shows the step went wrong, say what to fix. When it's done, say so in one line, without a tag.\(spoken)
+        screen shows the step went wrong, say what to fix. When it's done, say so in one line, without a tag.\(Assistant.walkthroughNotes)\(spoken)
 
         You can use:
         - The web (WebSearch, WebFetch).

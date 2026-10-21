@@ -54,11 +54,19 @@ enum Daybook {
             .map { $0.dropFirst(5).trimmingCharacters(in: .whitespaces) }
     }
 
-    static var isCurrent: Bool { date == day(Date()) }
+    /// Today's or, before 04:00, still yesterday's: a student up past midnight is still in
+    /// yesterday's day, so its Daybook stays until the morning instead of a new one at 00:30.
+    static var isCurrent: Bool { date == day(Date()) || date == bookDay }
+
+    /// The day the Daybook belongs to now: yesterday until 04:00.
+    private static var bookDay: String { day(Date().addingTimeInterval(-4 * 3600)) }
+
+    /// Between midnight and 04:00, when no new Daybook is started.
+    static var isLateNight: Bool { Calendar.current.component(.hour, from: Date()) < 4 }
 
     /// A Daybook from an earlier day goes to History, so today's starts fresh.
     static func archiveIfOld() {
-        guard let url, let history, let date, date < day(Date()) else { return }
+        guard let url, let history, let date, date < bookDay else { return }
         let manager = FileManager.default
         try? manager.createDirectory(at: history, withIntermediateDirectories: true)
         var target = history.appendingPathComponent("\(date).md")
@@ -242,7 +250,7 @@ enum Daybook {
     /// Builds today's Daybook without Claude when there's none yet, and says whether it did.
     @discardableResult
     static func buildLocally(_ now: Date = Date()) -> Bool {
-        guard let url, !isCurrent, let text = localText(now) else { return false }
+        guard let url, !isCurrent, !isLateNight, let text = localText(now) else { return false }
         archiveIfOld()
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         return (try? text.write(to: url, atomically: true, encoding: .utf8)) != nil
@@ -445,7 +453,7 @@ enum Daybook {
 
     /// A task carried to another day: "carried N×" goes up by one, and from three days it asks for a decision.
     private static func carriedAgain(_ line: String) -> String {
-        var text = line
+        var text = line.replacingOccurrences(of: " · new", with: "")
         var times = 1
         if let range = text.range(of: #"carried (\d+)×"#, options: .regularExpression) {
             times = (Int(text[range].filter(\.isNumber)) ?? 0) + 1
@@ -559,7 +567,7 @@ enum Daybook {
                 """
         }
         if !isCurrent { buildLocally() }
-        if !isCurrent {
+        if !isCurrent, !isLateNight {
             text += "\nThere's no Daybook for today yet: build it before you answer anything about their day.\n" + buildRules
         } else if let finish = finishRules {
             text += "\n" + finish

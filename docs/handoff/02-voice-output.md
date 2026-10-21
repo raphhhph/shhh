@@ -28,7 +28,7 @@ Text to speech: Alba (English), the Mandarin voice, the Mac's voices for other s
 ## Known issues / to-do
 - The Oct 2026 audit changes (maths speech, queue order, warm-up, clips, first comma, speed) are written but were made off the Mac: build and listen before trusting them. Test lines: `Joe --say "Find dy/dx when y = 3x² + 2x − 5."`, `Joe --speech-parts "The speed is 3.2 × 10⁻⁴ m/s² after 5 s."`, then ask Joe something after 10 idle minutes and check the first sentence isn't late.
 - How Alba says letters (HL, SL, IA, TOK, CO₂) is untested by ear; add spellings to `spokenMaths` if she gets them wrong.
-- The Mandarin path doesn't get `spokenMaths` (Chinese numbers are handled by `chineseNumbers`).
+- A Chinese sentence gets `spokenMaths` only when it has maths symbols (`mathsInChinese`), so the maths reaches Alba in English words; otherwise numbers, times and % stay with `chineseNumbers`. Saying the maths in Mandarin (等于, 的平方) is a possible next step.
 - Speaking before the answer exists: done as the acknowledgement; true early speech needs input streaming (see 01).
 - Branch `wip-voice-samples` (an uncompiled `--voice-samples` comparison) predates choosing Alba; it can be dropped.
 - Ideas: a per-subject pronunciation list; "read the next paragraph" / pause and resume for long read-alouds.

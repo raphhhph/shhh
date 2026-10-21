@@ -590,10 +590,12 @@ private struct SchoolStep: View {
                                 Button { withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) { toggle(subject) } } label: {
                                     HStack(spacing: 6) {
                                         Image(systemName: picked ? "checkmark" : "plus").font(.system(size: 11, weight: .bold))
-                                        Text(subject).font(.system(size: 13, weight: picked ? .semibold : .regular)).lineLimit(1).minimumScaleFactor(0.85)
+                                        // Two lines for the long names ("Literature & Performance") rather than cut short.
+                                        Text(subject).font(.system(size: 12.5, weight: picked ? .semibold : .regular)).lineLimit(2)
+                                            .minimumScaleFactor(0.9).fixedSize(horizontal: false, vertical: true)
                                         Spacer(minLength: 0)
                                     }
-                                    .padding(.horizontal, 12).frame(height: 36)
+                                    .padding(.horizontal, 12).frame(minHeight: 36)
                                     .background(picked ? Tint.accent.opacity(0.2) : Tint.card, in: RoundedRectangle(cornerRadius: 10))
                                     .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(picked ? Tint.accent : Tint.line))
                                     .foregroundStyle(picked ? Tint.accent : .white)
@@ -940,8 +942,10 @@ private struct ConnectStep: View {
         if let next = CalendarFeed.upcomingDeadlines(1).first {
             lines.append("Next due: \(next.title), \(next.start.formatted(.dateTime.weekday(.wide).day().month()))")
         }
+        // Only when it filled them in: subjects they'd already chosen stay theirs, and listing other
+        // guesses here would disagree with the next page.
         let subjects = CalendarFeed.subjectGuesses()
-        if !subjects.isEmpty {
+        if !subjects.isEmpty, Profile.subjects == subjects.joined(separator: ", ") {
             lines.append("Subjects: \(subjects.joined(separator: ", ")). Check them on the next page")
         }
         return lines
@@ -1147,7 +1151,7 @@ private struct ClaudeStep: View {
                 // so they're one click away here instead of something to discover later.
                 if claude.isReady, !useAPIKey {
                     HStack(spacing: 14) {
-                        Image(systemName: "envelope.fill").font(.system(size: 18)).foregroundStyle(Tint.accent).frame(width: 26)
+                        Image(systemName: "envelope.fill").font(.system(size: 18)).foregroundStyle(Tint.accent).frame(width: 32)
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Your email and Google Calendar").font(.system(size: 14.5, weight: .semibold))
                             Text("Connect Gmail, Google Calendar and Drive on claude.ai, and I can read your school email and draft replies.")
@@ -1296,8 +1300,11 @@ private struct DoneStep: View {
             // What's working now, so nothing is left to discover; anything missing is one place away.
             LazyVGrid(columns: [GridItem(.fixed(300), alignment: .leading), GridItem(.fixed(300), alignment: .leading)], spacing: 8) {
                 ForEach(ready, id: \.0) { title, done in
-                    Label(title, systemImage: done ? "checkmark.circle.fill" : "circle.dashed")
-                        .font(.system(size: 13)).foregroundStyle(done ? Color.green : Tint.soft)
+                    HStack(spacing: 8) {
+                        Image(systemName: done ? "checkmark.circle.fill" : "circle.dashed").frame(width: 18)
+                        Text(title)
+                    }
+                    .font(.system(size: 13)).foregroundStyle(done ? Color.green : Tint.soft)
                 }
             }
             .padding(14)
@@ -1313,8 +1320,13 @@ private struct DoneStep: View {
         }
     }
 
+    /// Icons in a fixed-width column, so each line's text starts in the same place.
     private func tip(_ symbol: String, _ text: String) -> some View {
-        Label(text, systemImage: symbol).font(.system(size: 15)).foregroundStyle(Tint.soft)
+        HStack(spacing: 10) {
+            Image(systemName: symbol).frame(width: 22)
+            Text(text)
+        }
+        .font(.system(size: 15)).foregroundStyle(Tint.soft)
     }
 
     private var ready: [(String, Bool)] {

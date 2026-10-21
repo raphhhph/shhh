@@ -1041,8 +1041,9 @@ final class Session: Engine {
             never open the app or take screenshots. "\(exe)" --whatsapp unread (new messages, by chat), \
             --whatsapp chats (recent chats), --whatsapp read "<chat>" [count], --whatsapp search "<text>". \
             It reads WhatsApp's own database on this Mac, read-only. WeChat has no such access: for WeChat, look.
-            Messages in WhatsApp or WeChat: never click and type around the apps, and don't take a \
-            screenshot first. One step: "\(exe)" --message send whatsapp|wechat "<chat or group name, as it \
+            Messages in WhatsApp, WeChat or iMessage (the Messages app, also for texting a phone number): never \
+            click and type around the apps, and don't take a screenshot first. One step: "\(exe)" --message \
+            send whatsapp|wechat|imessage "<chat or group name, as it \
             appears in the app>" "<text>". The user approves it on a card; then it opens the chat, checks its \
             name on screen and sends. Use --message draft (same arguments) only when they want it typed but not \
             sent. Write the message as they would (their language, short, no sign-off), only what they asked \

@@ -13,19 +13,32 @@ import Vision
 /// be confirmed, nothing is typed and the assistant gets a screenshot to sort it out.
 enum Messaging {
     enum App: String {
-        case whatsapp, wechat
-        var bundleID: String { self == .whatsapp ? "net.whatsapp.WhatsApp" : "com.tencent.xinWeChat" }
-        var name: String { self == .whatsapp ? "WhatsApp" : "WeChat" }
+        case whatsapp, wechat, imessage
+        var bundleID: String {
+            switch self {
+            case .whatsapp: "net.whatsapp.WhatsApp"
+            case .wechat: "com.tencent.xinWeChat"
+            case .imessage: "com.apple.MobileSMS"
+            }
+        }
+        var name: String {
+            switch self {
+            case .whatsapp: "WhatsApp"
+            case .wechat: "WeChat"
+            case .imessage: "Messages"
+            }
+        }
     }
 
     static func run(_ arguments: [String]) async -> String {
         var arguments = arguments
         if arguments.first == "open", arguments.count == 3 { arguments.append("") }
         guard arguments.count >= 4, let app = App(rawValue: arguments[1].lowercased()) else {
-            return "Use: --message send|draft whatsapp|wechat \"<chat>\" \"<text>\""
+            return "Use: --message send|draft whatsapp|wechat|imessage \"<chat>\" \"<text>\""
         }
         let start = Date()
         let chat = arguments[2], text = arguments[3]
+        if app == .imessage { return iMessage(arguments[0], to: chat, text: text) }
         if let problem = await open(app, chat: chat) { return problem }
         if arguments[0] == "open" { return "Opened “\(chat)” in \(app.name) (\(String(format: "%.1f", Date().timeIntervalSince(start))) s)." }
         paste(text)
@@ -35,6 +48,64 @@ enum Messaging {
         if arguments[0] == "draft" { return "Drafted in \(app.name) to “\(chat)”, not sent (\(seconds) s)." }
         press(36) // Return: send
         return "Sent in \(app.name) to “\(chat)” (\(seconds) s)."
+    }
+
+    // MARK: - iMessage
+
+    /// Messages takes AppleScript, so no clicking: the person is found among the people Messages
+    /// knows (named from Contacts), by name, phone number or email, and the text is sent to them.
+    /// Only one clear match is ever sent to; several, or none, come back as a question.
+    private static func iMessage(_ action: String, to chat: String, text: String) -> String {
+        let handle: String
+        if chat.range(of: #"^\+?[\d\s().-]{6,}$|^[^@\s]+@[^@\s]+\.[a-z]{2,}$"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            handle = chat.contains("@") ? chat : chat.replacingOccurrences(of: #"[\s().-]"#, with: "", options: .regularExpression)
+        } else {
+            guard let people = appleScript("""
+                tell application "Messages"
+                    set out to ""
+                    repeat with p in (participants of (1st account whose service type = iMessage))
+                        set out to out & (name of p) & tab & (handle of p) & linefeed
+                    end repeat
+                    return out
+                end tell
+                """) else {
+                return "Messages didn't answer (Joe may need permission to control Messages: System Settings → Privacy & Security → Automation). Nothing was sent."
+            }
+            var found: [(name: String, handle: String)] = []
+            for line in people.split(separator: "\n") {
+                let parts = line.split(separator: "\t", maxSplits: 1).map(String.init)
+                guard parts.count == 2, matches(parts[0], chat) || parts[0].lowercased().hasPrefix(chat.lowercased() + " ") else { continue }
+                if !found.contains(where: { $0.name == parts[0] }) { found.append((parts[0], parts[1])) }
+            }
+            guard let person = found.first else {
+                return "No one called “\(chat)” in Messages. Nothing was sent: use their phone number or email, or the name as Contacts has it."
+            }
+            guard found.count == 1 else {
+                return "Several people match “\(chat)” in Messages: \(found.map(\.name).joined(separator: ", ")). Nothing was sent: use the full name."
+            }
+            handle = person.handle
+        }
+        if action != "send" { // Messages can't take a draft from outside: open the chat instead
+            if let url = URL(string: "imessage://" + (handle.addingPercentEncoding(withAllowedCharacters: .urlUserAllowed) ?? handle)) {
+                NSWorkspace.shared.open(url)
+            }
+            return action == "open" ? "Opened the chat with \(handle) in Messages."
+                : "Opened the chat with \(handle) in Messages. The message isn't typed: Messages can't take a draft."
+        }
+        let quoted = { (s: String) in "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
+        guard appleScript("""
+            tell application "Messages"
+                send \(quoted(text)) to participant \(quoted(handle)) of (1st account whose service type = iMessage)
+            end tell
+            """) != nil else { return "Messages couldn't send to \(handle) (are they on iMessage?). Nothing was sent." }
+        return "Sent in Messages to \(chat == handle ? handle : "\(chat) (\(handle))")."
+    }
+
+    private static func appleScript(_ source: String) -> String? {
+        if !Thread.isMainThread { return DispatchQueue.main.sync { appleScript(source) } }
+        var error: NSDictionary?
+        let result = NSAppleScript(source: source)?.executeAndReturnError(&error)
+        return error == nil ? (result?.stringValue ?? "") : nil
     }
 
     /// Opens the chat and confirms it's the right one. Returns what went wrong, or nil.

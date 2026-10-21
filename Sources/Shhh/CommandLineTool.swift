@@ -209,7 +209,7 @@ enum CommandLineTool {
             print("Plan updated.")
             exit(0)
         case ("--message", 4...):
-            // Joe --message send|draft whatsapp|wechat "<chat>" "<text>", or --message open <app> "<chat>"
+            // Joe --message send|draft whatsapp|wechat|imessage "<chat>" "<text>", or --message open <app> "<chat>"
             run { print(await Messaging.run(Array(args.dropFirst()))) }
         case ("--slides", 3...):
             // Joe --slides inspect <deck.pptx> | apply <deck.pptx> <plan.json>: edits a copy of a deck.

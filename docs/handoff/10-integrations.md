@@ -7,7 +7,7 @@ Joe acting on other apps and services.
 
 ## Files
 - `Spotify.swift`: playback via AppleScript, search via the Web API, account login with PKCE (`Account.login`, local callback on port 8888), liked songs. Commands parsed on the Mac (`Spotify.command(in:)`).
-- `Messaging.swift`, `WhatsAppLog.swift`: WhatsApp/WeChat reading and sending (always with the approval card).
+- `Messaging.swift`, `WhatsAppLog.swift`: WhatsApp/WeChat reading and sending, iMessage sending (always with the approval card). iMessage goes through Messages' AppleScript: the name is matched among Messages' participants (named from Contacts) and sent only on exactly one match; phone numbers and emails go straight through. Messages can't take a draft, so draft/open just opens the chat. Reading iMessage (chat.db, needs Full Disk Access) is not done yet.
 - Gmail, Google Calendar, Drive and others come from the user's **Claude connectors** (claude.ai) through Claude Code; not available in OpenRouter mode.
 - `NoteSaver.swift`, `Notepad.swift`: notes into the Obsidian vault (lecture/meeting/notes folders).
 - `ScreenControl.swift`, `ScreenCapture.swift`, `ScreenContext.swift`, `ScreenPointer.swift`, `FileCommands.swift`, `UndoJournal.swift`, `Workspace.swift` (Vivaldi workspaces): clicking/typing/moving files with undo; blocked apps (password managers, System Settings security panes).

@@ -725,7 +725,9 @@ private struct AlarmButton: ButtonStyle {
             .padding(.horizontal, 18)
             .frame(height: 34)
             .background {
-                if prominent { Capsule().fill(Color.orange) } else { Capsule().strokeBorder(Color.white.opacity(0.2), lineWidth: 1) }
+                // A soft fill rather than an outline: the outlined capsule drew stray vertical ticks at
+                // both ends where its straight sides meet the arcs.
+                Capsule().fill(prominent ? Color.orange : Color.white.opacity(0.12))
             }
             .opacity(configuration.isPressed ? 0.75 : 1)
             .contentShape(Capsule())

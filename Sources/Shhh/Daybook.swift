@@ -315,6 +315,8 @@ enum Daybook {
             "## Today's five",
         ]
         lines += five.isEmpty ? ["Nothing carried over and nothing due today or tomorrow."] : five
+        let plan = studyPlan(deadlines, now)
+        if !plan.isEmpty { lines += ["", "## Plan"] + plan }
         lines += ["", "## Classes", classTable(on: now), "", "## Rest of today"] + rest
         lines += ["", "## Deadlines"] + due
         lines += ["", "## Needs you", pendingMark]
@@ -354,6 +356,55 @@ enum Daybook {
         var at = end
         while at > start + 1, lines[at - 1].trimmingCharacters(in: .whitespaces).isEmpty { at -= 1 }
         lines.insert(line, at: at)
+    }
+
+    /// When to work on what's due: today's free periods, after school and the evening, each given
+    /// to the most pressing deadline of the next two weeks (tests and summatives first on the same
+    /// day), so the student sees a plan, not just a list. Suggestions, written at the morning build.
+    private static func studyPlan(_ deadlines: [CalendarFeed.Item], _ now: Date) -> [String] {
+        let calendar = Calendar.current
+        guard let fortnight = calendar.date(byAdding: .day, value: 14, to: now) else { return [] }
+        let weighty = #"\b(test|exam|summative|paper|ia|assessment|essay|quiz)\b"#
+        let work = deadlines.filter { $0.start > now && $0.start < fortnight }.sorted { a, b in
+            let dayA = calendar.startOfDay(for: a.start), dayB = calendar.startOfDay(for: b.start)
+            if dayA != dayB { return dayA < dayB }
+            return (a.title.range(of: weighty, options: [.regularExpression, .caseInsensitive]) != nil)
+                && (b.title.range(of: weighty, options: [.regularExpression, .caseInsensitive]) == nil)
+        }
+        guard !work.isEmpty else { return [] }
+        func at(_ hour: Int, _ minute: Int = 0) -> Date? { calendar.date(bySettingHour: hour, minute: minute, second: 0, of: now) }
+        var blocks: [(label: String, start: Date, end: Date)] = []
+        let lessons = timeline(now).filter { $0.kind == .lesson }
+        if let timetable, let entry = schoolDay(on: now, in: timetable) {
+            let grid = timetable.grids[entry[1].text + entry[2].text] ?? []
+            for row in timetable.rows where row.kind == "class" {
+                guard let index = row.idx, index < grid.count, grid[index] == "—",
+                      let start = time(row.start, on: now), let end = time(row.end, on: now) else { continue }
+                blocks.append(("free P\(row.p ?? "?")", start, end))
+            }
+            if let last = lessons.map({ $0.end ?? $0.start }).max() {
+                let start = last.addingTimeInterval(30 * 60)
+                blocks.append(("after school", start, start.addingTimeInterval(90 * 60)))
+            }
+        } else if let start = at(10), let end = at(12) {
+            blocks.append(("morning", start, end))
+        }
+        if let start = at(19, 30), let end = at(21) { blocks.append(("evening", start, end)) }
+        // Two blocks for the most pressing one, then one each.
+        let order = [work[0]] + work
+        return blocks.filter { $0.end > now }.enumerated().compactMap { index, block in
+            guard index < order.count, order[index].start > block.end else { return nil }
+            let item = order[index]
+            return "- \(hhmm(block.start))–\(hhmm(block.end)) (\(block.label)): \(item.title)"
+                + (item.subject.map { " · \($0)" } ?? "") + " — due \(when(item, now))"
+        }
+    }
+
+    /// "08:30" on a day.
+    private static func time(_ text: String, on date: Date) -> Date? {
+        let parts = text.split(separator: ":").compactMap { Int($0) }
+        guard parts.count == 2 else { return nil }
+        return Calendar.current.date(bySettingHour: parts[0], minute: parts[1], second: 0, of: date)
     }
 
     /// What's left for Claude in a locally built Daybook, or nil when it's all done.

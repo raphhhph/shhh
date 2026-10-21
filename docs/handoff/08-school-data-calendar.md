@@ -26,6 +26,8 @@ Where Joe's knowledge of the student's day comes from and how it's shown: the Da
 
 - **New ManageBac tasks during the day**: after each link refresh (every 30 min), deadlines whose title wasn't there before go into today's Daybook (`Daybook.addNewDeadlines`): under Deadlines, and as a task marked "new" in Today's five when due within two days and there's room, else Backlog.
 
+- **Plan** section in the local Daybook (`studyPlan`): today's free periods (a "—" in the grid), 90 minutes starting 30 minutes after the last class, and 19:30–21:00 (10:00–12:00 instead on a day off), each given to the most pressing deadline of the next two weeks. The soonest gets two blocks; tests and summatives come first on the same day. These are suggestions, not calendar events, so the timeline doesn't show them.
+
 ## Test
 - `Joe --daybook-preview` prints the Daybook Joe would build now (writes nothing). `Joe --daybook` prints the instructions (and builds today's if missing).
 - `Joe --calendar-link parse <file.ics>` prints parsed items, repeats expanded.

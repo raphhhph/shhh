@@ -66,7 +66,19 @@ final class StudyBoard: NSObject, NSWindowDelegate {
             "English A Language and Literature": ["english", "lang and lit", "lang & lit"],
             "Chinese B": ["chinese", "mandarin", "中文"],
             "Theory of Knowledge": ["tok", "theory of knowledge"],
+            "Mathematics AA": ["math", "maths", "calculus", "statistic", "probability", "integra", "derivative", "vector"],
+            "Physics": ["physic", "kinematic", "momentum", "circuit"],
+            "Chemistry": ["chem", "organic", "titration", "enthalpy"],
+            "Biology": ["bio", "cell", "enzyme", "genetic"],
+            "History": ["histor", "cold war", "authoritarian"],
+            "Psychology": ["psych"],
+            "English B": ["english"],
+            "Spanish": ["spanish", "español", "espanol"],
         ]
+        // Their own name for the subject ("quiz me on Geography") wins, with or without a map.
+        if let named = subjects.first(where: {
+            lower.range(of: #"\b"# + NSRegularExpression.escapedPattern(for: $0.lowercased()) + #"\b"#, options: .regularExpression) != nil
+        }) { return named }
         for subject in subjects {
             guard let pack = StudyBuddy.pack(for: subject), let words = keys[pack] else { continue }
             if words.contains(where: { lower.contains($0) }) { return subject }

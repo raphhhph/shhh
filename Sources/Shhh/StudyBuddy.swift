@@ -64,6 +64,14 @@ enum StudyBuddy {
             ("English A Language and Literature", ["english a", "lang and lit", "lang & lit", "l&l", "language and literature"]),
             ("Chinese B", ["chinese b", "mandarin b", "中文"]),
             ("Theory of Knowledge", ["tok", "theory of knowledge"]),
+            ("Mathematics AA", ["math aa", "maths aa", "math a&a", "maths a&a", "analysis and approaches"]),
+            ("Physics", ["physic"]),
+            ("Chemistry", ["chem"]),
+            ("Biology", ["bio"]),
+            ("History", ["histor"]),
+            ("Psychology", ["psych"]),
+            ("English B", ["english b", "eng b"]),
+            ("Spanish", ["spanish", "español", "espanol"]),
         ]
         return keys.first { entry in entry.1.contains { words.contains($0) } }?.0
     }

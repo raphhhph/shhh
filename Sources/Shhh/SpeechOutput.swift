@@ -486,6 +486,22 @@ final class SpeechOutput {
         while let range = text.range(of: #"[⁰¹²³⁴⁵⁶⁷⁸⁹⁻]+"#, options: .regularExpression) {
             text.replaceSubrange(range, with: "^(" + text[range].map { superscripts[$0] ?? "" }.joined() + ")")
         }
+        // Formulas symbol by symbol, as said in class: "6CO₂" → "6 C O 2", "C₆H₁₂O₆" → "C 6 H 12 O 6".
+        if let formulas = try? NSRegularExpression(pattern: #"\b([0-9]*)((?:[A-Z][a-z]?[₀-₉]*)+)(?![A-Za-z])"#),
+           let element = try? NSRegularExpression(pattern: #"([A-Z][a-z]?)([₀-₉]*)"#) {
+            for match in formulas.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
+                guard let whole = Range(match.range, in: text), let body = Range(match.range(at: 2), in: text),
+                      text[body].range(of: "[₀-₉]", options: .regularExpression) != nil,
+                      let count = Range(match.range(at: 1), in: text) else { continue }
+                let symbols = String(text[body])
+                let parts = element.matches(in: symbols, range: NSRange(symbols.startIndex..., in: symbols)).compactMap { part -> String? in
+                    guard let symbol = Range(part.range(at: 1), in: symbols), let digits = Range(part.range(at: 2), in: symbols) else { return nil }
+                    let number = symbols[digits].unicodeScalars.map { String($0.value - 0x2080) }.joined()
+                    return number.isEmpty ? String(symbols[symbol]) : String(symbols[symbol]) + " " + number
+                }
+                text.replaceSubrange(whole, with: ([String(text[count])] + parts).filter { !$0.isEmpty }.joined(separator: " "))
+            }
+        }
         while let range = text.range(of: #"[₀₁₂₃₄₅₆₇₈₉]+"#, options: .regularExpression) {
             let digits = text[range].unicodeScalars.map { String($0.value - 0x2080) }.joined()
             text.replaceSubrange(range, with: " \(digits) ")

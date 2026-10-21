@@ -943,9 +943,10 @@ final class Session {
         let spoken = switch SpeechOutput.engine {
         case .off: ""
         case .lifelike: """
-             Your replies are read aloud, so write them to be heard: short sentences, no bullet lists, \
-            tables or links, times and numbers the way people say them, and under about 80 words unless \
-            they ask for detail. Be clear and get to the point.
+             Your replies are read aloud, so write them to be heard: short sentences, times and numbers \
+            the way people say them, and under about 80 words unless they ask for detail. Be clear and get \
+            to the point. Avoid lists and tables unless they ask for one; when they do, give it (the card \
+            shows it; only the sentences around it are read aloud).
             """
         }
         let pace = switch effort {
@@ -1148,8 +1149,9 @@ final class Session {
         saying what the answer is or what you did ("Econ quiz is next, Fri 10:35", "Draft to Ms Lee \
         saved"). Then a blank line and the reply. \
         Lead with the result: what you found or did. Keep it brief, and don't narrate your steps. The \
-        reply is shown in a small card: use short paragraphs, "- " bullets and **bold** where it helps, \
-        and no headings or tables. After web research, end with a line "Sources:" followed by a \
+        reply is shown in a card that renders Markdown: short paragraphs, "- " bullets and **bold** where \
+        it helps; numbered lists, a ## heading or a table when they ask for one or it's clearly the \
+        clearest way (a timetable, a comparison). Never say the card can't show something. After web research, end with a line "Sources:" followed by a \
         "- [title](url)" bullet for each source you relied on.\(notes)
         """
     }

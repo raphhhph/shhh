@@ -331,6 +331,10 @@ final class SpeechOutput {
         if let sources = text.range(of: #"(^|\n)\s*\**Sources:?\**"#, options: .regularExpression) {
             text = String(text[..<sources.lowerBound])
         }
+        // Tables and code are for reading: not said aloud.
+        text = text.replacingOccurrences(of: #"(?m)^\s*\|.*\|\s*$"#, with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"(?s)```.*?```"#, with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"(?m)^#{1,6}\s*"#, with: "", options: .regularExpression)
         let replacements: [(String, String)] = [
             (#"\[([^\]]+)\]\([^)]*\)"#, "$1"),         // [title](url) → title
             (#"https?://\S+"#, ""),                    // bare links

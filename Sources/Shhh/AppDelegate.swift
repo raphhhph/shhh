@@ -1618,7 +1618,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 panel.showProcessing()
                 text = await PromptPolish.polish(said)
             } else {
-                text = style.apply(text)
+                // "new line", "new paragraph", "new bullet" said out loud become the real thing.
+                text = SpokenCommands.apply(style.apply(text), capitalize: style != .veryCasual)
             }
             guard !text.isEmpty else { return }
             lastTranscript = text

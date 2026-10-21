@@ -23,12 +23,14 @@ Everything from a key press to text: hotkeys, double-tap lock, "Hey Joe" hands-f
 - Spoken alarm commands, study, pen and Spotify are handled on the Mac without Claude (fast, free).
 
 - **IB words are built in** (`Vocabulary.builtInSwaps`, `builtInTerms`): ManageBac by sound, and exact swaps for TOK, CAS, IA, EE, HL/SL, DP1/DP2, MYP, ATL, ESS, Math AA/AI. Applied after the user's own dictionary, and an exact swap the user wrote for the same words wins. Off with the European languages ("cas", "ee" are ordinary words there). Fuzzy matching is kept to ManageBac on purpose: "Turnitin" by sound swallowed "turning in".
+- **Spoken layout in dictation** (`SpokenCommands.swift`): "new line", "new paragraph", "new bullet" (or "next …") become a line break, a blank line, or "- ". Punctuation before the words stays and punctuation after them goes. The next letter is capitalised unless the style is Very casual. Only for dictation and the notepad, not for asks or "make it a prompt". There's no setting: it's always on, like the IB words. A sentence that really says "a new line of …" gets broken, which is accepted for now.
 - Live words go through the dictionary too, so the caption already reads "ManageBac", like the final text.
 
 ## Audit (21 Oct 2026) and plan
 Goal: a student talks and gets the right words with nothing to set up.
-- Done: built-in IB words; live words spelled like the final text; the Dictionary page says IB words are built in.
+- Done: built-in IB words; live words spelled like the final text; the Dictionary page says IB words are built in; spoken "new line / new paragraph / new bullet" in dictation (for essays and notes).
 - Dropped: **streaming words to Claude while talking**. Claude Code takes a user message as a whole turn, so sending half a sentence would start an answer to the wrong question. Joe already starts the Claude session the moment right ⌥ goes down, which is the part that saves time.
+- Looked at and skipped: names from the timetable (it holds subjects and rooms, not teachers); names from Contacts (a new permission prompt, which goes against "nothing to set up").
 - Next: add the student's teachers' and classmates' names from the timetable / ManageBac feed to the dictionary automatically (needs `08-school-data-calendar`); measure the ManageBac fix with `--transcribe` on recordings of "ManageBac".
 
 ## Known issues / to-do

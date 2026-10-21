@@ -210,6 +210,12 @@ extension CalendarFeed {
             try? FileManager.default.createDirectory(at: feedCache.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? data.write(to: feedCache)
         }
+        // A task set on ManageBac since the last read goes straight into today's Daybook.
+        if !previous.isEmpty {
+            let known = Set(previous.filter { $0["kind"] == "deadline" }.compactMap { $0["title"] })
+            let added = linkItems().filter { $0.kind == .deadline && !known.contains($0.title) && $0.start > Date() }
+            if !added.isEmpty { Daybook.addNewDeadlines(added) }
+        }
         return problems.isEmpty ? "\(all.count) items" : problems.joined(separator: "; ")
     }
 

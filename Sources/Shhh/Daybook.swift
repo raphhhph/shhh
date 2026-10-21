@@ -323,6 +323,39 @@ enum Daybook {
         return lines.joined(separator: "\n") + "\n"
     }
 
+    /// Deadlines that just appeared on the calendar, into today's Daybook: under Deadlines, and as
+    /// a task (in Today's five when it's due today or tomorrow and there's room, else Backlog).
+    /// Nothing happens before today's Daybook exists: its build picks them up.
+    static func addNewDeadlines(_ items: [CalendarFeed.Item], now: Date = Date()) {
+        guard let url, isCurrent, var text = try? String(contentsOf: url, encoding: .utf8) else { return }
+        let calendar = Calendar.current
+        let soon = calendar.date(byAdding: .day, value: 2, to: calendar.startOfDay(for: now)) ?? now
+        var lines = text.components(separatedBy: "\n")
+        for item in items where !text.contains(item.title) {
+            let subject = item.subject.map { " · \($0)" } ?? ""
+            insert("- \(when(item, now)) — \(item.title)\(subject)", under: "Deadlines", in: &lines)
+            let task = "- [ ] \(item.title) — due \(when(item, now))\(subject) · new"
+            let five = section("Today's five", of: lines.joined(separator: "\n")).filter { $0.hasPrefix("- [") }.count
+            insert(task, under: item.start < soon && five < 5 ? "Today's five" : "Backlog", in: &lines)
+            text = lines.joined(separator: "\n")
+        }
+        try? text.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    /// Adds a line at the end of a `## ` section, replacing a "Nothing …" line there.
+    private static func insert(_ line: String, under heading: String, in lines: inout [String]) {
+        guard let start = lines.firstIndex(where: { $0.hasPrefix("## ") && $0.lowercased().contains(heading.lowercased()) }) else { return }
+        var end = lines[(start + 1)...].firstIndex { $0.hasPrefix("## ") } ?? lines.endIndex
+        if let filler = lines[(start + 1)..<end].firstIndex(where: { $0.hasPrefix("Nothing") }) {
+            lines.remove(at: filler)
+            end -= 1
+        }
+        // After the section's last line, before the blank line that ends it.
+        var at = end
+        while at > start + 1, lines[at - 1].trimmingCharacters(in: .whitespaces).isEmpty { at -= 1 }
+        lines.insert(line, at: at)
+    }
+
     /// What's left for Claude in a locally built Daybook, or nil when it's all done.
     static var finishRules: String? {
         guard let url, let text = try? String(contentsOf: url, encoding: .utf8), text.contains(pendingMark) else { return nil }

@@ -24,6 +24,8 @@ Where Joe's knowledge of the student's day comes from and how it's shown: the Da
 
 - **Holidays**: `CalendarFeed.holidays` holds the days covered by whole-day events on the links or calendar.json named a holiday, break, vacation, half term, recess, National Day and the like. `Daybook.schoolDay(on:in:)` treats them as no school, so classes, the Daybook and "tomorrow" skip them for any timetable.
 
+- **New ManageBac tasks during the day**: after each link refresh (every 30 min), deadlines whose title wasn't there before go into today's Daybook (`Daybook.addNewDeadlines`): under Deadlines, and as a task marked "new" in Today's five when due within two days and there's room, else Backlog.
+
 ## Test
 - `Joe --daybook-preview` prints the Daybook Joe would build now (writes nothing). `Joe --daybook` prints the instructions (and builds today's if missing).
 - `Joe --calendar-link parse <file.ics>` prints parsed items, repeats expanded.
@@ -32,7 +34,7 @@ Where Joe's knowledge of the student's day comes from and how it's shown: the Da
 ## Known issues / to-do
 - Not yet compiled on a Mac when written (the cloud box has no Swift): build, then check `--daybook-preview` against a real day.
 - The ManageBac feed's real DESCRIPTION format is unverified: if it names the class (for example "Class: Economics HL"), read that directly in `subject(of:)`.
-- The evening check still runs through Claude (Routines.md); it could start from `CalendarFeed` deadlines added since the morning.
+- The evening check still runs through Claude (Routines.md). New tasks now reach the Daybook on their own, so the routine could drop that part.
 - Monthly "second Tuesday" style repeats only show their first date.
 - Onboarding (`claude/onboarding-set-up-once`) prefills subjects from ManageBac titles with its own `subjectGuesses()`; once both branches are merged it can use `linkItems().compactMap(\.subject)`.
 - No week/day toggle on the calendar; no drag to create events (UI thread).

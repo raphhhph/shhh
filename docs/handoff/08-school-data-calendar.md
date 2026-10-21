@@ -20,14 +20,21 @@ Where Joe's knowledge of the student's day comes from and how it's shown: the Da
 - Calendar links: a link that fails this time keeps its last items (each saved item has `source`); an HTTP error says the link may have been reset. Repeating events (RRULE: daily, weekly with BYDAY, monthly, yearly; INTERVAL, COUNT, UNTIL, EXDATE, moved occurrences) are expanded for 90 days, so weekly Google events show every week. TZID times are converted to UTC; cancelled events are left out. On Google links, titles with test, quiz, exam, due, summative or formative count as deadlines (that check was dead code before).
 - Deadline subject: matched against the timetable's class names (full name, initials such as BM or TOK, short forms such as Econ or Math, or a distinctive first word), using the title, the event's notes (DESCRIPTION) and CATEGORIES. Due soon and the calendar's detail card show it.
 
+- **Timetable from a photo or PDF** (for new students with no timetable.json): `Daybook.importTimetable(from:dayToday:) async -> String`. Claude (Sonnet, Read tool only) returns periods and days as JSON; `timetableJSON` turns that into timetable.json with dates for the next 183 days. A weekly timetable maps weekdays; a rotation (Day 1–N) moves on one day per weekday from `dayToday`, or Day 1 today. An earlier timetable goes to the Trash. Onboarding calls it from the School step. Weekly and cycle-less timetables have no "Day N · Cycle X" label.
+
+- **Holidays**: `CalendarFeed.holidays` holds the days covered by whole-day events on the links or calendar.json named a holiday, break, vacation, half term, recess, National Day and the like. `Daybook.schoolDay(on:in:)` treats them as no school, so classes, the Daybook and "tomorrow" skip them for any timetable.
+
+- **New ManageBac tasks during the day**: after each link refresh (every 30 min), deadlines whose title wasn't there before go into today's Daybook (`Daybook.addNewDeadlines`): under Deadlines, and as a task marked "new" in Today's five when due within two days and there's room, else Backlog.
+
 ## Test
 - `Joe --daybook-preview` prints the Daybook Joe would build now (writes nothing). `Joe --daybook` prints the instructions (and builds today's if missing).
 - `Joe --calendar-link parse <file.ics>` prints parsed items, repeats expanded.
+- `Joe --timetable-import <photo or pdf> ["Day 3"]` reads a timetable and saves timetable.json (the old one goes to the Trash).
 
 ## Known issues / to-do
 - Not yet compiled on a Mac when written (the cloud box has no Swift): build, then check `--daybook-preview` against a real day.
 - The ManageBac feed's real DESCRIPTION format is unverified: if it names the class (for example "Class: Economics HL"), read that directly in `subject(of:)`.
-- The evening check still runs through Claude (Routines.md); it could start from `CalendarFeed` deadlines added since the morning.
+- The evening check still runs through Claude (Routines.md). New tasks now reach the Daybook on their own, so the routine could drop that part.
 - Monthly "second Tuesday" style repeats only show their first date.
 - Onboarding (`claude/onboarding-set-up-once`) prefills subjects from ManageBac titles with its own `subjectGuesses()`; once both branches are merged it can use `linkItems().compactMap(\.subject)`.
 - No week/day toggle on the calendar; no drag to create events (UI thread).

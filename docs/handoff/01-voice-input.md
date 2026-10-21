@@ -15,7 +15,7 @@ Everything from a key press to text: hotkeys, double-tap lock, "Hey Joe" hands-f
 
 ## How it works (decisions)
 - Speech models run on the **GPU** (`.cpuAndGPU`), not the Neural Engine: after each new build macOS recompiled ANE models for minutes and the keys were dead. Parakeet on the GPU costs ~1.3 GB, so with **English + Chinese** on, **SenseVoice hears everything** once loaded and **Parakeet is unloaded** (SenseVoice was about as accurate on English in tests). Parakeet only covers the first ~10 s after launch. English-only users keep Parakeet.
-- SenseVoice input gets **0.5 s of silence after the speech**, then is padded to **5-second blocks**. Without the half second, speech that ran to the very end lost its last word: "tonight" became "To" in the nightly test (21 Oct). The blocks are there because the GPU prepares each new length once (~1 s). Audio over 100 s goes in 90 s pieces.
+- SenseVoice input gets **0.5 s of silence after the speech**, then is padded to **5-second blocks**. This was added for "tonight" coming out as "To" in the nightly test, but it didn't fix that (final nightly ba9e373, 21 Oct). So it's probably SenseVoice mishearing the `say` voice rather than the end being clipped. The padding is harmless, so it stays. The blocks are there because the GPU prepares each new length once (~1 s). Audio over 100 s goes in 90 s pieces.
 - While Chinese is still loading, a request waits for it (up to 25 s) rather than Parakeet turning Chinese into made-up English. The transcription timeout is 40 s + length.
 - **Parakeet is freed only when nothing runs on it** (`parakeetRunning`). With English + Chinese, `loadChinese` used to call `parakeet.cleanup()` while a Parakeet transcription (the warm-up, live words or an early press) was awaiting on the same actor. That freed GPU buffers mid-prediction and aborted Joe about 6 s after launch (SIGABRT, an MTLReportFailure in MPSGraphTensorData on CoreML's DefaultAsyncPredictionQueue, no Joe frames; reports from 21 and 22 Oct). It now sets `manager = nil` first, waits up to 30 s for running transcriptions to finish, and only then cleans up.
 - A speech timeout reloads the model **in the background**; the keys keep working (`reloadSpeechModel`).
@@ -42,8 +42,12 @@ Goal: a student talks and gets the right words with nothing to set up.
 - Looked at and skipped: names from the timetable (it holds subjects and rooms, not teachers); names from Contacts (a new permission prompt, which goes against "nothing to set up").
 - Next: add the student's teachers' and classmates' names from the timetable / ManageBac feed to the dictionary automatically (needs `08-school-data-calendar`); measure the ManageBac fix with `--transcribe` on recordings of "ManageBac".
 
+## Morning status (22 Oct, after the overnight rounds)
+- Final nightly ba9e373 (all of PR #2): 5 clean launches with no new crash reports, so the Parakeet cleanup fix held. `--dictation-test`: 25.3% word errors heard, 2.3% after Joe's fixes, line breaks 10 of 10.
+- Still wrong: "essay" heard as "SA" (line 1), and "tonight" heard as "To" (line 4). Both are SenseVoice on a machine voice. Next, try them with a real voice, and compare the encoder on `.cpuOnly` against the GPU for accuracy (stutters and dropped words).
+- Nobody has spoken into it yet. Raph should test dictation by voice: IB words, "new paragraph", "new bullet", "scratch that".
+
 ## Known issues / to-do
-- Commits after 240d3ec (SpokenCommands) have not been compiled yet: Raph's Mac disk was full on 21 Oct night. The Overnight Joe builds thread is the only Mac builder.
 - Built-in IB words built fine (240d3ec) but are not tested by speaking yet (written in a cloud thread). Check on the Mac: `swift build -c release`, then Dashboard → Dictionary → Try it with "check manage back for my tok and cas deadlines, hl math ai".
 - Live words haven't been tested by speaking (no mic access for the agent).
 - Option: let users pick Parakeet for English even with Chinese on (accuracy vs 1.2 GB).

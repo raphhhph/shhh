@@ -120,8 +120,7 @@ enum Daybook {
 
     /// "Day 9 · Cycle B: P1 08:30 Economics HL (D304), …" for a school day, or nil.
     private static func classes(on date: Date, in timetable: Timetable) -> String? {
-        let iso = day(date)
-        guard let entry = timetable.days.first(where: { $0.first?.text == iso }), entry.count >= 3 else { return nil }
+        guard let entry = schoolDay(on: date, in: timetable) else { return nil }
         let rotation = entry[1].text, cycle = entry[2].text
         let grid = timetable.grids[rotation + cycle] ?? []
         let periods = timetable.rows.compactMap { row -> String? in
@@ -163,7 +162,7 @@ enum Daybook {
             return Calendar.current.date(bySettingHour: parts[0], minute: parts[1], second: 0, of: date)
         }
         var slots: [Slot] = []
-        if let timetable, let entry = timetable.days.first(where: { $0.first?.text == day(date) }), entry.count >= 3 {
+        if let timetable, let entry = schoolDay(on: date, in: timetable) {
             let grid = timetable.grids[entry[1].text + entry[2].text] ?? []
             for row in timetable.rows {
                 guard let start = at(row.start) else { continue }
@@ -200,10 +199,19 @@ enum Daybook {
         return Array(Set(names.filter { !$0.isEmpty && $0.lowercased() != "advisory" })).sorted()
     }
 
+    /// A day's timetable entry (date, rotation day, cycle), or nil when there's no school: not in
+    /// the timetable, or a holiday on their school calendar (see `CalendarFeed.holidays`).
+    private static func schoolDay(on date: Date, in timetable: Timetable) -> [Timetable.Value]? {
+        let iso = day(date)
+        guard !CalendarFeed.holidays.contains(iso),
+              let entry = timetable.days.first(where: { $0.first?.text == iso }), entry.count >= 3 else { return nil }
+        return entry
+    }
+
     /// Whether there's school on a day (in the saved timetable).
     static func isSchoolDay(_ date: Date) -> Bool {
         guard let timetable else { return !Calendar.current.isDateInWeekend(date) }
-        return timetable.days.contains { $0.first?.text == day(date) }
+        return schoolDay(on: date, in: timetable) != nil
     }
 
     /// Tomorrow's classes, for the night shutdown and "what do I have tomorrow".
@@ -384,7 +392,7 @@ enum Daybook {
 
     /// The Classes table: Period, Time, Class, Room.
     private static func classTable(on date: Date) -> String {
-        guard let timetable, let entry = timetable.days.first(where: { $0.first?.text == day(date) }), entry.count >= 3 else {
+        guard let timetable, let entry = schoolDay(on: date, in: timetable) else {
             return "No school today."
         }
         let grid = timetable.grids[entry[1].text + entry[2].text] ?? []

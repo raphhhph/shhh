@@ -387,6 +387,37 @@ extension CalendarFeed {
     }
 }
 
+// MARK: - Holidays
+
+extension CalendarFeed {
+    /// Days off on their school calendar ("2026-10-01"): whole-day events from the calendar links
+    /// or calendar.json named a holiday, break, vacation and the like, every day they cover. So an
+    /// imported timetable, which repeats every week, has no classes on them. Read again when the
+    /// saved items change.
+    static var holidays: Set<String> {
+        let stamp = [linksReadAt, syncedAt].compactMap { $0 }.max() ?? .distantPast
+        if let cachedHolidays, cachedHolidays.stamp == stamp { return cachedHolidays.days }
+        let name = #"holiday|vacation|no school|school closed|half[ -]term|recess|\bbreak\b|golden week|national day|mid-autumn|spring festival|lunar new year|day off"#
+        let calendar = Calendar.current
+        var days = Set<String>()
+        for item in linkItems() + cached() where item.allDay && item.kind == .event
+            && item.title.range(of: name, options: [.regularExpression, .caseInsensitive]) != nil {
+            // A whole-day event's end is the day after its last day.
+            let last = item.end.map { $0.addingTimeInterval(-1) } ?? item.start
+            var day = calendar.startOfDay(for: item.start)
+            while day <= last, days.count < 1000 {
+                days.insert(day.formatted(.localDay))
+                guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+                day = next
+            }
+        }
+        cachedHolidays = (stamp, days)
+        return days
+    }
+
+    private static var cachedHolidays: (stamp: Date, days: Set<String>)?
+}
+
 // MARK: - Which class a deadline is for
 
 extension CalendarFeed {

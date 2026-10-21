@@ -333,6 +333,13 @@ enum CommandLineTool {
             print("\(challenge.kind.rawValue) · \(challenge.source)\n\(challenge.prompt)\nanswers: \(challenge.answers)")
             if args.count > 2 { print(challenge.check(args[2]) ? "PASS" : "FAIL") }
             exit(0)
+        case ("--routines", 1):
+            // Joe --routines: the routines in Routines.md, after the missing defaults are added.
+            Daybook.addDefaultRoutines()
+            print(Daybook.routinesURL?.path ?? "No notes folder set.")
+            for routine in Daybook.routines { print("· " + routine) }
+            print("Wake-up streak: \(UserDefaults.standard.integer(forKey: "wakeStreak"))")
+            exit(0)
         case ("--speech-parts", 2):
             // Joe --speech-parts "<text>": which voice says which part.
             for part in SpeechOutput.hasHan(args[1]) ? SpeechOutput.chineseParts(args[1]) : [args[1]] {

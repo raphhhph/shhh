@@ -11,6 +11,9 @@ Alarms, timers and reminders, the wake-up challenge, routines (spoken phrases th
 - `ReminderMirror.swift` (alarms copied to a "Joe" Reminders list for the iPhone; "Ask Joe" list = PhoneRemote), Routines in the vault (`Brain/Daybook/Routines.md`).
 - `Daybook.addDefaultRoutines()`: writes Evening check, Night shutdown and Study session into Routines.md when missing (at launch, when the notes folder is chosen, and before each automation runs). Each default is added once; one the student deletes stays deleted (`defaultRoutinesAdded` in UserDefaults).
 
+## Testing
+- `Joe --challenge [seed] ["answer"]`, `Joe --alarm-check "<request>"` (sets nothing), `Joe --alarm-preview <file.png>`, `Joe --routines` (lists routines after adding missing defaults, and the wake-up streak). Don't set real alarms that would ring at night.
+
 ## Decisions
 - Challenge applies to alarms between 4:00 and 11:00 and to any alarm with "wake" in its title. No Stop button; one snooze; rings up to 20 min.
 - A wake-up alarm **can't be cancelled in its last hour** (a spoken "cancel my alarm" at 7:27 deleted the 7:30 one). Spoken alarm commands are logged in History.

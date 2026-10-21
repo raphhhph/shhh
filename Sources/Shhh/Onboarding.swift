@@ -793,9 +793,9 @@ private struct ModelsStep: View {
                 case .notDownloaded: Text("\(Int(item.megabytes)) MB").font(.system(size: 12)).foregroundStyle(Tint.soft)
                 case .downloading(let fraction):
                     ProgressView(value: fraction).tint(isStalled(item) ? .orange : Tint.accent).frame(maxWidth: 380)
-                    // A hung download can't be restarted from here; a relaunch clears it (the crash guard) and
-                    // the welcome reopens on this page.
-                    Text(isStalled(item) ? "Stuck at \(Int(fraction * 100))%. Check your internet. If it still doesn't move, quit and reopen Joe: the download starts over and you'll be back on this page."
+                    // A hung download can't be restarted from here; after a relaunch it resumes (FluidAudio's
+                    // .partial files, kept by ModelGuard) and the welcome reopens on this page.
+                    Text(isStalled(item) ? "Stuck at \(Int(fraction * 100))%. Check your internet. If it still doesn't move, quit and reopen Joe: the download carries on from where it stopped, and you'll be back on this page."
                                          : "\(Int(fraction * 100))% of \(Int(item.megabytes)) MB")
                         .font(.system(size: 11.5)).foregroundStyle(isStalled(item) ? .orange : Tint.soft)
                 case .ready: Label("Ready", systemImage: "checkmark.circle.fill").font(.system(size: 12.5)).foregroundStyle(.green)

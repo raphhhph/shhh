@@ -16,6 +16,10 @@ enum BoardMath {
     /// "$5 and $10" stays money (the same rule as board.html).
     private static let pattern = #"\\\(|\\\[|\$\$|(?<![\\$])\$(?=\S)[^$\n]+?(?<=\S)\$(?!\d)"#
 
+    /// Each typeset text's last height, so a card scrolled away and back (the board is lazy) comes
+    /// back at its size instead of growing from one line.
+    static var heights: [String: CGFloat] = [:]
+
     static func hasMath(_ text: String) -> Bool {
         text.range(of: pattern, options: .regularExpression) != nil
     }
@@ -42,8 +46,10 @@ enum BoardMath {
             replace(#"\\sqrt\[([^\]]*)\]\{([^{}]*)\}"#, " the $1th root of $2 ")
             replace(#"\\sqrt\{([^{}]*)\}"#, " the square root of $1 ")
         }
-        replace(#"\^\{?2\}?(?![0-9])"#, " squared ")
-        replace(#"\^\{?3\}?(?![0-9])"#, " cubed ")
+        replace(#"\\int_\{?([^{}\s^]+)\}?\^\{?([^{}\s]+)\}?"#, " the integral from $1 to $2 of ")
+        replace(#"\\(sum|prod)_\{([^{}]*)\}\^\{?([^{}\s]+)\}?"#, " the $1 from $2 to $3 of ")
+        replace(#"\^(\{2\}|2)(?![0-9])"#, " squared ")
+        replace(#"\^(\{3\}|3)(?![0-9])"#, " cubed ")
         replace(#"\^\{([^{}]*)\}"#, " to the power $1 ")
         replace(#"\^(\S)"#, " to the power $1 ")
         replace(#"_\{([^{}]*)\}"#, " sub $1 ")
@@ -94,10 +100,18 @@ private struct MathText: View {
     let text: String
     let size: CGFloat
     let secondary: Bool
-    @State private var height: CGFloat = 0
+    @State private var height: CGFloat
+
+    init(text: String, size: CGFloat, secondary: Bool) {
+        self.text = text
+        self.size = size
+        self.secondary = secondary
+        _height = State(initialValue: BoardMath.heights["\(size)|\(text)"] ?? 0)
+    }
 
     var body: some View {
         MathWeb(text: text, size: size, secondary: secondary, height: $height)
+            .onChange(of: height) { BoardMath.heights["\(size)|\(text)"] = height }
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: max(height, ceil(size * 1.45)))
     }

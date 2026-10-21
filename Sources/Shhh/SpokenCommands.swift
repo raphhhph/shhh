@@ -1,21 +1,28 @@
 import Foundation
 
 /// Layout said out loud while dictating: "new line", "new paragraph", "new bullet", and "scratch
-/// that" to take back the sentence just said. For essays, emails and notes, where the breaks matter. Dictation only: Claude understands the words as they are.
+/// that" to take back the sentence just said. For essays, emails and notes, where the breaks matter.
+/// Dictation only: Claude understands the words as they are.
 enum SpokenCommands {
-    private static let commands: [(words: String, insert: String)] = [
-        ("new paragraph|next paragraph", "\n\n"),
-        ("new line|next line", "\n"),
-        ("(?:new|next) bullet(?: point)?", "\n- "),
+    /// The words, what they become, and what a comma the model put just before them turns into.
+    /// The models put commas around the words ("on Friday, new paragraph, I still…"): a paragraph
+    /// ends its sentence, a bullet needs nothing, and a new line keeps it ("Dear Ms Lee,").
+    private static let commands: [(words: String, insert: String, comma: String)] = [
+        ("new paragraph|next paragraph", "\n\n", "."),
+        ("new line|next line", "\n", ","),
+        ("(?:new|next) bullet(?: point)?", "\n- ", ""),
     ]
 
-    /// The text with the spoken breaks made real. The punctuation the model put before the words
-    /// stays ("Dear Ms Lee, new line" keeps its comma); the one after them goes.
+    /// The text with the spoken breaks made real. Other punctuation before the words stays; the
+    /// punctuation after them goes.
     static func apply(_ text: String, capitalize: Bool) -> String {
-        var text = scratched(text)
-        for (words, insert) in commands {
-            let pattern = #"[ \t]*\b(?:"# + words + #")\b[,.;:!?]?[ \t]*"#
-            text = text.replacingOccurrences(of: pattern, with: insert, options: [.regularExpression, .caseInsensitive])
+        var text = scratched(text, capitalize: capitalize)
+        for (words, insert, comma) in commands {
+            let after = #")\b[,.;:!?]?[ \t]*"#
+            text = text.replacingOccurrences(of: #",[ \t]*\b(?:"# + words + after, with: comma + insert,
+                                             options: [.regularExpression, .caseInsensitive])
+            text = text.replacingOccurrences(of: #"[ \t]*\b(?:"# + words + after, with: insert,
+                                             options: [.regularExpression, .caseInsensitive])
         }
         guard capitalize, text.contains("\n") else { return text }
         // A new line or bullet starts with a capital, like a sentence.
@@ -38,7 +45,7 @@ enum SpokenCommands {
 
     /// "…, scratch that": the sentence just said goes, the words themselves too. Back to the last
     /// sentence end or line break before it; said first thing, there's nothing to take back.
-    private static func scratched(_ text: String) -> String {
+    private static func scratched(_ text: String, capitalize: Bool) -> String {
         let pattern = #"(?i)[,;:]?\s*\b(?:scratch that|delete that)\b[,.;:!?]?\s*"#
         var text = text
         while let found = text.range(of: pattern, options: .regularExpression) {
@@ -48,7 +55,12 @@ enum SpokenCommands {
             if let last = before.last, ".!?".contains(last) { before = before.dropLast() }
             let cut = before.lastIndex { ".!?\n".contains($0) }.map { before.index(after: $0) } ?? before.startIndex
             let kept = String(text[..<cut])
-            let rest = String(text[found.upperBound...])
+            var rest = String(text[found.upperBound...])
+            // What comes next starts a sentence now ("Keynes, scratch that the essay…").
+            if capitalize, let first = rest.first, first.isLowercase,
+               kept.trimmingCharacters(in: .whitespaces).last.map({ ".!?\n".contains($0) }) ?? true {
+                rest = first.uppercased() + rest.dropFirst()
+            }
             text = kept.isEmpty || kept.hasSuffix("\n") ? kept + rest : kept + (rest.isEmpty ? "" : " ") + rest
         }
         return text.trimmingCharacters(in: .whitespaces)

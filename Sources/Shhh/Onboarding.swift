@@ -67,7 +67,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
 @MainActor
 final class OnboardingModel: ObservableObject {
     // The ManageBac link comes before School, so the subjects are already filled in from it.
-    enum Step: Int, CaseIterable { case hello, name, models, tour, connect, school, notes, permissions, claude, tryIt, done }
+    enum Step: Int, CaseIterable { case hello, name, models, tour, connect, school, notes, morning, permissions, claude, tryIt, done }
 
     /// The step a first setup reached, so quitting halfway doesn't mean clicking through it all again.
     static var savedStep: Step {
@@ -133,6 +133,7 @@ private struct OnboardingView: View {
                     case .tour: TourStep(model: model)
                     case .school: SchoolStep(model: model)
                     case .notes: NotesStep(model: model)
+                    case .morning: MorningStep(model: model)
                     case .connect: ConnectStep(model: model)
                     case .models: ModelsStep(model: model)
                     case .permissions: PermissionsStep(model: model)
@@ -960,6 +961,65 @@ private struct NotesStep: View {
             try? FileManager.default.createDirectory(at: folder.appendingPathComponent(sub), withIntermediateDirectories: true)
         }
         Assistant.vaultURL = folder
+    }
+}
+
+/// Their wake-up time, so the wake-up alarm (with its challenge) and the morning briefing work from
+/// the first morning instead of waiting to be discovered. Skippable; an existing wake-up alarm is kept.
+private struct MorningStep: View {
+    @ObservedObject var model: OnboardingModel
+    @State private var time = Calendar.current.date(bySettingHour: 7, minute: 0, second: 0, of: Date()) ?? Date()
+    @State private var schoolDays = true
+    @State private var wanted = true
+    private let existing = AlarmStore.load().first { $0.repeats != nil && $0.title.lowercased().contains("wake") }
+
+    var body: some View {
+        StepFrame(model: model, title: "Your mornings",
+                  subtitle: "I'll wake you up, check you're really awake with a quick question, then tell you what your day looks like.",
+                  continueTitle: existing == nil && wanted ? "Set my alarm" : "Continue") {
+            VStack(alignment: .leading, spacing: 14) {
+                if let existing {
+                    Label("You already have a wake-up alarm: \(existing.when), \(existing.repeats ?? "")", systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 14)).foregroundStyle(.green)
+                } else {
+                    HStack(spacing: 18) {
+                        Image(systemName: "alarm.fill").font(.system(size: 22)).foregroundStyle(Tint.accent)
+                            .frame(width: 48, height: 48).background(Tint.accent.opacity(0.14), in: Circle())
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Wake me up at").font(.system(size: 15, weight: .semibold))
+                            DatePicker("", selection: $time, displayedComponents: .hourAndMinute)
+                                .labelsHidden().datePickerStyle(.field).frame(width: 110)
+                        }
+                        Spacer()
+                        Picker("", selection: $schoolDays) {
+                            Text("School days").tag(true)
+                            Text("Every day").tag(false)
+                        }
+                        .pickerStyle(.segmented).labelsHidden().frame(width: 220)
+                    }
+                    .padding(18)
+                    .background(Tint.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .opacity(wanted ? 1 : 0.4)
+                    .disabled(!wanted)
+                    Toggle("I don't want a wake-up alarm", isOn: Binding(get: { !wanted }, set: { wanted = !$0 }))
+                        .font(.system(size: 13.5)).tint(Tint.accent)
+                }
+            }
+        }
+        .onDisappear(perform: save)
+    }
+
+    /// On the way forward only: going back doesn't set anything.
+    private func save() {
+        guard existing == nil, wanted, model.step.rawValue > OnboardingModel.Step.morning.rawValue else { return }
+        let calendar = Calendar.current
+        let parts = calendar.dateComponents([.hour, .minute], from: time)
+        let today = calendar.date(bySettingHour: parts.hour ?? 7, minute: parts.minute ?? 0, second: 0, of: Date()) ?? time
+        var alarm = Alarm(fireAt: today, title: "Wake up", kind: .alarm, repeats: schoolDays ? "weekdays" : "daily")
+        // The first ring has to fall on one of its days: set up on a Friday evening, a weekday alarm
+        // waits for Monday instead of ringing on Saturday once.
+        alarm.fireAt = alarm.next(after: Date()) ?? today
+        AlarmStore.add(alarm)
     }
 }
 

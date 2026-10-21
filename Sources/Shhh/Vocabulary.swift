@@ -23,9 +23,22 @@ enum Vocabulary {
         NSWorkspace.shared.open(url)
     }
 
+    /// IB words every student says, built in so nobody has to add them: names the speech models
+    /// mishear ("Manage BO", "manageBok") and acronyms they write in lower case ("tok", "cas").
+    /// Only exact, whole-word swaps (plus ManageBac by sound): fuzzy matching on everyday-sounding
+    /// names turned "turning in" into Turnitin. The user's own lines come first and win.
+    static let builtInTerms = ["ManageBac"]
+    static let builtInSwaps: [(String, String)] = [
+        ("manage back", "ManageBac"), ("manage bac", "ManageBac"), ("manage bag", "ManageBac"),
+        ("ib", "IB"), ("i b", "IB"), ("dp", "DP"), ("dp1", "DP1"), ("dp 1", "DP1"), ("dp2", "DP2"), ("dp 2", "DP2"),
+        ("myp", "MYP"), ("tok", "TOK"), ("t o k", "TOK"), ("cas", "CAS"), ("ias", "IAs"), ("ia", "IA"),
+        ("ee", "EE"), ("hl", "HL"), ("sl", "SL"), ("atl", "ATL"), ("atls", "ATLs"), ("ess", "ESS"),
+        ("math aa", "Math AA"), ("math ai", "Math AI"), ("maths aa", "Maths AA"), ("maths ai", "Maths AI"),
+    ]
+
     /// The transcript with the user's words spelled their way.
     static func apply(_ text: String) -> String {
-        guard let file = try? String(contentsOf: url, encoding: .utf8) else { return text }
+        let file = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         var terms: [String] = []
         var swaps: [(String, String)] = []
         for line in file.components(separatedBy: .newlines) {
@@ -37,6 +50,14 @@ enum Vocabulary {
             } else {
                 terms.append(line)
             }
+        }
+        // Built in after the user's: an exact swap they wrote for the same words wins. Not with the
+        // European languages, where "cas" and "ee" are ordinary words.
+        if Transcriber.languages != .european {
+            let mine = Set(swaps.map { $0.0.lowercased() })
+            swaps += builtInSwaps.filter { !mine.contains($0.0) }
+            let written = Set(terms.map { $0.lowercased() })
+            terms += builtInTerms.filter { !written.contains($0.lowercased()) }
         }
         var text = text
         for (heard, written) in swaps {

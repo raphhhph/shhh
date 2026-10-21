@@ -101,6 +101,8 @@ final class StudyBoardModel: ObservableObject {
         case answer(text: String, spoken: Bool, image: Data? = nil)
         case feedback(score: Int, total: Int, text: String, model: String)
         case summary(score: Int, total: Int, text: String)
+        /// A short lesson before the questions ("teach me…", or a topic they keep losing marks on).
+        case lesson(title: String, text: String)
         case note(String)
 
         var id: String {
@@ -109,6 +111,7 @@ final class StudyBoardModel: ObservableObject {
             case let .answer(text, _, image): "a\(text.hashValue)\(image?.count ?? 0)"
             case let .feedback(score, total, text, _): "f\(score)/\(total)\(text.prefix(20))"
             case let .summary(_, _, text): "s\(text.prefix(20))"
+            case let .lesson(title, text): "l\(title)\(text.prefix(20))"
             case let .note(text): "n\(text.hashValue)"
             }
         }
@@ -259,6 +262,10 @@ final class StudyBoardModel: ObservableObject {
         for item in parsed {
             switch item {
             case let .note(text): parts.append(BoardMath.speakable(text))
+            case let .lesson(title, text):
+                // The title and the first sentence; the rest is for reading.
+                let first = text.components(separatedBy: CharacterSet(charactersIn: ".!?\n")).first ?? ""
+                parts.append(BoardMath.speakable(title + ". " + first + "."))
             case let .question(_, marks, _, _, text):
                 parts.append(BoardMath.speakable(text).replacingOccurrences(of: #"\|.*\|"#, with: "", options: .regularExpression) + " For \(marks) mark\(marks == 1 ? "" : "s").")
             default: break
@@ -279,7 +286,7 @@ final class StudyBoardModel: ObservableObject {
             if let (score, total, body) = pendingFeedback { items.append(.feedback(score: score, total: total, text: body, model: model)) }
             pendingFeedback = nil
         }
-        while let open = rest.range(of: #"<(question|feedback|model|summary|ms)\b[^>]*>"#, options: .regularExpression) {
+        while let open = rest.range(of: #"<(question|feedback|model|summary|lesson|ms)\b[^>]*>"#, options: .regularExpression) {
             let before = rest[..<open.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
             if !before.isEmpty { flushFeedback(); items.append(.note(before)) }
             let tag = String(rest[open])
@@ -301,6 +308,9 @@ final class StudyBoardModel: ObservableObject {
             case "feedback":
                 flushFeedback()
                 pendingFeedback = (Int(attribute("score")) ?? 0, Int(attribute("total")) ?? 0, body)
+            case "lesson":
+                flushFeedback()
+                items.append(.lesson(title: attribute("title"), text: body))
             case "model":
                 if pendingFeedback != nil { flushFeedback(model: body) } else { items.append(.feedback(score: 0, total: 0, text: "", model: body)) }
             default:
@@ -368,6 +378,10 @@ final class StudyBoardModel: ObservableObject {
             then <model>the answer a markscheme would credit, concise</model>, then the next <question>.
             - Outside the tags, at most one short sentence, said aloud ("Nice, three out of four."). No other chatter.
             - At the end: <summary score="x" total="y">strengths, the weakest topic, the one thing to revise next</summary>.
+            - To teach before testing: <lesson title="2.9 Public goods">a short lesson in Markdown: the key definitions word for word, the idea in \
+            3 to 6 bullets, the diagram described (axes, curves, the shift), one worked example or real-world case, and the mistakes that lose \
+            marks (theirs first, from their mistake book)</lesson>, then the first question on it. Give a lesson when they ask to be taught or to \
+            "explain" a topic, and before the first question on a topic they scored under 40% on twice or more. At most about 180 words.
 
             \(myp ? "# MYP\nThey're in the MYP (\(Profile.programme)). Name the criterion each question targets, and mark on that criterion's band and level out of 8 (score=\"6\" total=\"8\"), using the descriptors below. No DP papers.\n" : "")
             # The session
@@ -571,6 +585,16 @@ private struct StudyBoardView: View {
             .background(accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         case let .note(text):
             BoardText(text, size: 13, spacing: 0, secondary: true)
+        case let .lesson(title, text):
+            VStack(alignment: .leading, spacing: 8) {
+                Label(title.isEmpty ? "Lesson" : title, systemImage: "book.closed.fill")
+                    .font(.system(size: 13, weight: .bold)).foregroundStyle(accent)
+                BoardText(text, size: 14, spacing: 3)
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(alignment: .leading) { Rectangle().fill(accent).frame(width: 3).padding(.vertical, 14) }
         }
     }
 

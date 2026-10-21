@@ -32,7 +32,7 @@ Everything from a key press to text: hotkeys, double-tap lock, "Hey Joe" hands-f
 - `Joe --dictate "<heard>"`: what dictation would type for a transcript. `--transcribe` now also prints the dictated text when it differs from what was heard.
 - Built-in swaps also cover letters spelled out one by one ("h l", "e e", "m y p", "math a a").
 
-- First run on the installed nightly (21 Oct, English + Chinese, `say` voice), with raw SenseVoice output: ManageBac came through as "manage back" (the dictionary fixes it), and TOK, DP1, EE, HL/SL and Math AA were right. Misses: "essay" became "SA", "kass" became "CA", "MYP" became "MP", and "tonight" was cut to "To." at the end of one clip. No swap was added for CA or MP, because both are real abbreviations.
+- First run on the installed nightly (21 Oct, English + Chinese, `say` voice), with raw SenseVoice output: ManageBac came through as "manage back" (the dictionary fixes it), and TOK, DP1, EE, HL/SL and Math AA were right. Misses: "essay" became "SA", "kass" became "CA", "MYP" became "MP", and "tonight" was cut to "To." at the end of one clip. - Nightly 12d1320 `--dictation-test`: word error rate 25.3% heard and 4.6% after Joe's fixes, with line breaks right 10 of 10. Then fixed: ManageBac fuzzy matching swallowed the next word ("manage back To" became "ManageBac"), because the longest span was tried first; now the fewest words are tried first and an exact match stays as it is. "CA" and "MP" are now fixed only when the next word gives them away ("CA hours", "MP coordinator"). "essay" heard as "SA" is still open.
 
 ## Audit (21 Oct 2026) and plan
 Goal: a student talks and gets the right words with nothing to set up.

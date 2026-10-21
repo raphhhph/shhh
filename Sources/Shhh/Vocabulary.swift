@@ -37,6 +37,10 @@ enum Vocabulary {
         // Spelled out letter by letter, the way students say them.
         ("h l", "HL"), ("s l", "SL"), ("e e", "EE"), ("i a", "IA"), ("m y p", "MYP"), ("d p 1", "DP1"), ("d p 2", "DP2"),
         ("math a a", "Math AA"), ("math a i", "Math AI"), ("maths a a", "Maths AA"), ("maths a i", "Maths AI"),
+        // Heard short, put right only where the next word gives it away ("CA" and "MP" are real elsewhere).
+        ("ca hours", "CAS hours"), ("ca project", "CAS project"), ("ca experience", "CAS experience"),
+        ("ca reflection", "CAS reflection"), ("ca reflections", "CAS reflections"), ("ca portfolio", "CAS portfolio"),
+        ("mp coordinator", "MYP coordinator"), ("mp personal project", "MYP personal project"),
     ]
 
     /// The transcript with the user's words spelled their way.
@@ -81,7 +85,9 @@ enum Vocabulary {
         var i = 0
         while i < words.count {
             var matched = false
-            for n in stride(from: min(3, words.count - i), through: 1, by: -1) where !matched {
+            // Fewest words first: "ManageBac To" is the name and then "To", not one sloppy ManageBac
+            // that swallows the next word (the nightly test lost "tonight" that way).
+            for n in 1...min(3, words.count - i) where !matched {
                 let span = words[i].lowerBound..<words[i + n - 1].upperBound
                 let heard = normalize(String(text[span]))
                 for target in targets {
@@ -90,7 +96,11 @@ enum Vocabulary {
                     guard abs(heard.count - target.key.count) <= tolerance,
                           distance(heard, target.key) <= tolerance else { continue }
                     let exact = heard == target.key
-                    if exact, text[span] == target.term { continue } // already right
+                    if exact, text[span] == target.term { // already right: keep it, and its neighbours
+                        i += n
+                        matched = true
+                        break
+                    }
                     // A near miss that's an ordinary word ("postures") is more likely what was said.
                     // A capitalised one is a name, and a name this close to theirs is theirs.
                     let word = String(text[span])

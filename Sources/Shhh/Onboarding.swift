@@ -314,7 +314,11 @@ private struct NameStep: View {
                 Primary(title: "Continue", enabled: !trimmed.isEmpty) { model.next() }
             }
         }
-        .onAppear { focused = true }
+        .onAppear {
+            focused = true
+            // The Mac already knows their name: one less thing to type.
+            if trimmed.isEmpty, let first = NSFullUserName().split(separator: " ").first { name = String(first) }
+        }
     }
 
     private var trimmed: String { name.trimmingCharacters(in: .whitespaces) }
@@ -706,6 +710,7 @@ private struct ModelsStep: View {
     /// Each download's last progress and when it last moved, to tell a stalled one from a slow one.
     @State private var lastMoved: [ModelGuard.Model: (fraction: Double, at: Date)] = [:]
     @State private var mirrorNote: String?
+    @State private var chinese = Transcriber.languages == .chinese
     private let timer = Timer.publish(every: 0.7, on: .main, in: .common).autoconnect()
     private static let stallSeconds: TimeInterval = 45
 
@@ -717,6 +722,12 @@ private struct ModelsStep: View {
         StepFrame(model: model, title: "Get Joe ready", subtitle: "Joe runs on this Mac: speech and his voice download once (about \(String(format: "%.1f", models.reduce(0) { $0 + $1.megabytes } / 1024)) GB). You can continue while they download.") {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(models) { item in row(item) }
+                // Many IB students speak Chinese: both languages, in one sentence too. Adds two downloads.
+                if Transcriber.languages != .european { // chose European languages in Settings: theirs
+                    Toggle("I speak Chinese too (Mandarin or Cantonese)", isOn: $chinese)
+                        .font(.system(size: 13.5)).tint(Tint.accent)
+                        .onChange(of: chinese) { Transcriber.languages = chinese ? .chinese : .english }
+                }
                 HStack {
                     // Only what isn't already on its way: a second start of the same download doesn't help.
                     Primary(title: "Download all", enabled: models.contains { canStart($0) }) {
@@ -742,6 +753,13 @@ private struct ModelsStep: View {
             }
         }
         .task { await chooseMirror() }
+        .onAppear {
+            // A Mac set up in Chinese, and no choice made yet: start with Chinese on.
+            if UserDefaults.standard.string(forKey: "speechLanguages") == nil, Transcriber.languages == .english,
+               Locale.preferredLanguages.contains(where: { $0.hasPrefix("zh") }) {
+                chinese = true
+            }
+        }
     }
 
     /// No progress for a while. Not near the end: a finished download sits at 99% while macOS
@@ -912,6 +930,11 @@ private struct ConnectStep: View {
             let result = await CalendarFeed.refreshLinks()
             reading = false
             guard result.hasSuffix("items") else { linkStatus = "Couldn't read it: \(result)"; return }
+            // The school's ManageBac address names it ("swis.managebac.cn"): the School step's first field.
+            if Profile.school.isEmpty, let host = URL(string: new.replacingOccurrences(of: "webcal://", with: "https://"))?.host,
+               host.contains("managebac"), let name = host.split(separator: ".").first, name.lowercased() != "managebac" {
+                Profile.school = name.count <= 5 ? name.uppercased() : name.capitalized
+            }
             // Their subjects, so the next step is already filled in (only if they haven't picked any).
             let subjects = CalendarFeed.subjectGuesses()
             if Profile.subjects.isEmpty, !subjects.isEmpty { Profile.subjects = subjects.joined(separator: ", ") }

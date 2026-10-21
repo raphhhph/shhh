@@ -118,6 +118,10 @@ final class NotchOverview {
             data.actions.addAlarm(.add(Alarm(fireAt: Date().addingTimeInterval(Double(minutes) * 60), title: "Focus", kind: .timer)))
             data.reload()
             model.fill(from: data, tasks: runningTasks())
+        }, tick: { [weak self] line in
+            guard let self else { return }
+            data.toggle(line)
+            model.fill(from: data, tasks: runningTasks())
         }))
         panel.orderFrontRegardless()
         NotchSpace.pin(panel)
@@ -134,8 +138,10 @@ final class NotchOverview {
 private final class OverviewModel: ObservableObject {
     @Published var widgets: [NotchOverview.Widget] = []
     @Published var nextClass: Daybook.Slot?
+    /// The soonest deadline for that class's subject, so the bag gets packed with it in mind.
+    @Published var classDue: CalendarFeed.Item?
     @Published var deadlines: [CalendarFeed.Item] = []
-    @Published var today: [(text: String, done: Bool)] = []
+    @Published var today: [(line: String, text: String, done: Bool)] = []
     @Published var tasks: [String] = []
     @Published var alarm: Alarm?
     @Published var music: String?
@@ -149,9 +155,14 @@ private final class OverviewModel: ObservableObject {
         let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: now) ?? now
         nextClass = data.timeline.first { $0.kind == .lesson && ($0.end ?? $0.start) > now }
             ?? Daybook.timeline(tomorrow).first { $0.kind == .lesson }
+        // Matched on the class's first word ("Chinese B SL" → "Chinese …" deadlines).
+        let subject = nextClass.flatMap { $0.title.split(separator: " ").first.map(String.init) }
+        classDue = subject.flatMap { word in
+            data.deadlines.first { ($0.end ?? $0.start) > now && $0.title.range(of: word, options: .caseInsensitive) != nil }
+        }
         // Still to come: today's are gone once they're over.
         deadlines = Array(data.deadlines.filter { ($0.end ?? $0.start) > now || $0.allDay && Calendar.current.isDateInToday($0.start) }.prefix(3))
-        today = data.tasks.prefix(5).map { ($0.text, $0.done) }
+        today = data.tasks.prefix(5).map { ($0.line, $0.text, $0.done) }
         self.tasks = tasks
         alarm = data.alarms.first
         music = data.nowPlaying
@@ -166,6 +177,8 @@ private struct OverviewView: View {
     var ask: (String) -> Void = { _ in }
     /// Starts a focus timer of so many minutes.
     var focus: (Int) -> Void = { _ in }
+    /// Ticks a task in today's Daybook on or off, by its line.
+    var tick: (String) -> Void = { _ in }
 
     /// One-tap questions a student asks most, short enough for a tile.
     private static let quickAsks: [(label: String, request: String)] = [
@@ -213,6 +226,10 @@ private struct OverviewView: View {
                             .font(.system(size: 11.5)).foregroundStyle(.orange)
                     }
                     if !slot.detail.isEmpty { Text(slot.detail).font(.system(size: 11)).foregroundStyle(.white.opacity(0.55)) }
+                    if let due = model.classDue {
+                        Text("Due \(due.start.formatted(.dateTime.weekday(.abbreviated))): \(due.title)")
+                            .font(.system(size: 10.5, weight: .medium)).foregroundStyle(.red.opacity(0.85)).lineLimit(2)
+                    }
                 } else { empty("Nothing more today") }
             case .dueSoon:
                 if model.deadlines.isEmpty { empty("Nothing due soon") }
@@ -232,10 +249,15 @@ private struct OverviewView: View {
             case .today:
                 if model.today.isEmpty { empty("No Daybook yet") }
                 ForEach(Array(model.today.enumerated()), id: \.offset) { _, task in
-                    HStack(spacing: 5) {
-                        Image(systemName: task.done ? "checkmark.circle.fill" : "circle").font(.system(size: 10)).foregroundStyle(task.done ? .orange : .white.opacity(0.5))
-                        Text(task.text).font(.system(size: 11.5)).lineLimit(1).strikethrough(task.done)
+                    // Tick it off from the notch, without opening the dashboard.
+                    Button { tick(task.line) } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: task.done ? "checkmark.circle.fill" : "circle").font(.system(size: 10)).foregroundStyle(task.done ? .orange : .white.opacity(0.5))
+                            Text(task.text).font(.system(size: 11.5)).lineLimit(1).strikethrough(task.done)
+                        }
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                 }
             case .tasks:
                 if model.tasks.isEmpty { empty("Nothing running") }

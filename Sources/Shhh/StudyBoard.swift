@@ -99,9 +99,9 @@ final class StudyBoardModel: ObservableObject {
         }
     }
 
-    @Published private(set) var subject = ""
+    @Published fileprivate(set) var subject = ""
     @Published private(set) var mode = Mode.quiz
-    @Published private(set) var items: [Item] = []
+    @Published fileprivate(set) var items: [Item] = []
     /// The reply still coming in, already laid out.
     @Published private(set) var live: [Item] = []
     @Published private(set) var status: String?
@@ -370,10 +370,12 @@ private let accent = Color(red: 1, green: 0.58, blue: 0.12)
 
 private struct StudyBoardView: View {
     @ObservedObject var model: StudyBoardModel
+    var startSketching = false
     @FocusState private var typing: Bool
     @State private var sketching = false
+    @State private var started = false
     @State private var strokes: [SketchPad.Stroke] = []
-    @State private var ink = Color.primary
+    @State private var ink = Color.black // the pad is white whatever the theme
 
     var body: some View {
         VStack(spacing: 0) {
@@ -409,6 +411,7 @@ private struct StudyBoardView: View {
         }
         .frame(minWidth: 620, minHeight: 520)
         .background(Color(nsColor: .textBackgroundColor))
+        .onAppear { if !started { started = true; sketching = startSketching } }
         .tint(accent)
     }
 
@@ -520,7 +523,7 @@ private struct StudyBoardView: View {
         VStack(alignment: .leading, spacing: 8) {
             if sketching {
                 SketchPad(strokes: $strokes, ink: $ink)
-                    .frame(height: 260)
+                    .frame(height: 220)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.15)))
             }
@@ -543,7 +546,7 @@ private struct StudyBoardView: View {
                     Label(sketching ? "Hide sketch" : "Draw a diagram", systemImage: "pencil.and.scribble")
                 }
                 if sketching {
-                    ForEach([Color.primary, Color.red, Color.blue], id: \.self) { color in
+                    ForEach([Color.black, Color.red, Color.blue], id: \.self) { color in
                         Circle().fill(color).frame(width: 16, height: 16)
                             .overlay(Circle().strokeBorder(Color.accentColor, lineWidth: ink == color ? 2 : 0).padding(-3))
                             .onTapGesture { ink = color }
@@ -635,5 +638,40 @@ struct SketchPad: View {
         renderer.scale = 2
         guard let image = renderer.nsImage, let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
         return bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.8])
+    }
+}
+
+// MARK: - Preview
+
+extension StudyBoard {
+    /// `Joe --board-preview <file.png> [sketch]`: the whiteboard with a sample question and mark.
+    static func preview(to file: URL, sketch: Bool, done: @escaping () -> Void) {
+        let board = StudyBoard()
+        board.model.preview(StudyBoardModel.parse("""
+            Let's go. <question n="1" marks="4" topic="2.7 Indirect taxes" source="IB-style">**Draw** a diagram to show the effect of a specific tax on a market. [4]</question><ms>hidden</ms>
+            """) + [.answer(text: "Supply shifts up by the tax, price rises, quantity falls.", spoken: true)] + StudyBoardModel.parse("""
+            <feedback n="1" score="3" total="4">✓ Supply shifts up by the tax\\n✓ Higher price, lower quantity\\n✗ missing: the price producers receive</feedback><model>S shifts vertically by the tax; consumers pay Pc, producers get Pp.</model>
+            """), subject: "Economics HL", sketching: sketch)
+        let host = NSHostingView(rootView: StudyBoardView(model: board.model, startSketching: sketch))
+        let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 860, height: 760), styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
+        window.contentView = host
+        window.orderFrontRegardless()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            MainActor.assumeIsolated {
+                if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
+                    host.cacheDisplay(in: host.bounds, to: rep)
+                    try? rep.representation(using: .png, properties: [:])?.write(to: file)
+                }
+                _ = board
+                done()
+            }
+        }
+    }
+}
+
+extension StudyBoardModel {
+    func preview(_ items: [Item], subject: String, sketching: Bool) {
+        self.subject = subject
+        self.items = items
     }
 }

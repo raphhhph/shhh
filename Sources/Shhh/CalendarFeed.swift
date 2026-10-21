@@ -43,7 +43,8 @@ enum CalendarFeed {
         items += linkItems().filter { $0.start >= first && $0.start < last } // ManageBac and Google links
         items += macCalendar(from: first, to: last)
         for index in items.indices where items[index].kind == .deadline && items[index].subject == nil {
-            items[index].subject = subject(of: items[index].title, notes: items[index].detail)
+            items[index].subject = subject(of: items[index].title, notes: items[index].detail,
+                                           at: items[index].allDay ? nil : items[index].start)
         }
         var seen = Set<String>()
         var kept: [Item] = []
@@ -220,7 +221,7 @@ extension CalendarFeed {
     }
 
     /// The saved items, in the same shape as calendar.json.
-    static func linkItems() -> [Item] {
+    static func linkItems(subjects: Bool = true) -> [Item] {
         guard let data = try? Data(contentsOf: feedCache),
               let list = try? JSONSerialization.jsonObject(with: data) as? [[String: String]] else { return [] }
         return list.compactMap { entry in
@@ -228,7 +229,8 @@ extension CalendarFeed {
             let deadline = entry["kind"] == "deadline"
             return Item(title: title, detail: entry["detail"] ?? "", start: start, end: entry["end"].flatMap(icsDate),
                         allDay: startText.count == 8, kind: deadline ? .deadline : .event,
-                        subject: deadline ? subject(of: title, notes: entry["notes"] ?? "", category: entry["category"] ?? "") : nil)
+                        subject: deadline && subjects ? subject(of: title, notes: entry["notes"] ?? "", category: entry["category"] ?? "",
+                                                                at: startText.count == 8 ? nil : start) : nil)
         }
     }
 
@@ -406,7 +408,8 @@ extension CalendarFeed {
         let name = #"holiday|vacation|no school|school closed|half[ -]term|recess|\bbreak\b|golden week|national day|mid-autumn|spring festival|lunar new year|day off"#
         let calendar = Calendar.current
         var days = Set<String>()
-        for item in linkItems() + cached() where item.allDay && item.kind == .event
+        // Without subjects: those look at the timetable, which looks at the holidays.
+        for item in linkItems(subjects: false) + cached() where item.allDay && item.kind == .event
             && item.title.range(of: name, options: [.regularExpression, .caseInsensitive]) != nil {
             // A whole-day event's end is the day after its last day.
             let last = item.end.map { $0.addingTimeInterval(-1) } ?? item.start
@@ -428,28 +431,54 @@ extension CalendarFeed {
 
 extension CalendarFeed {
     /// The class a deadline is for, from the student's own timetable: "BM Unit 1 Summative" →
-    /// "Business Management HL", "Econ IA draft" → "Economics HL". ManageBac's calendar has no
-    /// subject field, so the title, its notes and its category are matched against the class
-    /// names. Falls back to the category, else nil.
-    static func subject(of title: String, notes: String = "", category: String = "") -> String? {
-        let text = words(title + " " + category + " " + notes)
-        guard !text.isEmpty else { return nil }
+    /// "Business Mgmt HL", "Quiz: Markets 2" → "Economics HL". ManageBac's calendar has no subject
+    /// field (its events carry only a title, times and a cut-off description), so in turn: a class
+    /// named in the title (full name, initials such as BM or TOK, or a distinctive first word),
+    /// then in the notes; a subject's typical words ("taxes", "ecosystem", "exhibition"); Chinese
+    /// writing for a Chinese class; the class on the timetable at the time it's due; the category.
+    static func subject(of title: String, notes: String = "", category: String = "", at time: Date? = nil) -> String? {
         let names = Daybook.classNames
-        // A full name or its initials first ("Business Management", "BM", "TOK"), then a
-        // distinctive first word ("Biology" for "Biology HL").
-        if let name = names.first(where: { name in
-            let core = coreWords(name)
-            return (!core.isEmpty && core.allSatisfy(text.contains)) || initials(name).contains { text.contains($0) }
-        }) { return name }
-        if let name = names.first(where: { coreWords($0).first.map { $0.count >= 5 && text.contains($0) } ?? false }) { return name }
+        guard !names.isEmpty else { return category.isEmpty ? nil : category }
+        func named(in text: Set<String>) -> String? {
+            names.first { name in
+                let core = coreWords(name)
+                return (!core.isEmpty && core.allSatisfy(text.contains)) || initials(name).contains { text.contains($0) }
+            } ?? names.first { coreWords($0).first.map { $0.count >= 5 && text.contains($0) } ?? false }
+        }
+        let heading = words(title + " " + category)
+        if let name = named(in: heading) ?? named(in: words(notes)) { return name }
+        let singular = Set(heading.map { $0.count > 3 && $0.hasSuffix("s") ? String($0.dropLast()) : $0 }).union(heading)
+        for (key, typical) in typicalWords where !typical.isDisjoint(with: singular) {
+            if let name = names.first(where: { coreWords($0).contains(key) || initials($0).contains(key) }) { return name }
+        }
+        if title.unicodeScalars.contains(where: { (0x4E00...0x9FFF).contains($0.value) }),
+           let name = names.first(where: { $0.lowercased().contains("chinese") || $0.lowercased().contains("mandarin") }) { return name }
+        if let time, let lesson = Daybook.timeline(time).first(where: { $0.kind == .lesson && $0.start <= time && ($0.end ?? $0.start) > time }),
+           names.contains(lesson.title) { return lesson.title }
         return category.isEmpty ? nil : category
     }
+
+    /// Words a subject's tasks use without naming it, by the class's core word or initials.
+    private static let typicalWords: [String: Set<String>] = [
+        "economics": ["market", "tax", "taxe", "elasticity", "demand", "supply", "gdp", "inflation", "unemployment", "fiscal",
+                      "monetary", "tariff", "subsidy", "externality", "macroeconomic", "microeconomic", "price"],
+        "business": ["marketing", "stakeholder", "swot", "profit", "entrepreneur", "organisation", "hrm", "cashflow", "breakeven"],
+        "ess": ["ecosystem", "biodiversity", "bioaccumulation", "sustainability", "pollution", "biome", "ecology", "conservation"],
+        "maths": ["calculation", "calculus", "statistic", "probability", "algebra", "trigonometry", "derivative", "integration", "function"],
+        "english": ["poem", "poetry", "novel", "literary", "rhetoric", "comic", "prose"],
+        "tok": ["exhibition", "artifact", "artefact", "knower", "knowledge"],
+        "biology": ["cell", "genetic", "enzyme", "photosynthesis"],
+        "chemistry": ["mole", "stoichiometry", "titration", "bonding"],
+        "physics": ["kinematic", "momentum", "circuit", "wave"],
+        "history": ["war", "revolution", "historical"],
+        "psychology": ["cognitive", "behaviour", "behavior"],
+    ]
 
     /// Lowercased words, with the usual short forms spelled out.
     private static func words(_ text: String) -> Set<String> {
         let short = ["math": "maths", "mathematics": "maths", "econ": "economics", "bio": "biology", "chem": "chemistry",
                      "phys": "physics", "eng": "english", "lit": "literature", "geo": "geography", "psych": "psychology",
-                     "comp": "computer", "sci": "science", "lang": "language", "tok": "tok"]
+                     "comp": "computer", "sci": "science", "lang": "language", "tok": "tok", "mgmt": "management"]
         let list = text.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
         return Set(list.map { short[$0] ?? $0 })
     }
@@ -458,7 +487,7 @@ extension CalendarFeed {
     private static func coreWords(_ name: String) -> [String] {
         let skip: Set<String> = ["hl", "sl", "dp", "myp", "y1", "y2", "yr", "year", "and", "of", "the", "a", "b", "ab", "initio"]
         let list = name.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
-        return list.filter { !skip.contains($0) && Int($0) == nil }.map { words($0).first ?? $0 }
+        return list.filter { !skip.contains($0) && Int($0) == nil && $0.count > 1 }.map { words($0).first ?? $0 }
     }
 
     /// "Business Management HL" → "bm"; "Theory of Knowledge" → "tk", "tok". One-word names have none.

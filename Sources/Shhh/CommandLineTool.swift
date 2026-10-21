@@ -359,7 +359,7 @@ enum CommandLineTool {
             exit(0)
         case ("--speech-parts", 2):
             // Joe --speech-parts "<text>": which voice says which part.
-            for part in SpeechOutput.hasHan(args[1]) ? SpeechOutput.chineseParts(args[1]) : [args[1]] {
+            for part in SpeechOutput.hasHan(args[1]) ? SpeechOutput.chineseParts(SpeechOutput.mathsInChinese(args[1])) : [args[1]] {
                 print(SpeechOutput.isChinese(part) ? "Mandarin: " + part : SpeechOutput.isOtherLanguage(part) ? "Mac voice: " + part
                       : "Alba: " + SpeechOutput.spokenMaths(part)) // as she says it: "x²" → "x squared"
             }

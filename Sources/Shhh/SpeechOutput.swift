@@ -287,7 +287,7 @@ final class SpeechOutput {
             if Self.hasHan(clean) {
                 // Chinese, often with English in it ("数学 AI HL，08:30"): the Chinese parts in the
                 // Mandarin voice with numbers said in Chinese, the English words in Alba's.
-                pending += Self.chineseParts(clean).map { Line(text: $0) }
+                pending += Self.chineseParts(Self.mathsInChinese(clean)).map { Line(text: $0) }
             } else if Self.isOtherLanguage(clean) {
                 pending.append(Line(text: clean, mac: true))
             } else {
@@ -303,7 +303,15 @@ final class SpeechOutput {
         guard worker == nil, !pending.isEmpty else { return }
         worker = Task { [weak self] in
             while let self, !Task.isCancelled, !self.pending.isEmpty {
-                let line = self.pending.removeFirst()
+                var line = self.pending.removeFirst()
+                // Sentences already waiting are said together, in one breath: the rhythm and
+                // intonation carry across them, with no gap. Only what's already here, so the first
+                // sentence of a reply never waits for the next.
+                while !line.mac, self.clips[line.text] == nil, !Self.isChinese(line.text), let next = self.pending.first,
+                      !next.mac, !Self.isChinese(next.text), line.text.count + next.text.count < 160 {
+                    line = Line(text: line.text + " " + next.text)
+                    self.pending.removeFirst()
+                }
                 let sentence = line.text
                 let started = Date()
                 self.lastSpoke = started
@@ -417,6 +425,7 @@ final class SpeechOutput {
         let replacements: [(String, String)] = [
             (#"\[([^\]]+)\]\([^)]*\)"#, "$1"),         // [title](url) → title
             (#"https?://\S+"#, ""),                    // bare links
+            (#"[\p{Extended_Pictographic}\x{FE0F}\x{200D}]"#, ""), // emoji
             (#"(\*\*|__|`|\*)"#, ""),                  // bold, code, italics
             (#"(?m)^\s*([-•*]|\d+\.)\s+"#, ""),        // list markers
             // Abbreviations said in full; their dots would also end a sentence too early.
@@ -434,6 +443,13 @@ final class SpeechOutput {
         return text
     }
 
+    /// A Chinese sentence with maths in it ("求 y = 3x² 的导数"): the maths in words first, so the
+    /// English parts go to Alba as words, not symbols. Without maths it's left as it is, so times,
+    /// numbers and percentages are still said in Chinese.
+    nonisolated static func mathsInChinese(_ text: String) -> String {
+        text.range(of: #"[=^²³√∫×÷−]|\\[A-Za-z]+"#, options: .regularExpression) != nil ? spokenMaths(text) : text
+    }
+
     /// Maths, science and units the way a teacher says them, for Alba, who would skip or spell out
     /// the symbols: "v = 3.2 × 10⁻⁴ m/s²" → "v equals 3.2 times 10 to the power of minus 4 metres per
     /// second squared". Study questions and feedback are full of these.
@@ -445,6 +461,13 @@ final class SpeechOutput {
         func sub(_ pattern: String, _ template: String) {
             text = text.replacingOccurrences(of: pattern, with: template, options: .regularExpression)
         }
+        // Clock times as said: "08:30" → "8:30", "9:00 AM" → "9 AM", "9:00" → "9 o'clock".
+        sub(#"(?<![0-9:])0([0-9]):([0-9]{2})"#, "$1:$2")
+        sub(#"(?<![0-9:])([0-9]{1,2}):00\s?[Aa]\.?[Mm]\b\.?(?=\S)"#, "$1 AM")
+        sub(#"(?<![0-9:])([0-9]{1,2}):00\s?[Pp]\.?[Mm]\b\.?(?=\S)"#, "$1 PM")
+        sub(#"(?<![0-9:])([0-9]{1,2}):00\s?[Aa]\.?[Mm]\b"#, "$1 AM")
+        sub(#"(?<![0-9:])([0-9]{1,2}):00\s?[Pp]\.?[Mm]\b"#, "$1 PM")
+        sub(#"(?<![0-9:])([0-9]|1[0-2]):00(?![0-9:])"#, "$1 o'clock")
         // Money, then LaTeX ($x^2$, \(…\), \frac{a}{b}) into plain symbols.
         sub(#"\$([0-9][0-9,]*(\.[0-9]+)?)"#, "$1 dollars")
         sub(#"\\[()\[\]]|\$"#, " ")
@@ -469,6 +492,22 @@ final class SpeechOutput {
                                                  "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9", "⁻": "-"]
         while let range = text.range(of: #"[⁰¹²³⁴⁵⁶⁷⁸⁹⁻]+"#, options: .regularExpression) {
             text.replaceSubrange(range, with: "^(" + text[range].map { superscripts[$0] ?? "" }.joined() + ")")
+        }
+        // Formulas symbol by symbol, as said in class: "6CO₂" → "6 C O 2", "C₆H₁₂O₆" → "C 6 H 12 O 6".
+        if let formulas = try? NSRegularExpression(pattern: #"\b([0-9]*)((?:[A-Z][a-z]?[₀-₉]*)+)(?![A-Za-z])"#),
+           let element = try? NSRegularExpression(pattern: #"([A-Z][a-z]?)([₀-₉]*)"#) {
+            for match in formulas.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
+                guard let whole = Range(match.range, in: text), let body = Range(match.range(at: 2), in: text),
+                      text[body].range(of: "[₀-₉]", options: .regularExpression) != nil,
+                      let count = Range(match.range(at: 1), in: text) else { continue }
+                let symbols = String(text[body])
+                let parts = element.matches(in: symbols, range: NSRange(symbols.startIndex..., in: symbols)).compactMap { part -> String? in
+                    guard let symbol = Range(part.range(at: 1), in: symbols), let digits = Range(part.range(at: 2), in: symbols) else { return nil }
+                    let number = symbols[digits].unicodeScalars.map { String($0.value - 0x2080) }.joined()
+                    return number.isEmpty ? String(symbols[symbol]) : String(symbols[symbol]) + " " + number
+                }
+                text.replaceSubrange(whole, with: ([String(text[count])] + parts).filter { !$0.isEmpty }.joined(separator: " "))
+            }
         }
         while let range = text.range(of: #"[₀₁₂₃₄₅₆₇₈₉]+"#, options: .regularExpression) {
             let digits = text[range].unicodeScalars.map { String($0.value - 0x2080) }.joined()

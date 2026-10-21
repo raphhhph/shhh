@@ -1849,6 +1849,10 @@ private struct StudyPage: View {
     @Environment(\.narrow) private var narrow
     @State private var request = ""
     @State private var results: [StudyBuddy.Result] = []
+    @State private var topics: [StudyReview.Topic] = []
+    /// Indexed past papers per syllabus map: papers, questions, questions with a markscheme.
+    @State private var papers: [String: (papers: Int, questions: Int, marked: Int)] = [:]
+    @State private var paperNote: String?
 
     /// Their subjects from Settings, and TOK, which everyone takes.
     private var subjects: [String] {
@@ -1873,10 +1877,8 @@ private struct StudyPage: View {
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Look.line))
         Text("Questions open on the whiteboard: type your answer, or hold right ⌥ and say it. Joe marks it like an examiner and gives a model answer.")
             .font(.system(size: 12)).foregroundStyle(.secondary).padding(.leading, 4)
-        Card(title: "Real past papers", symbol: "doc.text.magnifyingglass") {
-            Text("IB papers are sold by the IB, so Joe can't ship them. Put the ones you have (from school, IB Questionbank or a teacher) in your notes under _files/School/<subject>/Past papers, with their markschemes, and Joe asks those real questions and marks with the real markscheme. Otherwise he writes questions in the exact style of each paper.")
-                .font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        }
+        reviewCard
+        pastPapersCard
 
         let columns = narrow ? 1 : 2
         let rows = stride(from: 0, to: subjects.count, by: columns).map { Array(subjects[$0..<min($0 + columns, subjects.count)]) }
@@ -1911,12 +1913,93 @@ private struct StudyPage: View {
                 }
             }
         }
-        .onAppear { results = StudyBuddy.results() }
+        .onAppear(perform: reload)
+    }
+
+    private func reload() {
+        results = StudyBuddy.results()
+        topics = StudyReview.topics(results)
+        var counts: [String: (papers: Int, questions: Int, marked: Int)] = [:]
+        for pack in Set(subjects.compactMap(StudyBuddy.pack(for:))) { counts[pack] = PastPapers.summary(pack) }
+        papers = counts
+    }
+
+    /// Spaced repetition: the topics they're about to forget, from the quiz log.
+    private var reviewCard: some View {
+        let due = StudyReview.due(from: topics)
+        return Card(title: due.isEmpty ? "Revision" : "Due for review · \(due.count)", symbol: "arrow.triangle.2.circlepath") {
+            if topics.isEmpty {
+                Text("Every topic you're marked on comes back here when it's time to revise it: the next day if it went badly, after a few days, then weeks, as you get it right.")
+                    .font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else if due.isEmpty {
+                Text(StudyReview.upcoming(from: topics).map { "Nothing due today. Next: \($0.topic) (\($0.subject)), \($0.when)." } ?? "Nothing due today.")
+                    .font(.system(size: 12.5)).foregroundStyle(.secondary)
+            }
+            ForEach(Array(due.prefix(6).enumerated()), id: \.offset) { _, topic in
+                HStack(spacing: 10) {
+                    Text("\(Int((topic.lastScore * 100).rounded()))%").font(.system(size: 13, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(topic.lastScore >= 0.7 ? .green : topic.lastScore >= 0.45 ? .orange : Look.deadline)
+                        .frame(width: 40, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(topic.topic).font(.system(size: 13)).lineLimit(1)
+                        Text("\(topic.subject) · \(topic.when)").font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                    Button("Review") { model.actions.ask("Quiz me on \(topic.subject), topic \(topic.topic): it's due for review.") }
+                        .buttonStyle(PillButton())
+                }
+            }
+            if due.count > 6 {
+                Text("\(due.count - 6) more due. Say “quiz me” and Joe starts with them.").font(.system(size: 11.5)).foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private static func paperLine(_ count: (papers: Int, questions: Int, marked: Int)?) -> String {
+        guard let count, count.questions > 0 else { return "none yet" }
+        return "\(count.papers) paper\(count.papers == 1 ? "" : "s") · \(count.questions) questions · \(count.marked) with markscheme"
+    }
+
+    /// Their real past papers, read and split into questions so Joe can ask them by topic.
+    private var pastPapersCard: some View {
+        let mapped = subjects.filter { StudyBuddy.pack(for: $0) != nil && StudyBuddy.pack(for: $0) != "Theory of Knowledge" }
+        let total = papers.values.reduce(0) { $0 + $1.questions }
+        return Card(title: "Real past papers", symbol: "doc.text.magnifyingglass") {
+            Text(total == 0
+                 ? "IB papers are sold by the IB, so Joe can't ship them. Add the ones you have (from school, IB Questionbank or a teacher) with their markschemes: Joe splits them into questions, finds each question's topic and markscheme, and asks real questions on what you need to revise."
+                 : "Joe asks real questions from these, on what you need to revise, and marks them with the real markscheme.")
+                .font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            ForEach(mapped, id: \.self) { subject in
+                let count = StudyBuddy.pack(for: subject).flatMap { papers[$0] }
+                HStack(spacing: 10) {
+                    Text(subject).font(.system(size: 13, weight: .medium))
+                    Text(Self.paperLine(count))
+                        .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer()
+                    if let count, count.questions > 0 {
+                        Button("Past-paper question") {
+                            model.actions.ask("Quiz me on \(subject): one real past-paper exam question from my saved papers, on a topic I need to revise, marked with its markscheme.")
+                        }
+                        .buttonStyle(PillButton())
+                    }
+                    Button("Add…") { PastPapers.add(for: subject) { note in paperNote = note; reload() } }
+                        .buttonStyle(PillButton())
+                }
+            }
+            if let paperNote { Text(paperNote).font(.system(size: 11.5)).foregroundStyle(.secondary) }
+        }
+        .task {
+            // Papers they dropped into their notes since last time.
+            for pack in Set(mapped.compactMap(StudyBuddy.pack(for:))) {
+                PastPapers.refreshInBackground(pack: pack) { reload() }
+            }
+        }
     }
 
     private func card(_ subject: String) -> some View {
         let pack = StudyBuddy.pack(for: subject)
-        let mine = results.filter { StudyBuddy.pack(for: $0.subject) == pack && pack != nil }
+        let mine = results.filter { pack == nil ? $0.subject == subject : StudyBuddy.pack(for: $0.subject) == pack }
+        let due = StudyReview.due(subject: subject, from: topics)
         let scored = mine.reduce(0) { $0 + $1.score }, possible = mine.reduce(0) { $0 + $1.total }
         let weakest = Dictionary(grouping: mine, by: \.topic)
             .map { (topic: $0.key, ratio: Double($0.value.reduce(0) { $0 + $1.score }) / Double(max(1, $0.value.reduce(0) { $0 + $1.total }))) }
@@ -1954,7 +2037,12 @@ private struct StudyPage: View {
                     model.actions.ask("Give me one full exam-style \(subject) question, like a real paper, and mark my answer.")
                 }
                 .buttonStyle(PillButton())
-                if let weakest {
+                if !due.isEmpty {
+                    Button("Review \(due.count) due") {
+                        model.actions.ask("Quiz me on \(subject): review my topics due for revision, \(due.prefix(5).map(\.topic).joined(separator: "; ")).")
+                    }
+                    .buttonStyle(PillButton())
+                } else if let weakest {
                     Button("Revise weakest") { model.actions.ask("Quiz me on \(subject), topic \(weakest.topic).") }
                         .buttonStyle(PillButton())
                 }
@@ -2003,17 +2091,34 @@ private struct PointsCalculator: View {
     static func core(_ tok: String, _ ee: String) -> Int? {
         let order = ["A", "B", "C", "D"]
         guard let t = order.firstIndex(of: tok), let e = order.firstIndex(of: ee) else { return nil }
-        let matrix = [[3, 3, 2, 2], [3, 2, 1, 1], [2, 1, 1, 0], [2, 1, 0, 0]]
+        let matrix = [[3, 3, 2, 2], [3, 2, 2, 1], [2, 2, 1, 0], [2, 1, 0, 0]] // the IB's matrix, rows TOK, columns EE
         return matrix[t][e]
+    }
+
+    /// The IB's failing conditions that these grades hit. Levels come from "HL"/"SL" in the subject names.
+    static func failing(_ grades: [(subject: String, grade: Int)], core: Int?, total: Int) -> [String] {
+        func level(_ name: String, _ tag: String) -> Bool {
+            name.range(of: #"\b"# + tag + #"\b"#, options: [.regularExpression, .caseInsensitive]) != nil
+        }
+        let hl = grades.filter { level($0.subject, "HL") }.map(\.grade).sorted(by: >)
+        let sl = grades.filter { level($0.subject, "SL") }.map(\.grade)
+        var problems: [String] = []
+        if core == nil { problems.append("An E in TOK or the EE fails the diploma.") }
+        if total < 24 { problems.append("Under 24 points fails the diploma.") }
+        if grades.contains(where: { $0.grade == 1 }) { problems.append("A grade 1 in any subject fails the diploma.") }
+        if grades.filter({ $0.grade == 2 }).count >= 3 { problems.append("Three or more grade 2s fail the diploma.") }
+        if grades.filter({ $0.grade <= 3 }).count >= 4 { problems.append("Four or more grades of 3 or below fail the diploma.") }
+        if hl.count >= 3, hl.prefix(3).reduce(0, +) < 12 { problems.append("Under 12 points from HL subjects (the best three) fails the diploma.") }
+        if sl.count >= 3, sl.reduce(0, +) < 9 { problems.append("Under 9 points from SL subjects fails the diploma.") }
+        if sl.count == 2, sl.reduce(0, +) < 5 { problems.append("Under 5 points from two SL subjects fails the diploma.") }
+        return problems
     }
 
     var body: some View {
         let subjectTotal = subjects.reduce(0) { $0 + grade($1).wrappedValue }
         let corePoints = Self.core(tok, ee)
         let total = subjectTotal + (corePoints ?? 0)
-        let problems = [corePoints == nil ? "An E in TOK or the EE fails the diploma." : nil,
-                        total < 24 ? "Under 24 points fails the diploma." : nil,
-                        subjects.contains { grade($0).wrappedValue == 1 } ? "A grade 1 in any subject fails the diploma." : nil].compactMap { $0 }
+        let problems = Self.failing(subjects.map { ($0, grade($0).wrappedValue) }, core: corePoints, total: total)
         Card(title: "Predicted points", symbol: "function") {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text("\(total)").font(.system(size: 34, weight: .bold).monospacedDigit())
@@ -2039,7 +2144,7 @@ private struct PointsCalculator: View {
                 Picker("", selection: $ee) { ForEach(["A", "B", "C", "D", "E"], id: \.self) { Text($0).tag($0) } }.pickerStyle(.segmented).labelsHidden().frame(width: 170)
             }
             ForEach(problems, id: \.self) { Text($0).font(.system(size: 12)).foregroundStyle(.red) }
-            Text("Also needed for a diploma: CAS completed, at least 12 points from HL subjects and 9 from SL, and no academic misconduct.")
+            Text("Also needed for a diploma: CAS completed and no academic misconduct. HL and SL minimums are checked when your subjects say HL or SL.")
                 .font(.system(size: 11.5)).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
         }
     }

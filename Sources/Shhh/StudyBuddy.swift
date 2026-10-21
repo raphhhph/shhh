@@ -73,7 +73,16 @@ enum StudyBuddy {
             ("English B", ["english b", "eng b"]),
             ("Spanish", ["spanish", "español", "espanol"]),
         ]
-        return keys.first { entry in entry.1.contains { words.contains($0) } }?.0
+        // An alias counts at the start of a word: "ess" is ESS, but not the end of "business" or "assessment".
+        func starts(_ alias: String) -> Bool {
+            var search = words.startIndex..<words.endIndex
+            while let found = words.range(of: alias, range: search) {
+                if found.lowerBound == words.startIndex || !words[words.index(before: found.lowerBound)].isLetter { return true }
+                search = words.index(after: found.lowerBound)..<words.endIndex
+            }
+            return false
+        }
+        return keys.first { entry in entry.1.contains(where: starts) }?.0
     }
 
     private static let markPattern = #"<mark\s[^>]*/?>"#
@@ -117,6 +126,7 @@ enum StudyBuddy {
     static var instructions: String {
         let exe = Bundle.main.executablePath ?? "Joe"
         let files = schoolFolder == nil ? nil : Daybook.root?.appendingPathComponent("_files/School", isDirectory: true)
+        let due = StudyReview.lines(StudyReview.due(), limit: 5)
         return """
 
 
@@ -130,8 +140,8 @@ enum StudyBuddy {
             for the topic, and for PDFs\(files.map { " in \($0.path)/<subject>" } ?? "") such as textbooks, \
             glossaries and exam guidance, find pages with "\(exe)" --pdf-find "<pdf>" "<topic>" and read them \
             with --pdf-text "<pdf>" "<pages>". Ask about what they were taught, in its terms.
-            - No topic given: read \(logURL.path) and pick one they scored low on or haven't done yet, preferring \
-            a subject with a test or deadline coming up.
+            - No topic given: \(due.isEmpty ? "" : "start with a topic due for review (spaced repetition from their quiz log):\n\(due)\n  Otherwise ")read \(logURL.path) and pick one they scored low on or haven't done yet, preferring \
+            a subject with a test or deadline coming up. "What should I revise?": the due topics first.
             - One question at a time, in IB style: a command term and the marks, e.g. "Explain how a subsidy on \
             solar panels affects producers. [4]". Mix definitions, application to a short made-up context, \
             calculations and exam-style questions. Never give the answer with the question. Read aloud, say \

@@ -122,6 +122,9 @@ final class NotchOverview {
             guard let self else { return }
             data.toggle(line)
             model.fill(from: data, tasks: runningTasks())
+        }, buildDaybook: { [weak self] in
+            self?.hide()
+            self?.data.actions.askInBackground("Build today's Daybook now (how: your instructions), then tell me my five things in one short line.")
         }))
         panel.orderFrontRegardless()
         NotchSpace.pin(panel)
@@ -179,6 +182,8 @@ private struct OverviewView: View {
     var focus: (Int) -> Void = { _ in }
     /// Ticks a task in today's Daybook on or off, by its line.
     var tick: (String) -> Void = { _ in }
+    /// Has Joe build today's Daybook now, in the side notch.
+    var buildDaybook: () -> Void = {}
 
     /// One-tap questions a student asks most, short enough for a tile.
     private static let quickAsks: [(label: String, request: String)] = [
@@ -247,7 +252,16 @@ private struct OverviewView: View {
                     .help("Help me start this")
                 }
             case .today:
-                if model.today.isEmpty { empty("No Daybook yet") }
+                if model.today.isEmpty {
+                    empty("No Daybook yet")
+                    Button { buildDaybook() } label: {
+                        Text("Build it").font(.system(size: 11.5, weight: .semibold)).fixedSize()
+                            .padding(.horizontal, 8).frame(height: 22)
+                            .background(Color.orange.opacity(0.85), in: Capsule())
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
                 ForEach(Array(model.today.enumerated()), id: \.offset) { _, task in
                     // Tick it off from the notch, without opening the dashboard.
                     Button { tick(task.line) } label: {

@@ -214,6 +214,11 @@ final class SpeechOutput {
 
     private var lastSpoke = Date()
 
+    /// The Mandarin voice, downloaded and loaded now (onboarding's "Get Joe ready").
+    func prepareMandarin() {
+        Task { _ = try? await neural.loadMandarin() }
+    }
+
     /// Loads Alba even with the voice off, for the welcome tour, so she's ready when Joe speaks.
     func prepareForTour() {
         Task { await neural.prepare(.lifelike) }
@@ -270,6 +275,12 @@ final class SpeechOutput {
                     }
                 } catch {
                     if ProcessInfo.processInfo.environment["SHHH_VOICE_LOG"] != nil { print("voice error:", error) }
+                    // The voice isn't there (still downloading, or broken): the Mac's own says it.
+                    if first == nil {
+                        let utterance = AVSpeechUtterance(string: sentence)
+                        utterance.voice = Self.appleVoice(for: sentence)
+                        self.apple.speak(utterance)
+                    }
                     continue
                 }
                 guard !Task.isCancelled else { break }
@@ -400,10 +411,14 @@ private final class NeuralVoices {
         status = "Getting the voice ready…"
         defer { status = nil }
         let manager = PocketTtsManager(defaultVoice: SpeechOutput.lifelikeVoice)
-        try await manager.initialize()
+        ModelGuard.willLoad(.voice)
+        do { try await manager.initialize() } catch { ModelGuard.didFail(.voice, error); throw error }
+        ModelGuard.didLoad(.voice)
         pocket = manager
         return manager
     }
+
+    func loadMandarin() async throws { _ = try await chineseManager(voice: SpeechOutput.chineseVoice) }
 
     private func chineseManager(voice: String) async throws -> KokoroAneManager {
         if let kokoroChinese, kokoroChineseVoice == voice { return kokoroChinese }
@@ -411,7 +426,9 @@ private final class NeuralVoices {
         defer { status = nil }
         let version: KokoroAneVersion = if #available(macOS 15, *) { .v3 } else { .legacy }
         let manager = kokoroChinese ?? KokoroAneManager(variant: .mandarin, defaultVoice: voice, version: version)
-        try await manager.initialize(preloadVoices: [voice])
+        ModelGuard.willLoad(.mandarin)
+        do { try await manager.initialize(preloadVoices: [voice]) } catch { ModelGuard.didFail(.mandarin, error); throw error }
+        ModelGuard.didLoad(.mandarin)
         kokoroChinese = manager
         kokoroChineseVoice = voice
         return manager

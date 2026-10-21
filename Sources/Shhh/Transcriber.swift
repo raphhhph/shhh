@@ -36,11 +36,15 @@ actor Transcriber {
         // enough for a few seconds of speech.
         let gpu = MLModelConfiguration()
         gpu.computeUnits = .cpuAndGPU
-        let models = try await AsrModels.downloadAndLoad(configuration: gpu, version: Self.languages == .european ? .redux : .v2,
+        ModelGuard.willLoad(.speech)
+        let models: AsrModels
+        do { models = try await AsrModels.downloadAndLoad(configuration: gpu, version: Self.languages == .european ? .redux : .v2,
                                                          encoderComputeUnits: .cpuAndGPU,
-                                                         progressHandler: { progress($0.fractionCompleted) })
+                                                         progressHandler: { progress($0.fractionCompleted) }) }
+        catch { ModelGuard.didFail(.speech, error); throw error }
         let manager = AsrManager(config: .default)
         try await manager.loadModels(models)
+        ModelGuard.didLoad(.speech)
         self.manager = manager
         // Warm up so the first real dictation is fast.
         _ = try? await transcribe([Float](repeating: 0, count: 16_000))
@@ -55,7 +59,11 @@ actor Transcriber {
         guard chinese == nil, !loadingChinese else { return }
         loadingChinese = true
         // Text-norm 14 ("withitn"): punctuation and numbers as digits, like Parakeet's output.
-        if let models = try? await Self.loadSenseVoiceOnGPU() {
+        ModelGuard.willLoad(.chinese)
+        let loaded: SenseVoiceModels?
+        do { loaded = try await Self.loadSenseVoiceOnGPU() } catch { ModelGuard.didFail(.chinese, error); loaded = nil }
+        if let models = loaded {
+            ModelGuard.didLoad(.chinese)
             let manager = SenseVoiceManager(models: models, textNorm: 14)
             // Its first run is when macOS compiles it for the Neural Engine (minutes after an
             // update). Done here, on silence, before it's used: a real request used to wait behind it,

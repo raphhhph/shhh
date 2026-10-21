@@ -18,6 +18,8 @@ final class Onboarding: NSObject, NSWindowDelegate {
         var isSpeaking: () -> Bool
         /// Loads his voice early, so the tour isn't silent while it loads.
         var prepareVoice: () -> Void
+        /// "Get Joe ready": starts (or retries) one model's download.
+        var download: (ModelGuard.Model) -> Void = { _ in }
         var chooseVault: () -> Void
         var finished: () -> Void
     }
@@ -32,7 +34,6 @@ final class Onboarding: NSObject, NSWindowDelegate {
     var isVisible: Bool { window?.isVisible == true }
 
     func show() {
-        model.actions.prepareVoice()
         model.step = .hello
         model.heard = nil
         if window == nil {
@@ -64,7 +65,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
 
 @MainActor
 final class OnboardingModel: ObservableObject {
-    enum Step: Int, CaseIterable { case hello, name, tour, school, notes, permissions, claude, connect, tryIt, done }
+    enum Step: Int, CaseIterable { case hello, name, models, tour, school, notes, permissions, claude, connect, tryIt, done }
 
     @Published var step: Step = .hello
     @Published var heard: String?
@@ -123,6 +124,7 @@ private struct OnboardingView: View {
                     case .school: SchoolStep(model: model)
                     case .notes: NotesStep(model: model)
                     case .connect: ConnectStep(model: model)
+                    case .models: ModelsStep(model: model)
                     case .permissions: PermissionsStep(model: model)
                     case .claude: ClaudeStep(model: model)
                     case .tryIt: TryStep(model: model)
@@ -679,6 +681,64 @@ private struct SchoolStep: View {
     }
 }
 
+/// "Get Joe ready": the downloads, each started here with its size and progress, and Retry if the
+/// internet drops. Continue works while they download.
+private struct ModelsStep: View {
+    @ObservedObject var model: OnboardingModel
+    @State private var tick = 0
+    private let timer = Timer.publish(every: 0.7, on: .main, in: .common).autoconnect()
+
+    private var models: [ModelGuard.Model] {
+        Transcriber.languages == .chinese ? [.speech, .chinese, .voice, .mandarin] : [.speech, .voice]
+    }
+
+    var body: some View {
+        StepFrame(model: model, title: "Get Joe ready", subtitle: "Joe runs on this Mac: speech and his voice download once (about \(String(format: "%.1f", models.reduce(0) { $0 + $1.megabytes } / 1024)) GB). You can continue while they download.") {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(models) { item in row(item) }
+                HStack {
+                    Primary(title: "Download all", enabled: models.contains { ModelGuard.status($0) != .ready }) {
+                        for item in models where ModelGuard.status(item) != .ready { model.actions.download(item) }
+                    }
+                    .frame(width: 180)
+                    Spacer()
+                    Text("In mainland China without a VPN: Settings → Advanced → Download models from → China mirror.")
+                        .font(.system(size: 11.5)).foregroundStyle(Tint.soft).frame(maxWidth: 360, alignment: .trailing)
+                }
+                .padding(.top, 6)
+            }
+            .id(tick)
+        }
+        .onReceive(timer) { _ in tick += 1 }
+    }
+
+    private func row(_ item: ModelGuard.Model) -> some View {
+        let status = ModelGuard.status(item)
+        return HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.title).font(.system(size: 14.5, weight: .semibold))
+                switch status {
+                case .notDownloaded: Text("\(Int(item.megabytes)) MB").font(.system(size: 12)).foregroundStyle(Tint.soft)
+                case .downloading(let fraction):
+                    ProgressView(value: fraction).tint(Tint.accent).frame(maxWidth: 380)
+                    Text("\(Int(fraction * 100))% of \(Int(item.megabytes)) MB").font(.system(size: 11.5)).foregroundStyle(Tint.soft)
+                case .ready: Label("Ready", systemImage: "checkmark.circle.fill").font(.system(size: 12.5)).foregroundStyle(.green)
+                case .failed(let message): Text(message).font(.system(size: 12)).foregroundStyle(.orange).lineLimit(2)
+                }
+            }
+            Spacer()
+            switch status {
+            case .notDownloaded: Primary(title: "Download", enabled: true) { model.actions.download(item) }.frame(width: 130)
+            case .failed: Primary(title: "Retry", enabled: true) { model.actions.download(item) }.frame(width: 130)
+            default: EmptyView()
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Tint.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
 /// Everything Joe reads, connected here once: ManageBac and Google by their calendar links (or the
 /// Mac's Calendar), and Spotify. All optional; each is one paste or one click.
 private struct ConnectStep: View {
@@ -1009,7 +1069,7 @@ extension Onboarding {
     /// `Joe --onboarding-snapshot <step> <file.png>`: one step of the welcome, drawn off screen.
     @MainActor static func snapshot(step: String, to file: URL, done: @escaping () -> Void) {
         let model = OnboardingModel(actions: .init(greet: { _, _ in }, narrate: { _, _ in }, isSpeaking: { false },
-                                                   prepareVoice: {}, chooseVault: {}, finished: {}))
+                                                   prepareVoice: {}, download: { _ in }, chooseVault: {}, finished: {}))
         model.step = OnboardingModel.Step.allCases.first { "\($0)" == step } ?? .hello
         let view = NSHostingView(rootView: OnboardingView(model: model).environment(\.colorScheme, .dark))
         let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 960, height: 660), styleMask: [.borderless], backing: .buffered, defer: false)

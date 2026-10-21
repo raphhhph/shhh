@@ -57,6 +57,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         },
         isSpeaking: { [weak self] in self?.speech.isSpeaking ?? false },
         prepareVoice: { [weak self] in if SpeechOutput.engine == .off { self?.speech.prepareForTour() } },
+        download: { [weak self] model in
+            guard let self else { return }
+            switch model {
+            case .speech, .chinese: if ModelGuard.status(model) == .ready { return }; self.speechReady ? self.reloadSpeechModel() : self.loadSpeechModel()
+            case .voice: self.speech.prepareForTour()
+            case .mandarin: self.speech.prepareMandarin()
+            }
+        },
         chooseVault: { [weak self] in self?.chooseMemoryVault() },
         finished: { [weak self] in
             Profile.isSetUp = true
@@ -234,6 +242,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ModelDownloads.apply() // Hugging Face or the China mirror, before any model loads
+        // Crashed while loading a model last time (a broken download): its files go, it downloads again.
+        if let broken = ModelGuard.recoverFromCrash() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                MainActor.assumeIsolated { self?.toast.show("\(broken.title): the download was broken, so it's downloading again", symbol: "arrow.down.circle", tint: .orange) }
+            }
+        }
         AppAppearance.apply() // light, dark or the Mac's
         phone.run = { [weak self] request, done in self?.startInBackground(request, onFinished: done) }
         wake.canListen = { [weak self] in

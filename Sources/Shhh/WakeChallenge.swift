@@ -90,8 +90,12 @@ struct WakeChallenge: Equatable {
 
     /// Reading counts when at least 60% of the passage's words were heard, in any order (speech
     /// recognition mishears old words like "thee" and "hath"; a mumbled half doesn't pass).
+    /// Chinese in a fact ("尊敬的 opens a formal letter") is counted a character at a time, and only
+    /// when the speech recogniser wrote Chinese: the English one hears 尊敬的 as "zun jing de" or
+    /// nonsense, which made the Chinese B facts nearly impossible to pass.
     static func readAloud(_ heard: String, matches passage: String) -> Bool {
-        let target = words(passage)
+        let hanzi = heard.unicodeScalars.contains(where: isHan)
+        let target = words(passage).filter { hanzi || !$0.unicodeScalars.contains(where: isHan) }
         let said = Set(words(heard))
         guard !target.isEmpty else { return true }
         let found = target.filter { said.contains($0) }.count
@@ -116,7 +120,15 @@ struct WakeChallenge: Equatable {
         let small: Set = ["the", "a", "an", "and", "of", "to", "in", "is", "it", "for", "on", "be", "as", "that", "with"]
         return text.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { $0.count > 1 && !small.contains($0) }
+            .flatMap { word -> [String] in
+                // Chinese has no spaces: each character is a word.
+                word.unicodeScalars.contains(where: isHan) ? word.map(String.init) : [word]
+            }
+            .filter { ($0.count > 1 || $0.unicodeScalars.contains(where: isHan)) && !small.contains($0) }
+    }
+
+    private static func isHan(_ scalar: Unicode.Scalar) -> Bool {
+        (0x4E00...0x9FFF).contains(scalar.value) || (0x3400...0x4DBF).contains(scalar.value)
     }
 
     // MARK: Content

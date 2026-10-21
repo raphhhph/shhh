@@ -75,14 +75,14 @@ enum AlarmStore {
         save(load() + [alarm])
     }
 
-    /// Cancels the ones whose title contains `words` (all of them for nil). Returns how many.
-    @discardableResult
     /// A wake-up challenge alarm in its last hour: it can't be cancelled, only solved. Otherwise,
     /// half asleep, "cancel my alarm" at 7:27 beat the 7:30 challenge (it happened).
     static func isLocked(_ alarm: Alarm) -> Bool {
         WakeChallenge.applies(to: alarm) && alarm.fireAt.timeIntervalSinceNow < 3600 && alarm.fireAt > Date()
     }
 
+    /// Cancels the ones whose title contains `words` (all of them for nil). Returns how many.
+    @discardableResult
     static func cancel(matching words: String?, kind: Alarm.Kind? = nil) -> Int {
         let all = load()
         let keep = all.filter { alarm in
@@ -408,8 +408,18 @@ final class AlarmClock {
         AlarmStore.save(known)
         modified = (try? AlarmStore.url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
         stayAwake(!known.isEmpty)
+        // The Mac was asleep through it (lid closed overnight): a 7:30 wake-up ringing at 14:00 with
+        // a challenge helps nobody, so one that's long past only says it was missed.
+        if Date().timeIntervalSince(due.fireAt) > Self.tooLate {
+            onNotice("Missed while the Mac was asleep: \(due.title) (\(due.fireAt.formatted(date: .omitted, time: .shortened)))")
+            tick() // the next one, if it's due too
+            return
+        }
         ring(due)
     }
+
+    /// How late an alarm may still ring (seconds).
+    static let tooLate: TimeInterval = 30 * 60
 
     /// A pending alarm keeps the Mac from idling to sleep and Shhh out of App Nap, so it rings on time.
     private func stayAwake(_ yes: Bool) {
@@ -447,7 +457,15 @@ final class AlarmClock {
         // A morning alarm only stops once they've read the verse or fact, or answered the question.
         let challenge = WakeChallenge.applies(to: alarm)
         // The second alarm of a morning gets a different challenge from the first.
-        model.challenge = challenge ? WakeChallenge.today(seed: WakeChallenge.nextRing()) : nil
+        if challenge {
+            let seed = WakeChallenge.nextRing()
+            var next = WakeChallenge.today(seed: seed)
+            // Back from a snooze: a question to answer, not something to read half asleep.
+            for extra in 1...2 where snoozedThisMorning && next.kind != .question { next = WakeChallenge.today(seed: seed + extra) }
+            model.challenge = next
+        } else {
+            model.challenge = nil
+        }
         model.feedback = nil
         model.heard = nil
         model.canSnooze = !challenge || !snoozedThisMorning
@@ -506,6 +524,9 @@ final class AlarmClock {
         snoozing = false
         alarm.id = UUID()
         alarm.fireAt = Date().addingTimeInterval(Double(minutes) * 60)
+        // A one-off: the repeating alarm is already back in for tomorrow. Kept repeating, each snooze
+        // of a daily 7:30 left another daily alarm behind (7:35, then 7:40…).
+        alarm.repeats = nil
         AlarmStore.add(alarm)
         tick()
         onNotice("Snoozed \(minutes) min: \(alarm.title)")

@@ -688,7 +688,7 @@ private struct AlarmView: View {
                             .lineLimit(1).minimumScaleFactor(0.8)
                         Spacer(minLength: 8)
                         if model.canSnooze {
-                            Button("Snooze 5 min (once)", action: model.onSnooze).buttonStyle(AlarmButton(prominent: false))
+                            Button("Snooze 5 min (once)", action: model.onSnooze).buttonStyle(AlarmButton(prominent: false)).focusEffectDisabled()
                         }
                     }
                 }
@@ -698,8 +698,8 @@ private struct AlarmView: View {
                     Text("Say “stop” or “snooze”").font(.system(size: 12)).foregroundStyle(Color.white.opacity(0.45))
                         .lineLimit(1).minimumScaleFactor(0.8)
                     Spacer(minLength: 8)
-                    Button("Snooze 5 min", action: model.onSnooze).buttonStyle(AlarmButton(prominent: false))
-                    Button("Stop", action: model.onStop).buttonStyle(AlarmButton(prominent: true))
+                    Button("Snooze 5 min", action: model.onSnooze).buttonStyle(AlarmButton(prominent: false)).focusEffectDisabled()
+                    Button("Stop", action: model.onStop).buttonStyle(AlarmButton(prominent: true)).focusEffectDisabled()
                 }
                 .padding(.horizontal, 16).padding(.vertical, 14)
             }

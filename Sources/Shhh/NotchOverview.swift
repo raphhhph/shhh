@@ -217,10 +217,16 @@ private struct OverviewView: View {
             case .dueSoon:
                 if model.deadlines.isEmpty { empty("Nothing due soon") }
                 ForEach(model.deadlines) { item in
-                    HStack(alignment: .firstTextBaseline, spacing: 5) {
-                        Text(item.start.formatted(.dateTime.weekday(.abbreviated))).font(.system(size: 10.5, weight: .bold)).foregroundStyle(.red.opacity(0.85))
-                        Text(item.title).font(.system(size: 11.5)).lineLimit(2)
+                    // Tap one: Joe breaks it into steps and plans the first.
+                    Button { ask(item.startRequest) } label: {
+                        HStack(alignment: .firstTextBaseline, spacing: 5) {
+                            Text(item.start.formatted(.dateTime.weekday(.abbreviated))).font(.system(size: 10.5, weight: .bold)).foregroundStyle(.red.opacity(0.85))
+                            Text(item.title).font(.system(size: 11.5)).lineLimit(2).multilineTextAlignment(.leading)
+                        }
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .help("Help me start this")
                 }
             case .today:
                 if model.today.isEmpty { empty("No Daybook yet") }

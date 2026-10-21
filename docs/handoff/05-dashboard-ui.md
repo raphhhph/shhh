@@ -20,4 +20,5 @@ The dashboard window: pages Home, Calendar, Study, History, Routines, Alarms, No
 ## Known issues / to-do
 - "Less default SwiftUI": switches and segmented pickers are now Joe's own (Oct 2026). The alarm time is a `TimeDial` (big hours and minutes with steps; minutes by five) and the timeline colour a `SwatchPicker` (a popover of eight colours). Still to do: History, Dictionary, Spotify pages beyond their pickers.
 - Declutter: Home's Recent is three lines with "All history" (Oct 2026); the sidebar footer is the other candidate.
+- Due soon rows show a Start button on hover (Home and Calendar): Joe breaks the deadline into steps and plans the first one tonight (`CalendarFeed.Item.startRequest`). In the notch overview, tapping a deadline does the same.
 - Empty states should offer the fix, not just say what's missing: Due soon shows "Link ManageBac" (opens Settings → General via `DashboardModel.openSettings`) until the calendar has synced.

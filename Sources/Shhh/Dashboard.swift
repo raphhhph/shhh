@@ -682,7 +682,7 @@ private struct HomePage: View {
                 }
             }
             DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil, stretch: true,
-                    connect: { model.openSettings("general") }) { model.page = .calendar }
+                    connect: { model.openSettings("general") }, start: { model.actions.ask($0.startRequest) }) { model.page = .calendar }
                 .frame(width: narrow ? nil : 320)
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -834,7 +834,10 @@ private struct DueSoon: View {
     var stretch = false
     /// Where ManageBac's calendar link goes in: shown while nothing has come in yet.
     var connect: (() -> Void)?
+    /// "Start": Joe breaks the deadline into steps and plans the first one.
+    var start: ((CalendarFeed.Item) -> Void)?
     var open: () -> Void
+    @State private var hovered: String?
 
     var body: some View {
         Card(title: "Due soon", symbol: "flag", stretch: stretch) {
@@ -864,12 +867,19 @@ private struct DueSoon: View {
                             }
                         }
                         Spacer(minLength: 4)
-                        Text(days == 0 ? "Today" : days == 1 ? "Tomorrow" : "\(days) days")
-                            .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundStyle(days <= 1 ? Look.deadline : days <= 3 ? Color.orange : .secondary)
+                        if let start, hovered == item.id {
+                            Button { start(item) } label: { Label("Start", systemImage: "play.fill") }
+                                .buttonStyle(PillButton(prominent: true))
+                                .help("Joe breaks it into steps and plans the first one tonight")
+                        } else {
+                            Text(days == 0 ? "Today" : days == 1 ? "Tomorrow" : "\(days) days")
+                                .font(.system(size: 11.5, weight: .semibold))
+                                .foregroundStyle(days <= 1 ? Look.deadline : days <= 3 ? Color.orange : .secondary)
+                        }
                     }
                     .padding(.vertical, 6)
                     .contentShape(Rectangle())
+                    .onHover { inside in hovered = inside ? item.id : (hovered == item.id ? nil : hovered) }
                     .onTapGesture(perform: open)
                 }
             }
@@ -1549,7 +1559,8 @@ private struct CalendarPage: View {
                 } else {
                     if let selected { detail(selected) }
                     Card { week(dates, items, now) }
-                    DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil, connect: { model.openSettings("general") }) {}
+                    DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil, connect: { model.openSettings("general") },
+                    start: { model.actions.ask($0.startRequest) }) {}
                 }
             }
         }
@@ -1796,7 +1807,8 @@ private struct CalendarPage: View {
     private func rail(_ now: Date) -> some View {
         VStack(spacing: 16) {
             if let selected { detail(selected) }
-            DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil, connect: { model.openSettings("general") }) {}
+            DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil, connect: { model.openSettings("general") },
+                    start: { model.actions.ask($0.startRequest) }) {}
             Card(title: "Subjects", symbol: "square.grid.2x2") {
                 VStack(alignment: .leading, spacing: 7) {
                     ForEach(SubjectGroup.allCases, id: \.self) { group in

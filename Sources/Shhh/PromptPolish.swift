@@ -13,13 +13,20 @@ enum PromptPolish {
     }
 
     static func polish(_ said: String) async -> String {
-        guard let claude = Assistant.executable else { return said }
         let system = """
             Rewrite what the user dictated as a clear prompt for an AI assistant (ChatGPT, Claude, Cursor), in their \
             voice ("I", "my"). Keep every fact and request they gave; invent nothing. Structure: the goal in one line; \
             the context; constraints or requirements as a short list if there are several; the output format they \
             want. Plain text, no headings unless it's long, no preamble. Reply with the prompt only.
             """
+        // ChatGPT mode (or no Claude Code): the same through Codex.
+        guard !AIAccount.usesChatGPT, let claude = Assistant.executable else {
+            return await withCheckedContinuation { continuation in
+                DispatchQueue.global().async {
+                    continuation.resume(returning: CodexAccount.quickAnswer(system + "\n\nWhat they dictated:\n" + said, timeout: 15) ?? said)
+                }
+            }
+        }
         return await withCheckedContinuation { continuation in
             DispatchQueue.global().async {
                 let process = Process()

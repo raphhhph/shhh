@@ -41,6 +41,7 @@ enum Vocabulary {
 
     /// The transcript with the user's words spelled their way.
     static func apply(_ text: String) -> String {
+        let text = withoutStutters(text)
         let file = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         var terms: [String] = []
         var swaps: [(String, String)] = []
@@ -106,6 +107,21 @@ enum Vocabulary {
         var result = text
         for (range, term) in replacements.reversed() { result.replaceSubrange(range, with: term) }
         return result
+    }
+
+    /// SenseVoice sometimes writes the end of a word twice: "knowledgege", "internalnal" (seen with
+    /// `say` recordings on the nightly, 21 Oct). A word that ends in a repeated piece of 2 to 4 letters,
+    /// isn't a word itself, and is one without the repeat, loses the repeat. "banana" stays: it's a word.
+    static func withoutStutters(_ text: String) -> String {
+        var text = text
+        for match in text.matches(of: #/(?<!\p{L})\p{L}*(\p{L}{2,4})\1(?!\p{L})/#).reversed() {
+            let word = String(text[match.range])
+            let repeated = match.output.1.count
+            let fixed = String(word.dropLast(repeated))
+            guard fixed.count >= 4, !isWord(word), isWord(fixed) else { continue }
+            text.replaceSubrange(match.range, with: fixed)
+        }
+        return text
     }
 
     private static func normalize(_ text: String) -> String {

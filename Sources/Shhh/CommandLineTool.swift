@@ -354,6 +354,10 @@ enum CommandLineTool {
             print(Daybook.instructions)
             print("\n--- If it had to build today's:\n" + Daybook.buildRules)
             exit(0)
+        case ("--timetable-import", 2...):
+            // Joe --timetable-import <photo or pdf> ["Day 3"]: reads a timetable and saves timetable.json.
+            let file = URL(fileURLWithPath: args[1])
+            run { print(await Daybook.importTimetable(from: file, dayToday: args.count > 2 ? args[2] : nil)) }
         case ("--daybook-preview", 1):
             // Joe --daybook-preview: the Daybook Joe would build this morning by himself (nothing is written).
             print(Daybook.localText() ?? "No notes vault set.")

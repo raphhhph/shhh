@@ -135,7 +135,13 @@ enum Daybook {
             default: return nil
             }
         }
-        return "Day \(rotation) · Cycle \(cycle): " + periods.joined(separator: ", ")
+        return (dayLabel(rotation, cycle).map { "\($0): " } ?? "") + periods.joined(separator: ", ")
+    }
+
+    /// "Day 9 · Cycle B", "Day 3" for a rotation without cycles, nil for a weekly timetable.
+    private static func dayLabel(_ rotation: String, _ cycle: String) -> String? {
+        guard Int(rotation) != nil else { return nil }
+        return cycle.isEmpty ? "Day \(rotation)" : "Day \(rotation) · Cycle \(cycle)"
     }
 
     /// One thing on today's timeline: a class, a calendar event or an alarm.
@@ -382,7 +388,7 @@ enum Daybook {
             return "No school today."
         }
         let grid = timetable.grids[entry[1].text + entry[2].text] ?? []
-        var rows = ["Day \(entry[1].text) · Cycle \(entry[2].text)", "", "| Period | Time | Class | Room |", "|---|---|---|---|"]
+        var rows = (dayLabel(entry[1].text, entry[2].text).map { [$0, ""] } ?? []) + ["| Period | Time | Class | Room |", "|---|---|---|---|"]
         for row in timetable.rows {
             switch row.kind {
             case "class":
@@ -397,6 +403,9 @@ enum Daybook {
         }
         return rows.joined(separator: "\n")
     }
+
+    /// Forgets the timetable read, so a new one is read at once.
+    static func timetableChanged() { cachedTimetable = nil }
 
     // MARK: - Instructions for the assistant
 
@@ -517,6 +526,119 @@ enum Daybook {
             .compactMap { try? String(contentsOf: $0, encoding: .utf8) }
             .flatMap { $0.components(separatedBy: "\n").filter { $0.hasPrefix("- ") } }
         return Array(lines.suffix(limit))
+    }
+}
+
+// MARK: - Timetable from a photo or PDF
+
+extension Daybook {
+    /// Reads a timetable from a photo, screenshot or PDF and saves it as timetable.json, so a new
+    /// student has classes, Now/Next and the Daybook's Classes from the first day. Claude (Sonnet,
+    /// with only the Read tool) reads the file; the dates are worked out here. A weekly timetable
+    /// repeats Monday to Friday; a rotation ("Day 1" to "Day 8") moves on one day per weekday, from
+    /// `dayToday` ("Day 3", or "3") or else Day 1 today. School holidays aren't known, so they
+    /// show as school days. An earlier timetable goes to the Trash. Returns a line to show: what
+    /// was saved, or what went wrong.
+    @MainActor
+    static func importTimetable(from file: URL, dayToday: String? = nil) async -> String {
+        guard let target = timetableURL else { return "Choose your notes folder first: the timetable is saved there." }
+        guard let executable = Assistant.executable else { return "Joe needs Claude set up to read a timetable." }
+        let prompt = """
+            Read the file \(file.lastPathComponent) in this folder with the Read tool. It's a student's school timetable.
+            Reply with JSON only, no other text:
+            {"periods": [{"label": "1", "start": "08:30", "end": "09:20"}, …],
+             "days": [{"day": "Monday", "classes": ["Economics HL · D304", "—", …]}, …]}
+            - periods: the timetable's lessons in order, with 24-hour times. Leave out breaks and lunch. Advisory, \
+            homeroom or tutor time is a period labelled "Advisory".
+            - days: each column or day as printed ("Monday", or "Day 1" for a rotation), in order. classes has one \
+            entry per period, in the same order: the class name as printed with its level (HL/SL) when shown, then \
+            " · " and the room when shown, or "—" for a free period. Spell out short names only when the timetable \
+            itself does.
+            If it isn't a timetable, reply {"error": "<what it is>"}.
+            """
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = ["-p", "--model", Assistant.Model.sonnet.rawValue, "--tools", "Read", "--allowedTools", "Read",
+                             "--strict-mcp-config", "--setting-sources", "user", "--disable-slash-commands",
+                             "--no-session-persistence", "--output-format", "text"]
+        process.environment = Assistant.environment()
+        process.currentDirectoryURL = file.deletingLastPathComponent()
+        let input = Pipe(), output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        let reply: String? = await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                guard (try? process.run()) != nil else { return continuation.resume(returning: nil) }
+                let timeout = DispatchWorkItem { process.terminate() }
+                DispatchQueue.global().asyncAfter(deadline: .now() + 180, execute: timeout)
+                input.fileHandleForWriting.write(Data(prompt.utf8))
+                try? input.fileHandleForWriting.close()
+                let data = output.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                timeout.cancel()
+                continuation.resume(returning: String(data: data, encoding: .utf8))
+            }
+        }
+        guard let reply, let open = reply.firstIndex(of: "{"), let close = reply.lastIndex(of: "}"),
+              let json = try? JSONSerialization.jsonObject(with: Data(reply[open...close].utf8)) as? [String: Any] else {
+            return "Joe couldn't read that timetable. Try a clearer photo or the PDF."
+        }
+        if let error = json["error"] as? String { return "That doesn't look like a timetable (\(error))." }
+        let periods = (json["periods"] as? [[String: String]] ?? []).filter { $0["start"] != nil && $0["end"] != nil }
+        let days = (json["days"] as? [[String: Any]] ?? []).compactMap { entry -> (label: String, classes: [String])? in
+            guard let label = entry["day"] as? String, let classes = entry["classes"] as? [String], !classes.isEmpty else { return nil }
+            return (label, classes)
+        }
+        guard !periods.isEmpty, !days.isEmpty else { return "Joe couldn't find the periods and days in that timetable." }
+        guard let saved = timetableJSON(periods: periods, days: days, dayToday: dayToday) else {
+            return "Joe couldn't work out the days of that timetable."
+        }
+        let manager = FileManager.default
+        try? manager.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if manager.fileExists(atPath: target.path) { try? manager.trashItem(at: target, resultingItemURL: nil) }
+        guard (try? saved.write(to: target)) != nil else { return "Joe couldn't save the timetable." }
+        timetableChanged()
+        let classes = Set(days.flatMap(\.classes).filter { $0 != "—" }.map { $0.components(separatedBy: " · ")[0] })
+        return "Saved your timetable: \(days.count) days, \(periods.count) periods, \(classes.count) classes."
+    }
+
+    /// timetable.json in the shape `Timetable` reads: dates for the next half year, each with its
+    /// timetable day; a grid of classes per day; the periods as rows.
+    static func timetableJSON(periods: [[String: String]], days: [(label: String, classes: [String])], dayToday: String?,
+                              from now: Date = Date()) -> Data? {
+        let weekdays = ["sun": 1, "mon": 2, "tue": 3, "wed": 4, "thu": 5, "fri": 6, "sat": 7]
+        func weekday(_ label: String) -> Int? { weekdays[String(label.lowercased().trimmingCharacters(in: .whitespaces).prefix(3))] }
+        let weekly = days.allSatisfy { weekday($0.label) != nil }
+        // Grid keys are rotation + cycle; the cycle is left empty here.
+        let keys = days.enumerated().map { weekly ? String($0.element.label.prefix(3)) : String($0.offset + 1) }
+        var grids: [String: [String]] = [:]
+        for (key, day) in zip(keys, days) { grids[key] = day.classes }
+        let rows: [[String: Any]] = periods.enumerated().map { index, period -> [String: Any] in
+            let label = period["label"] ?? String(index + 1)
+            if label.lowercased().range(of: #"advisory|homeroom|tutor"#, options: .regularExpression) != nil {
+                return ["kind": "advisory", "start": period["start"] ?? "", "end": period["end"] ?? ""]
+            }
+            return ["kind": "class", "start": period["start"] ?? "", "end": period["end"] ?? "", "idx": index,
+                    "p": label.replacingOccurrences(of: #"^(P|Period)\s*"#, with: "", options: [.regularExpression, .caseInsensitive])]
+        }
+        let calendar = Calendar.current
+        var position = 0
+        if !weekly, let dayToday, let number = Int(dayToday.filter(\.isNumber)), number >= 1 { position = (number - 1) % days.count }
+        var dated: [[String]] = []
+        for offset in 0..<183 {
+            guard let date = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: now)) else { continue }
+            let number = calendar.component(.weekday, from: date)
+            if weekly {
+                if let index = days.firstIndex(where: { weekday($0.label) == number }) { dated.append([date.formatted(.localDay), keys[index], ""]) }
+            } else if (2...6).contains(number) {
+                dated.append([date.formatted(.localDay), keys[position], ""])
+                position = (position + 1) % days.count
+            }
+        }
+        guard !dated.isEmpty else { return nil }
+        let timetable: [String: Any] = ["days": dated, "grids": grids, "rows": rows, "config": [String: String]()]
+        return try? JSONSerialization.data(withJSONObject: timetable, options: [.prettyPrinted, .sortedKeys])
     }
 }
 

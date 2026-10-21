@@ -17,6 +17,6 @@ Everything Joe draws over other apps: the resting notch band, the recording pill
 - The overview never opens while recording, with the answer card up, an alarm ringing, or the pen open.
 
 ## Known issues / to-do
-- Overview widgets: arranged in Settings → General → Notch → Edit (`WidgetEditor` in `Dashboard.swift`): a mini notch of tiles you drag to reorder (they trade places as you pass), a minus or a drag down to the tray removes one, drag up or tap in the tray adds one. At most `NotchOverview.maxWidgets` (5) fit the 680 pt overview. Next: weather (needs a location without a permission prompt) and a study streak (from the quiz log, once Study records one).
+- Overview widgets: arranged in Settings → General → Notch → Edit (`WidgetEditor` in `Dashboard.swift`): a mini notch of tiles you drag to reorder (they trade places as you pass), a minus or a drag down to the tray removes one, drag up or tap in the tray adds one. At most `NotchOverview.maxWidgets` (5) fit the 780 pt overview. Next: weather (needs a location without a permission prompt) and a study streak (from the quiz log, once Study records one).
 - The overview and pen haven't been tried by hand (no screen access for the agent); check on Raph's built-in display + ultrawide setup.
 - `Joe --overview-preview`, `--alarm-preview` draw them off screen.

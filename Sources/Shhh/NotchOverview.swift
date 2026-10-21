@@ -97,7 +97,7 @@ final class NotchOverview {
         data.reload()
         model.fill(from: data, tasks: runningTasks())
         let notch = Notch.rect(on: screen)
-        let size = NSSize(width: 680, height: 190)
+        let size = NSSize(width: 780, height: 190) // five tiles with room for their words
         let panel = NotchPanel(contentRect: NSRect(x: notch.midX - size.width / 2, y: notch.maxY - size.height, width: size.width, height: size.height),
                                styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .statusBar
@@ -170,7 +170,7 @@ private struct OverviewView: View {
     /// One-tap questions a student asks most, short enough for a tile.
     private static let quickAsks: [(label: String, request: String)] = [
         ("What's due?", "What's due this week?"),
-        ("Plan my evening", "Plan my evening around my deadlines"),
+        ("Plan tonight", "Plan my evening around my deadlines"),
         ("Quiz me", "Quiz me on my weakest subject"),
     ]
 
@@ -217,10 +217,16 @@ private struct OverviewView: View {
             case .dueSoon:
                 if model.deadlines.isEmpty { empty("Nothing due soon") }
                 ForEach(model.deadlines) { item in
-                    HStack(alignment: .firstTextBaseline, spacing: 5) {
-                        Text(item.start.formatted(.dateTime.weekday(.abbreviated))).font(.system(size: 10.5, weight: .bold)).foregroundStyle(.red.opacity(0.85))
-                        Text(item.title).font(.system(size: 11.5)).lineLimit(1)
+                    // Tap one: Joe breaks it into steps and plans the first.
+                    Button { ask(item.startRequest) } label: {
+                        HStack(alignment: .firstTextBaseline, spacing: 5) {
+                            Text(item.start.formatted(.dateTime.weekday(.abbreviated))).font(.system(size: 10.5, weight: .bold)).foregroundStyle(.red.opacity(0.85))
+                            Text(item.title).font(.system(size: 11.5)).lineLimit(2).multilineTextAlignment(.leading)
+                        }
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .help("Help me start this")
                 }
             case .today:
                 if model.today.isEmpty { empty("No Daybook yet") }
@@ -254,8 +260,8 @@ private struct OverviewView: View {
             case .ask:
                 ForEach(Self.quickAsks, id: \.label) { item in
                     Button { ask(item.request) } label: {
-                        Text(item.label).font(.system(size: 11.5, weight: .medium)).lineLimit(1)
-                            .padding(.horizontal, 9).frame(height: 22)
+                        Text(item.label).font(.system(size: 11.5, weight: .medium)).lineLimit(1).fixedSize()
+                            .padding(.horizontal, 8).frame(height: 22)
                             .background(Color.white.opacity(0.1), in: Capsule())
                             .contentShape(Capsule())
                     }
@@ -273,8 +279,8 @@ private struct OverviewView: View {
                     HStack(spacing: 6) {
                         ForEach([25, 50], id: \.self) { minutes in
                             Button { focus(minutes) } label: {
-                                Text("\(minutes) min").font(.system(size: 11.5, weight: .semibold))
-                                    .padding(.horizontal, 9).frame(height: 22)
+                                Text("\(minutes)m").font(.system(size: 11.5, weight: .semibold).monospacedDigit()).fixedSize()
+                                    .padding(.horizontal, 8).frame(height: 22)
                                     .background(Color.orange.opacity(0.85), in: Capsule())
                                     .contentShape(Capsule())
                             }
@@ -303,7 +309,7 @@ extension NotchOverview {
         model.fill(from: data, tasks: ["Consolidating Econ notes"])
         model.widgets = [.clock, .nextClass, .dueSoon, .ask, .focus] // a full row, as wide as on screen
         let host = NSHostingView(rootView: OverviewView(model: model, notchHeight: 32, music: { _ in }))
-        let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 680, height: 190), styleMask: [.borderless], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 780, height: 190), styleMask: [.borderless], backing: .buffered, defer: false)
         window.backgroundColor = .gray
         window.contentView = host
         window.orderFrontRegardless()

@@ -682,7 +682,7 @@ private struct HomePage: View {
                 }
             }
             DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil || CalendarFeed.linksReadAt != nil, stretch: true,
-                    connect: { model.openSettings("general") }) { model.page = .calendar }
+                    connect: { model.openSettings("general") }, start: { model.actions.ask($0.startRequest) }) { model.page = .calendar }
                 .frame(width: narrow ? nil : 320)
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -834,7 +834,10 @@ private struct DueSoon: View {
     var stretch = false
     /// Where ManageBac's calendar link goes in: shown while nothing has come in yet.
     var connect: (() -> Void)?
+    /// "Start": Joe breaks the deadline into steps and plans the first one.
+    var start: ((CalendarFeed.Item) -> Void)?
     var open: () -> Void
+    @State private var hovered: String?
 
     var body: some View {
         Card(title: "Due soon", symbol: "flag", stretch: stretch) {
@@ -857,7 +860,8 @@ private struct DueSoon: View {
                         }
                         .frame(width: 34)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(item.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                            Text(item.title).font(.system(size: 13, weight: .medium)).lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
                             if let group = SubjectGroup.of(item.subject ?? item.title) ?? SubjectGroup.of(item.detail) {
                                 Text(item.subject ?? group.name).font(.system(size: 11)).foregroundStyle(group.color)
                             } else if let subject = item.subject {
@@ -865,12 +869,19 @@ private struct DueSoon: View {
                             }
                         }
                         Spacer(minLength: 4)
-                        Text(days == 0 ? "Today" : days == 1 ? "Tomorrow" : "\(days) days")
-                            .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundStyle(days <= 1 ? Look.deadline : days <= 3 ? Color.orange : .secondary)
+                        if let start, hovered == item.id {
+                            Button { start(item) } label: { Label("Start", systemImage: "play.fill") }
+                                .buttonStyle(PillButton(prominent: true))
+                                .help("Joe breaks it into steps and plans the first one tonight")
+                        } else {
+                            Text(days == 0 ? "Today" : days == 1 ? "Tomorrow" : "\(days) days")
+                                .font(.system(size: 11.5, weight: .semibold))
+                                .foregroundStyle(days <= 1 ? Look.deadline : days <= 3 ? Color.orange : .secondary)
+                        }
                     }
                     .padding(.vertical, 6)
                     .contentShape(Rectangle())
+                    .onHover { inside in hovered = inside ? item.id : (hovered == item.id ? nil : hovered) }
                     .onTapGesture(perform: open)
                 }
             }
@@ -1037,8 +1048,9 @@ private struct TodayTimeline: View {
         let past = end < now
         let lit = selected == slot.id || hovered == slot.id
         return VStack(alignment: .leading, spacing: 1) {
-            if width > 30 {
-                Text(Self.short(slot.title)).font(.system(size: 11, weight: .semibold)).lineLimit(1)
+            if width > 22 {
+                Text(Self.short(slot.title, fitting: width - 10)).font(.system(size: 11, weight: .semibold)).lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
             if width > 44, !slot.detail.isEmpty {
                 Text(slot.detail).font(.system(size: 9.5, weight: .medium)).opacity(0.8).lineLimit(1)
@@ -1082,8 +1094,11 @@ private struct TodayTimeline: View {
     }
 
     /// "Maths AI HL" → "Maths", "Chinese B" → "Chinese": what fits in a block.
-    private static func short(_ title: String) -> String {
-        title.count <= 7 ? title : String(title.split(separator: " ").first ?? Substring(title))
+    /// The block's label: the whole title when short, else its first word, cut (without "…") to what
+    /// fits, so a short class reads "Adv" rather than "A…". About 6.5 pt a letter at this size.
+    private static func short(_ title: String, fitting width: CGFloat) -> String {
+        let word = title.count <= 7 ? title : String(title.split(separator: " ").first ?? Substring(title))
+        return String(word.prefix(max(1, Int(width / 6.5))))
     }
 
     private static func times(_ slot: Daybook.Slot) -> String {
@@ -1546,7 +1561,8 @@ private struct CalendarPage: View {
                 } else {
                     if let selected { detail(selected) }
                     Card { week(dates, items, now) }
-                    DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil || CalendarFeed.linksReadAt != nil, connect: { model.openSettings("general") }) {}
+                    DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil || CalendarFeed.linksReadAt != nil, connect: { model.openSettings("general") },
+                    start: { model.actions.ask($0.startRequest) }) {}
                 }
             }
         }
@@ -1793,7 +1809,8 @@ private struct CalendarPage: View {
     private func rail(_ now: Date) -> some View {
         VStack(spacing: 16) {
             if let selected { detail(selected) }
-            DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil || CalendarFeed.linksReadAt != nil, connect: { model.openSettings("general") }) {}
+            DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil || CalendarFeed.linksReadAt != nil, connect: { model.openSettings("general") },
+                    start: { model.actions.ask($0.startRequest) }) {}
             Card(title: "Subjects", symbol: "square.grid.2x2") {
                 VStack(alignment: .leading, spacing: 7) {
                     ForEach(SubjectGroup.allCases, id: \.self) { group in
@@ -3096,7 +3113,7 @@ private struct SettingsPage: View {
                 .font(.system(size: 13, weight: .medium))
                 .multilineTextAlignment(.trailing)
                 .padding(.horizontal, 12)
-                .frame(width: 280, height: 28)
+                .frame(minWidth: 280, maxWidth: 440, minHeight: 28, maxHeight: 28)
                 .background(Color.primary.opacity(0.06), in: Capsule())
                 .overlay(Capsule().strokeBorder(Look.line))
         }
@@ -3474,7 +3491,8 @@ extension Dashboard {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-        let view = NSHostingView(rootView: DashboardView(model: model))
+        // The window's own colour behind it, as on screen: Classic's see-through page drew grey in the bitmap.
+        let view = NSHostingView(rootView: DashboardView(model: model).background(Color(nsColor: .windowBackgroundColor)))
         window.contentView = view
         window.orderFrontRegardless()
         // Let the page load its data and settle before drawing it.

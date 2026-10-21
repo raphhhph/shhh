@@ -6,8 +6,8 @@ Read `00-common.md` first.
 Where Joe's knowledge of the student's day comes from and how it's shown: the Daybook, the timetable, calendar sources, deadlines, the morning briefing and evening check.
 
 ## Files
-- `Daybook.swift`: `Daybook` (vault `Brain/Daybook.md`: focus, today's five, classes; `timeline(date)` from `_files/School/timetable.json`; `instructions` for the prompt; `recentRequests`; routines file path).
-- `CalendarFeed.swift`: `items(from:days:)` merges timetable lessons, alarms, `calendar.json` (Claude sync), **calendar links** (`links`, `refreshLinks()`, `parseICS`, `linkItems()`, ManageBac → deadlines), and the Mac's Calendar (EventKit). Duplicate deadlines from two sources are merged (`sameThing`, same day + ≥60% shared words).
+- `Daybook.swift`: `Daybook` (vault `Brain/Daybook.md`: focus, today's five, classes; `timeline(date)` from `_files/School/timetable.json`; `instructions` for the prompt; `recentRequests`; routines file path). **Local build**: `localText()` / `buildLocally()` write today's Daybook without Claude; `finishRules` tells Claude to fill only the parts marked `pendingMark`; `classNames` lists the timetable's classes.
+- `CalendarFeed.swift`: `items(from:days:)` merges timetable lessons, alarms, `calendar.json` (Claude sync), **calendar links** (`links`, `refreshLinks()`, `parseICS`, `occurrences(of:rule:from:to:)`, `linkItems()`, ManageBac → deadlines), and the Mac's Calendar (EventKit). Duplicate deadlines from two sources are merged (`sameThing`, same day + ≥60% shared words). `Item.subject` is the class a deadline is for (`subject(of:notes:category:)`).
 - `AppDelegate`: `greetIfMorning` (morning briefing on first wake, or after the wake-up challenge), evening check, night shutdown, calendar links timer (30 min).
 - Dashboard: `CalendarPage`, `TodayTimeline`, `NowNext`, `DueSoon`.
 
@@ -15,7 +15,19 @@ Where Joe's knowledge of the student's day comes from and how it's shown: the Da
 - ManageBac and Google come in by their **iCal links** (pasted once in onboarding or Settings → Calendar links); Joe reads them himself. The Claude-based sync (`syncInstructions`) remains as a fallback when there are no links.
 - Raph's ManageBac link is added (17 items read in testing).
 
+- **The Daybook is built locally** (Oct 2026, branch `claude/school-data`). On the morning briefing or the first request of a day, Joe writes Classes (table from the timetable), Rest of today (link and Mac Calendar events), Deadlines (next three weeks), Today's five (what's due today or tomorrow, then the last day's unticked tasks with "carried N×" raised; 3× or more asks for a decision), Backlog and Inbox carried over, and a Focus line. Claude then fills only Needs you (Gmail), acts on Inbox, adds the weekday's regular meetings from Patterns and Post today. With no calendar link and no Mac Calendar access, Rest of today and Deadlines are also left to Claude (with the old calendar.json sync). `buildRules` (the full Claude build) is only the fallback when the local build can't write.
+- With calendar links, the morning build no longer asks Claude to sync calendar.json (it duplicated the links).
+- Calendar links: a link that fails this time keeps its last items (each saved item has `source`); an HTTP error says the link may have been reset. Repeating events (RRULE: daily, weekly with BYDAY, monthly, yearly; INTERVAL, COUNT, UNTIL, EXDATE, moved occurrences) are expanded for 90 days, so weekly Google events show every week. TZID times are converted to UTC; cancelled events are left out. On Google links, titles with test, quiz, exam, due, summative or formative count as deadlines (that check was dead code before).
+- Deadline subject: matched against the timetable's class names (full name, initials such as BM or TOK, short forms such as Econ or Math, or a distinctive first word), using the title, the event's notes (DESCRIPTION) and CATEGORIES. Due soon and the calendar's detail card show it.
+
+## Test
+- `Joe --daybook-preview` prints the Daybook Joe would build now (writes nothing). `Joe --daybook` prints the instructions (and builds today's if missing).
+- `Joe --calendar-link parse <file.ics>` prints parsed items, repeats expanded.
+
 ## Known issues / to-do
-- The Daybook is built by Claude each morning (slow, uses tokens); a local build from calendar + tasks would be faster.
-- ManageBac link deadlines have no subject field; subject is guessed from the title.
-- No week/day toggle on the calendar; no drag to create events.
+- Not yet compiled on a Mac when written (the cloud box has no Swift): build, then check `--daybook-preview` against a real day.
+- The ManageBac feed's real DESCRIPTION format is unverified: if it names the class (for example "Class: Economics HL"), read that directly in `subject(of:)`.
+- The evening check still runs through Claude (Routines.md); it could start from `CalendarFeed` deadlines added since the morning.
+- Monthly "second Tuesday" style repeats only show their first date.
+- Onboarding (`claude/onboarding-set-up-once`) prefills subjects from ManageBac titles with its own `subjectGuesses()`; once both branches are merged it can use `linkItems().compactMap(\.subject)`.
+- No week/day toggle on the calendar; no drag to create events (UI thread).

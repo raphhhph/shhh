@@ -229,6 +229,14 @@ enum Daybook {
         return slots.sorted { $0.start < $1.start }
     }
 
+    /// Every class in the timetable ("Economics HL", "Chinese B"), for naming a deadline's subject.
+    static var classNames: [String] {
+        guard let timetable else { return [] }
+        let names = timetable.grids.values.joined().filter { $0 != "—" }
+            .compactMap { $0.components(separatedBy: " · ").first?.trimmingCharacters(in: .whitespaces) }
+        return Array(Set(names.filter { !$0.isEmpty && $0.lowercased() != "advisory" })).sorted()
+    }
+
     /// Whether there's school on a day (in the saved timetable).
     static func isSchoolDay(_ date: Date) -> Bool {
         guard let timetable else { return !Calendar.current.isDateInWeekend(date) }
@@ -255,6 +263,184 @@ enum Daybook {
         return "No school today or in the next three weeks."
     }
 
+    // MARK: - Built here, each morning
+
+    /// Marks the parts of a locally built Daybook that are still Claude's to fill.
+    static let pendingMark = "_Joe is still checking this._"
+
+    /// Builds today's Daybook without Claude when there's none yet, and says whether it did.
+    @discardableResult
+    static func buildLocally(_ now: Date = Date()) -> Bool {
+        guard let url, !isCurrent, let text = localText(now) else { return false }
+        archiveIfOld()
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        return (try? text.write(to: url, atomically: true, encoding: .utf8)) != nil
+    }
+
+    /// Today's Daybook from what Joe already has: classes from the timetable; today's events and
+    /// the next three weeks' deadlines from the calendar links and the Mac's Calendar; Today's
+    /// five, Backlog and Inbox carried over from the last day, with what's due today or tomorrow
+    /// added. It takes a moment, where Claude took a minute and a lot of tokens every morning.
+    /// What needs their mail or judgement (Needs you, acting on Inbox) is left to Claude, marked
+    /// with `pendingMark` (see `finishRules`); so are the calendar parts when Joe can't read one.
+    static func localText(_ now: Date = Date()) -> String? {
+        guard root != nil else { return nil }
+        let calendar = Calendar.current
+        let start = calendar.startOfDay(for: now)
+        let tomorrowEnd = calendar.date(byAdding: .day, value: 2, to: start) ?? now
+        let ownCalendar = CalendarFeed.readsCalendarItself
+        let items = CalendarFeed.items(from: start, days: 21)
+        let deadlines = items.filter { $0.kind == .deadline }
+        let events = items.filter { $0.kind == .event && calendar.isDate($0.start, inSameDayAs: now) }
+
+        // The last day's note: still today's if it hasn't been archived yet.
+        let lastURL = (date.map { $0 < day(now) } ?? false) ? url : lastArchived
+        let last = lastURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+        let carried = section("Today's five", of: last).filter { $0.hasPrefix("- [ ]") }.map(carriedAgain)
+        let backlog = section("Backlog", of: last).filter { $0.hasPrefix("- ") && !$0.lowercased().hasPrefix("- [x]") }
+        let inbox = section("Inbox", of: last).filter { $0.hasPrefix("- ") }
+
+        // Due today or tomorrow, unless it's already a task: those come first.
+        let urgent = deadlines.filter { $0.start < tomorrowEnd }
+            .filter { item in !carried.contains { CalendarFeed.sameThing($0, item.title) } }
+            .map { "- [ ] \($0.title) — due \(when($0, now))" + ($0.subject.map { " · \($0)" } ?? "") }
+        let tasks = urgent + carried
+        let five = Array(tasks.prefix(5)), overflow = Array(tasks.dropFirst(5))
+
+        let focus: String
+        if let first = five.first {
+            let task = first.dropFirst(6).components(separatedBy: " — ")[0].components(separatedBy: " · carried")[0]
+            focus = "Get \(task) done."
+        } else if let next = deadlines.first {
+            focus = "Nothing urgent: get ahead on \(next.title), due \(when(next, now))."
+        } else {
+            focus = "A clear day: nothing due in the next three weeks."
+        }
+
+        let rest: [String] = ownCalendar ? (events.isEmpty ? ["Nothing else on the calendar."] : events.map { event -> String in
+            let place = event.detail.isEmpty ? "" : " · \(event.detail)"
+            if event.allDay { return "- All day: \(event.title)\(place)" }
+            let time = hhmm(event.start) + (event.end.map { "–" + hhmm($0) } ?? "")
+            return "- \(time) \(event.title)\(place)"
+        }) : [pendingMark]
+        let due: [String] = ownCalendar || !deadlines.isEmpty ? (deadlines.isEmpty ? ["Nothing due in the next three weeks."] : deadlines.map { item -> String in
+            "- \(when(item, now)) — \(item.title)" + (item.subject.map { " · \($0)" } ?? "")
+        }) : [pendingMark]
+
+        let title = now.formatted(.dateTime.weekday(.wide).day().month(.wide))
+        let owns = last.components(separatedBy: "\n").prefix(12).first { $0.hasPrefix("owns:") }
+            ?? "owns: today's focus, tasks, classes, deadlines and inbox"
+        var lines = [
+            "---",
+            "summary: \"Their day on \(title): focus, five tasks, classes, deadlines, what needs a reply.\"",
+            owns,
+            "date: \(day(now))",
+            "updated: \(day(now)) \(hhmm(now))",
+            "---",
+            "# Daybook — \(title)",
+            "",
+            "**Focus:** \(focus)",
+            "",
+            "## Today's five",
+        ]
+        lines += five.isEmpty ? ["Nothing carried over and nothing due today or tomorrow."] : five
+        lines += ["", "## Classes", classTable(on: now), "", "## Rest of today"] + rest
+        lines += ["", "## Deadlines"] + due
+        lines += ["", "## Needs you", pendingMark]
+        lines += ["", "## Backlog"] + (overflow + backlog).prefix(30)
+        lines += ["", "## Inbox"] + inbox
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// What's left for Claude in a locally built Daybook, or nil when it's all done.
+    static var finishRules: String? {
+        guard let url, let text = try? String(contentsOf: url, encoding: .utf8), text.contains(pendingMark) else { return nil }
+        let config = timetable?.config
+        let calendarToo = section("Deadlines", of: text).contains(pendingMark) || section("Rest of today", of: text).contains(pendingMark)
+        let manageBac = config?.managebacCalendarId ?? "ManageBac"
+        let sync = CalendarFeed.syncInstructions.replacingOccurrences(of: " Reply in one line.", with: "")
+        let calendarRules = !calendarToo ? "" : """
+              - Rest of today: today's Google Calendar events that aren't classes (classes carry #class), as \
+            "- 15:00–16:00 Title". Deadlines: the ManageBac calendar (\(manageBac)) for the next three weeks, as \
+            "- <day> — Title · Subject". Then, for the dashboard's calendar: \(sync)
+            """
+        return """
+            Today's Daybook (\(relative(url))) was built from their timetable and calendar. Fill in only the parts \
+            that say "\(pendingMark)", before you answer anything about their day, and leave the rest as it is:
+              - Needs you: at most three emails or invites from the last day that really need their reply (Gmail \
+            inbox, not promotions or social; \(config?.swisLabelId.map { "school mail has label \($0)" } ?? "school mail first")), each with who, \
+            what to do and an [Open](link); then "_N others, all noise._". If you can't reach their mail, write "Mail isn't connected."
+            \(calendarRules)
+              - Inbox: act on its items, then leave it empty. Patterns: read \(relative(patterns)) and add this \
+            weekday's regular meetings to Rest of today. On a posting day add ## Post today.
+              - Change Focus only if something in Needs you matters more.
+            """
+    }
+
+    /// The lines under a `## ` heading (matched loosely), up to the next one.
+    private static func section(_ name: String, of text: String) -> [String] {
+        var inside = false
+        var found: [String] = []
+        for line in text.components(separatedBy: "\n") {
+            if line.hasPrefix("## ") { inside = line.lowercased().contains(name.lowercased()); continue }
+            if inside, !line.trimmingCharacters(in: .whitespaces).isEmpty { found.append(line) }
+        }
+        return found
+    }
+
+    /// A task carried to another day: "carried N×" goes up by one, and from three days it asks for a decision.
+    private static func carriedAgain(_ line: String) -> String {
+        var text = line
+        var times = 1
+        if let range = text.range(of: #"carried (\d+)×"#, options: .regularExpression) {
+            times = (Int(text[range].filter(\.isNumber)) ?? 0) + 1
+            text.replaceSubrange(range, with: "carried \(times)×")
+        } else {
+            text += " · carried 1×"
+        }
+        if times >= 3, !text.contains("decide:") { text += " — decide: do it today, hand off or drop" }
+        return text
+    }
+
+    /// "today 15:00", "tomorrow", "Fri 24 Oct 23:59", for a deadline.
+    private static func when(_ item: CalendarFeed.Item, _ now: Date) -> String {
+        let calendar = Calendar.current
+        let time = item.allDay ? "" : " " + hhmm(item.start)
+        if calendar.isDate(item.start, inSameDayAs: now) { return "today" + time }
+        if let next = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(item.start, inSameDayAs: next) { return "tomorrow" + time }
+        return item.start.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)) + time
+    }
+
+    /// "07:05", whatever the Mac's clock style, as the timeline reads it.
+    private static func hhmm(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
+    }
+
+    /// The Classes table: Period, Time, Class, Room.
+    private static func classTable(on date: Date) -> String {
+        guard let timetable, let entry = timetable.days.first(where: { $0.first?.text == day(date) }), entry.count >= 3 else {
+            return "No school today."
+        }
+        let grid = timetable.grids[entry[1].text + entry[2].text] ?? []
+        var rows = ["Day \(entry[1].text) · Cycle \(entry[2].text)", "", "| Period | Time | Class | Room |", "|---|---|---|---|"]
+        for row in timetable.rows {
+            switch row.kind {
+            case "class":
+                guard let index = row.idx, index < grid.count else { continue }
+                let parts = grid[index].components(separatedBy: " · ")
+                let name = grid[index] == "—" ? "Free" : parts[0]
+                rows.append("| P\(row.p ?? "?") | \(row.start)–\(row.end) | \(name) | \(parts.count > 1 ? parts[1] : "") |")
+            case "advisory":
+                rows.append("| Advisory | \(row.start)–\(row.end) | Advisory | |")
+            default: continue
+            }
+        }
+        return rows.joined(separator: "\n")
+    }
+
     // MARK: - Instructions for the assistant
 
     /// How to build today's Daybook: for the morning briefing, or the first request of a day.
@@ -278,7 +464,7 @@ enum Daybook {
               - Patterns: read \(relative(patterns)) and use it: prepare them for this weekday's regular meetings. \
             When a meeting or call on today's calendar also happened on this weekday last week, add it there.
               - Focus: one sentence, the one thing that matters most today.
-              - Then, for the dashboard's calendar: \(CalendarFeed.syncInstructions.replacingOccurrences(of: " Reply in one line.", with: ""))
+            \(CalendarFeed.links.isEmpty ? "  - Then, for the dashboard's calendar: " + CalendarFeed.syncInstructions.replacingOccurrences(of: " Reply in one line.", with: "") : "")
             """
     }
 
@@ -314,8 +500,11 @@ enum Daybook {
                 --workspace "<name>" (its workspaces: \(Workspace.names.joined(separator: ", "))).
                 """
         }
+        if !isCurrent { buildLocally() }
         if !isCurrent {
             text += "\nThere's no Daybook for today yet: build it before you answer anything about their day.\n" + buildRules
+        } else if let finish = finishRules {
+            text += "\n" + finish
         }
         return text
     }

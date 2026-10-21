@@ -355,6 +355,10 @@ enum CommandLineTool {
             print(Daybook.instructions)
             print("\n--- If it had to build today's:\n" + Daybook.buildRules)
             exit(0)
+        case ("--daybook-preview", 1):
+            // Joe --daybook-preview: the Daybook Joe would build this morning by himself (nothing is written).
+            print(Daybook.localText() ?? "No notes vault set.")
+            exit(0)
         case ("--look", 1):
             // Shhh --look: for the assistant, a screenshot and the front window's controls.
             run { print(await ScreenControl.look()) }

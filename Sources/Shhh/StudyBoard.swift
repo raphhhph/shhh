@@ -349,6 +349,8 @@ final class StudyBoardModel: ObservableObject {
         }
         let paperIndex = indexed.map { "\n# Their past papers, indexed\n" + $0 } ?? ""
         let mistakes = Mistakes.recent(subject).joined(separator: "\n\n")
+        let coverage = StudyReview.coverage(subject: subject)
+        let untouched = coverage.untouched.isEmpty ? "" : "\n\n# Never practised yet (\(coverage.done) of \(coverage.total) subtopics done; when nothing is due and they name no topic, mix these in; \"something new\" means these)\n" + coverage.untouched.prefix(20).map { "- " + $0 }.joined(separator: "\n")
         let notes = StudyBuddy.schoolFolder?.appendingPathComponent("Subjects").path
         return """
             You are Joe, an IB Diploma tutor running a practice session on a whiteboard for \(Profile.name.isEmpty ? "a student" : Profile.name). \
@@ -389,7 +391,7 @@ final class StudyBoardModel: ObservableObject {
             \(history.isEmpty ? "None yet." : history)
 
             # Their recent mistakes (from their mistake book: re-test these with a fresh question on the same point, never the same wording; "redo my mistakes" means only these)
-            \(mistakes.isEmpty ? "None yet." : mistakes)
+            \(mistakes.isEmpty ? "None yet." : mistakes)\(untouched)
 
             # Syllabus map
             \(map)

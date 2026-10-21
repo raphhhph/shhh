@@ -80,7 +80,8 @@ enum StudyReview {
     static func key(_ topic: String) -> String {
         let trimmed = topic.trimmingCharacters(in: .whitespaces)
         if let number = trimmed.range(of: #"^(AHL\s+)?([A-Z]{1,3}\.?)?\d+(\.\d+)*\b"#, options: .regularExpression) {
-            return String(trimmed[number]).uppercased()
+            // "AHL 1.12" in the map is "1.12" in the log.
+            return String(trimmed[number]).uppercased().replacingOccurrences(of: #"^AHL\s+"#, with: "", options: .regularExpression)
         }
         return trimmed.lowercased()
     }
@@ -142,6 +143,16 @@ enum StudyReview {
     /// The next topic to come up, when nothing is due.
     static func upcoming(from all: [Topic]? = nil) -> Topic? {
         (all ?? topics()).filter { !$0.isDue }.min { $0.due < $1.due }
+    }
+
+    /// How much of a subject's syllabus map they've been marked on: the numbered subtopics, and those
+    /// with no quiz answer yet (in syllabus order).
+    static func coverage(subject: String, from all: [Topic]? = nil) -> (total: Int, done: Int, untouched: [String]) {
+        guard let pack = StudyBuddy.pack(for: subject) else { return (0, 0, []) }
+        let sections = PastPapers.sections(pack)
+        let practised = Set((all ?? topics()).filter { $0.pack == pack }.map { key($0.topic) })
+        let untouched = sections.filter { !practised.contains(key($0.label)) }.map(\.label)
+        return (sections.count, sections.count - untouched.count, untouched)
     }
 
     /// For a tutor's or Claude's instructions: what's due, one line each.

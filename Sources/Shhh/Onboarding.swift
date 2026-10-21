@@ -954,8 +954,7 @@ private struct NotesStep: View {
 
     var body: some View {
         StepFrame(model: model, title: "Where should I keep notes?",
-                  subtitle: "Lecture notes, your daily plan and my memory of your days go in one folder you own.",
-                  canContinue: Assistant.vaultURL != nil) {
+                  subtitle: "Lecture notes, your daily plan and my memory of your days go in one folder you own. Not sure? Just continue and I'll make a Joe folder.") {
             VStack(spacing: 16) {
                 HStack(spacing: 16) {
                     option("book.closed", "My Obsidian vault", "Use the vault you already have.") { model.actions.chooseVault(); refresh += 1 }
@@ -968,6 +967,10 @@ private struct NotesStep: View {
                 }
             }
             .id(refresh)
+        }
+        .onDisappear {
+            // Moving on without choosing: the Joe folder, so notes and the Daybook work anyway.
+            if Assistant.vaultURL == nil, model.step.rawValue > OnboardingModel.Step.notes.rawValue { makeFolder() }
         }
     }
 
@@ -1282,15 +1285,25 @@ private struct DoneStep: View {
     @ObservedObject var model: OnboardingModel
 
     var body: some View {
-        VStack(spacing: 22) {
+        VStack(spacing: 16) {
             Spacer()
-            Star(size: 80).frame(height: 200)
+            Star(size: 56).frame(height: 120)
             Typed(text: "You’re all set, \(Profile.name).")
             VStack(alignment: .leading, spacing: 10) {
                 tip("command", "Hold right ⌘ to write with your voice")
                 tip("option", "Hold right ⌥ to ask me anything (double-tap for a long one)")
-                tip("graduationcap", "Say “quiz me on economics” to study on the whiteboard")
-                tip("sparkle", "Click my star in the menu bar for your dashboard")
+            }
+            // What's working now, so nothing is left to discover; anything missing is one place away.
+            LazyVGrid(columns: [GridItem(.fixed(300), alignment: .leading), GridItem(.fixed(300), alignment: .leading)], spacing: 8) {
+                ForEach(ready, id: \.0) { title, done in
+                    Label(title, systemImage: done ? "checkmark.circle.fill" : "circle.dashed")
+                        .font(.system(size: 13)).foregroundStyle(done ? Color.green : Tint.soft)
+                }
+            }
+            .padding(14)
+            .background(Tint.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            if ready.contains(where: { !$0.1 }) {
+                Text("Anything not ticked can be added any time in Settings.").font(.system(size: 12)).foregroundStyle(Tint.soft)
             }
             Spacer()
             Primary(title: "Start using Joe") {
@@ -1302,6 +1315,20 @@ private struct DoneStep: View {
 
     private func tip(_ symbol: String, _ text: String) -> some View {
         Label(text, systemImage: symbol).font(.system(size: 15)).foregroundStyle(Tint.soft)
+    }
+
+    private var ready: [(String, Bool)] {
+        let timetable = Daybook.timetableURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+        return [
+            ("Speech recognition", ModelGuard.status(.speech) == .ready),
+            ("My voice", ModelGuard.status(.voice) == .ready),
+            ("ManageBac deadlines and events", !CalendarFeed.links.isEmpty),
+            ("Your subjects", !Profile.subjects.isEmpty),
+            ("Your timetable", timetable),
+            ("Wake-up alarm and morning briefing", AlarmStore.load().contains { $0.repeats != nil && $0.title.lowercased().contains("wake") }),
+            ("Notes folder", Assistant.vaultURL != nil),
+            ("Gmail", ClaudeConnectors.has("gmail")),
+        ]
     }
 }
 

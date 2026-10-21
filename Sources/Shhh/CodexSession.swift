@@ -6,8 +6,9 @@ import AppKit
 /// Codex wants approved through Joe's `ToolPolicy` and approval card.
 ///
 /// Codex has no Chrome control, and connectors added on claude.ai (Gmail, Calendar…) belong to the
-/// Claude account, so those aren't available in this mode; ones added to Claude Code come along. Commands Codex knows are read-only (ls, cat, grep…) run
-/// without asking it, so they never reach Joe either.
+/// Claude account, so those aren't available in this mode; ones added to Claude Code come along.
+/// With `approvalPolicy: untrusted` Codex asks about every command, even `ls`, so Joe's rules see
+/// all of them (checked with codex-cli 0.163); `FileCommands` knows its ways of reading (rg, sed -n).
 @MainActor
 final class CodexSession: Engine {
     private let process = Process()

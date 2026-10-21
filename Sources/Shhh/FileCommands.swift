@@ -24,7 +24,12 @@ enum FileCommands {
     private static let trash = home + "/.Trash"
 
     private static let lookers: Set = ["ls", "du", "find", "stat", "file", "wc", "head", "tail", "cat", "mdls", "mdfind",
-                                       "tree", "pwd", "echo", "sort", "uniq", "grep", "cd", "basename", "dirname", "df"]
+                                       "tree", "pwd", "echo", "sort", "uniq", "grep", "cd", "basename", "dirname", "df",
+                                       // How Codex (ChatGPT mode) reads: it has no Read or Grep tool, only the shell.
+                                       "rg", "nl", "sed"]
+    /// rg options followed by a value that isn't a path (`-g '*.md'`).
+    private static let rgValueOptions: Set = ["-g", "--glob", "-t", "--type", "-T", "--type-not", "-e", "--regexp",
+                                              "-m", "--max-count", "-A", "-B", "-C", "--context", "--max-depth", "-d"]
     private static let changers: Set = ["mkdir", "mv", "cp", "touch"]
     private static let deleters: Set = ["rm", "rmdir", "unlink", "trash", "srm", "shred"]
 
@@ -58,9 +63,31 @@ enum FileCommands {
                     cwd = path
                     continue
                 }
-                // Find's paths come before its expression; grep's pattern isn't a path; the rest must be readable.
+                // sed only prints line ranges (`sed -n '1,200p' file`): its other commands can write or run.
+                if program == "sed" {
+                    let flags = arguments.filter { $0.hasPrefix("-") }
+                    guard flags.contains("-n"), flags.allSatisfy({ ["-n", "-E", "-r"].contains($0) }),
+                          let script = paths.first, script.range(of: #"^[0-9,$p; ]+$"#, options: .regularExpression) != nil else { return nil }
+                }
+                // rg: values of its options aren't paths; without -e its first word is the pattern.
+                var rgPaths: [String] = []
+                if program == "rg" {
+                    var rest = arguments[...]
+                    var pattern = arguments.contains(where: { ["-e", "--regexp", "--files"].contains($0) })
+                    while let word = rest.popFirst() {
+                        if rgValueOptions.contains(word) { _ = rest.popFirst(); continue }
+                        if word.hasPrefix("-") { continue }
+                        if !pattern { pattern = true; continue }
+                        rgPaths.append(word)
+                    }
+                }
+                // Find's paths come before its expression; grep's and sed's first word isn't a path; the rest must be readable.
                 let checked = program == "find" ? Array(arguments.prefix { !$0.hasPrefix("-") })
-                    : program == "grep" ? Array(paths.dropFirst()) : program == "echo" ? [] : paths
+                    : program == "rg" ? rgPaths
+                    : ["grep", "sed"].contains(program) ? Array(paths.dropFirst()) : program == "echo" ? [] : paths
+                if checked.contains(where: { isSecret(resolve($0, cwd: cwd)) }) {
+                    return .blocked("Joe doesn't read passwords, keys or logins.")
+                }
                 guard checked.allSatisfy({ readable(resolve($0, cwd: cwd)) }) else { return nil }
                 continue
             }
@@ -155,13 +182,16 @@ enum FileCommands {
     static func isSecret(_ path: String) -> Bool {
         let lower = path.lowercased()
         let folders = ["/.ssh", "/.gnupg", "/.aws", "/.config/gh", "/.netrc", "/library/keychains", "/library/cookies",
-                       "/library/application support/shhh/spotify.json", "/.claude/.credentials", "/.claude.json"]
+                       "/library/application support/shhh/spotify.json", "/library/application support/shhh/api.json",
+                       "/.claude/.credentials", "/.claude.json", "/.codex/auth.json"]
         let files = ["login data", "cookies", "key3.db", "key4.db", "logins.json", "keychain"]
         return folders.contains { lower.contains($0) } || files.contains { (lower as NSString).lastPathComponent.hasPrefix($0) }
     }
 
     /// Anywhere in the user's own folders except Library and hidden ones, and the apps.
     static func readable(_ path: String) -> Bool {
+        // Keys and logins: never by a shell command either (`cat …/Shhh/API.json` passed before).
+        if isSecret(path) { return false }
         if path.hasPrefix("/Applications") || path.hasPrefix("/Volumes") { return true }
         // Claude skills (read-only guides and scripts, like the PowerPoint one).
         if path.hasPrefix(home + "/.claude/skills/") { return true }

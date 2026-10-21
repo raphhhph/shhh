@@ -206,14 +206,14 @@ enum PastPapers {
         let zone = first(#"tz[\s_-]*[0-2]|time zone\s*[0-2]"#, in: both).flatMap { $0.last.map(String.init) }
 
         let when = [session, year].compactMap { $0 }.joined(separator: " ")
-        let parts: [String?] = [number.map { "Paper \($0)" }, when, level, zone.map { "TZ\($0)" }]
-        let title = parts.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        let labels: [String?] = [number.map { "Paper \($0)" }, when, level, zone.map { "TZ\($0)" }]
+        let title = labels.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
         var parts = split(pages)
         if parts.isEmpty, pages.contains(where: { !$0.isEmpty }) {
             // No numbered questions (a language Paper 1, a source booklet): the paper as one entry,
             // from its first page with text, so the tutor can still use it.
-            let first = pages.firstIndex { $0.trimmingCharacters(in: .whitespacesAndNewlines).count > 40 } ?? 0
-            parts = [(0, Array((first + 1)...pages.count), pages[first...].joined(separator: "\n"))]
+            let start = pages.firstIndex { $0.trimmingCharacters(in: .whitespacesAndNewlines).count > 40 } ?? 0
+            parts = [(0, Array((start + 1)...pages.count), pages[start...].joined(separator: "\n"))]
         }
         let questions = parts.map { part -> Question in
             Question(number: part.number, pages: part.pages,

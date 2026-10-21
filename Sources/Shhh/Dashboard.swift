@@ -455,6 +455,7 @@ private struct DashboardView: View {
                     .frame(maxWidth: model.page == .calendar ? 1500 : 1060, alignment: .leading)
                     .frame(maxWidth: .infinity)
                 }
+                .ignoresSafeArea(.container, edges: .top) // or the title bar's height is added on top of the padding
                 .background(Look.page)
             }
         }

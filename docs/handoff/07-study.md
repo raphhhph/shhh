@@ -29,7 +29,7 @@ Quizzing, marking and revision: syllabus knowledge, the whiteboard, the quiz log
 
 ## Known issues / to-do
 - New packs need a check against each subject's real guide by someone taking it (topic numbering follows the guides as we know them).
-- Past-paper splitting is heuristic: papers whose questions aren't numbered "1.", "2." at the start of a line (some language papers, Paper 1 source booklets) index as whole files or not at all. Check with `--past-papers`.
+- Past-paper splitting is heuristic: papers whose questions aren't numbered "1.", "2." at the start of a line (some language papers, Paper 1 source booklets) index as one "whole paper" entry. Not yet tried on real papers (none saved on Raph's Mac as of 22 Oct); check with `--past-papers`.
 - Spaced repetition only knows topics they've been marked on; topics never quizzed aren't scheduled (the tutor still picks those from the map).
 - Maths cards are web views: they don't appear in `--board-preview` snapshots, and each costs a little memory (fine for a session's dozen cards).
 - The notch answer card (AnswerPanel) still shows maths as plain text; it could reuse `BoardText`.

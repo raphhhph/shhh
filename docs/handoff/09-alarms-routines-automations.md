@@ -21,6 +21,7 @@ Alarms, timers and reminders, the wake-up challenge, routines (spoken phrases th
 - An alarm more than 30 min late (the Mac slept through it) doesn't ring: a "Missed while the Mac was asleep" toast instead (`AlarmClock.tooLate`). The iPhone copy in Reminders is what covers a closed laptop.
 - A snoozed alarm is a one-off copy, even when the original repeats.
 - Wake-up streak (`AlarmClock.countWakeUp`, `wakeStreak`/`wakeStreakDay` in UserDefaults): mornings in a row the challenge was passed without a snooze; a toast from 2 on. A snooze or a challenge left to ring out resets it; a day with no alarm (weekend) doesn't.
+- Stopping a "Focus…" timer starts a 5-minute break: a gentle "Break over: back to it" reminder (the Focus wrap-up in AppDelegate still asks what got done).
 - After a snooze, the challenge is always a question (answering beats reading half asleep).
 - Reading check: Chinese characters count one by one, and only when the recogniser wrote Chinese; otherwise only the English words of a fact are checked.
 - Night shutdown's default routine checks there's a wake-up alarm for tomorrow and offers one about an hour before the first class.

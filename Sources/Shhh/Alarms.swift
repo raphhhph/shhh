@@ -522,7 +522,15 @@ final class AlarmClock {
         resumeSpotify = false
         // A reminder that rang out stays on screen as a toast; an alarm nobody stopped says so.
         if missed { onNotice(alarm.kind == .reminder ? "\(alarm.title)" : "Missed: \(alarm.title) (\(alarm.when))") }
-        else if !snoozing { onStopped(alarm) }
+        else if !snoozing {
+            onStopped(alarm)
+            // A focus session (the Study session routine's 25 minutes) earns a 5-minute break, with a
+            // gentle nudge back at the end of it.
+            if alarm.kind == .timer, alarm.title.hasPrefix("Focus") {
+                AlarmStore.add(Alarm(fireAt: Date().addingTimeInterval(300), title: "Break over: back to it", kind: .reminder))
+                onNotice("Five-minute break. I'll nudge you when it's over")
+            }
+        }
         tick() // the next one, if it's due too
     }
 

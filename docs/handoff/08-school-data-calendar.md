@@ -28,6 +28,9 @@ Where Joe's knowledge of the student's day comes from and how it's shown: the Da
 
 - **Plan** section in the local Daybook (`studyPlan`): today's free periods (a "—" in the grid), 90 minutes starting 30 minutes after the last class, and 19:30–21:00 (10:00–12:00 instead on a day off), each given to the most pressing deadline of the next two weeks. The soonest gets two blocks; tests and summatives come first on the same day. These are suggestions, not calendar events, so the timeline doesn't show them.
 
+- **Day boundary at 04:00**: before 04:00 the Daybook still belongs to yesterday (`isCurrent` accepts that day, `archiveIfOld` and `buildLocally` wait). On Oct 22 Raph was up past midnight and Joe built Thursday's Daybook at 00:35, archiving Wednesday's while he was still working on it. A carried task loses its "· new" mark.
+- Tested on nightly wave 2 (Oct 22, 00:52): `--daybook-preview` had every section; subjects were right for BM, Chinese B and English A L&L; the link refresh read 17 items; no errors in the log.
+
 ## Test
 - `Joe --daybook-preview` prints the Daybook Joe would build now (writes nothing). `Joe --daybook` prints the instructions (and builds today's if missing).
 - `Joe --calendar-link parse <file.ics>` prints parsed items, repeats expanded.

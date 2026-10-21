@@ -130,6 +130,7 @@ final class StudyBoardModel: ObservableObject {
 
     func start(subject: String, request: String?, mode: Mode) {
         end()
+        UserDefaults.standard.set(subject, forKey: "lastStudySubject")
         self.subject = subject
         self.mode = mode
         items = []

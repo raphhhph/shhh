@@ -78,9 +78,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// "Quiz me on econ externalities", "test me on…": the study whiteboard, not the notch.
     private func openStudy(_ request: String) -> Bool {
-        guard request.range(of: #"^\W*((hey|ok|okay),?\s+)?(joe,?\s+)?(can you\s+)?(quiz|test) me\b|give me (a|an|one) (full )?exam(-style)? question"#,
-                            options: [.regularExpression, .caseInsensitive]) != nil else { return false }
-        let subject = StudyBoard.subject(in: request) ?? Profile.subjects.components(separatedBy: ",").first?.trimmingCharacters(in: .whitespaces) ?? "Economics"
+        // "Quiz me on…", "let's start a quiz", "study session", "open (up) the whiteboard"…
+        let quiz = #"^\W*((hey|ok|okay|yo),?\s+)?(joe,?\s+)?(can you\s+)?(quiz|test) me\b|give me (a|an|one) (full )?exam(-style)? question|\b(start|do|begin|run)\b[^.?!]{0,12}\b(quiz|study session|revision session|practice session)\b|\b(open|pull|bring|start|show|get)\b[^.?!]{0,15}\bwhite ?board\b|^\W*(the )?white ?board\W*$"#
+        guard request.range(of: quiz, options: [.regularExpression, .caseInsensitive]) != nil else { return false }
+        // The subject: said now, or in the conversation on the card ("let's start a quiz on econ",
+        // then "open the whiteboard"), or the one studied last.
+        let context = [request, focused?.question ?? ""] + tasks.suffix(3).map(\.question)
+        let subject = context.lazy.compactMap { StudyBoard.subject(in: $0) }.first
+            ?? UserDefaults.standard.string(forKey: "lastStudySubject")
+            ?? Profile.subjects.components(separatedBy: ",").first?.trimmingCharacters(in: .whitespaces) ?? "Economics"
+        if let task = focused, task.question.isEmpty || task.question.range(of: "quiz|whiteboard", options: [.regularExpression, .caseInsensitive]) != nil {
+            end(task) // the quiz moves to the whiteboard
+        }
         let exam = request.range(of: "exam", options: .caseInsensitive) != nil
         studyBoard.show(subject: subject, request: request, mode: exam ? .exam : .quiz)
         return true

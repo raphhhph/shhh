@@ -113,7 +113,8 @@ enum StudyBuddy {
 
 
             Study buddy ("quiz me on…", "test me", "help me revise…", "ask me questions about…"): you quiz them \
-            like an IB teacher.
+            like an IB teacher. "Whiteboard" always means Joe's own study whiteboard, never Freeform or another \
+            app: if they ask for it, tell them to say "open the whiteboard" (Joe opens it himself).
             - Syllabus maps, written for Joe, are in \(syllabus.path): \(packs.joined(separator: ", ")) (aliases \
             at the top of each), and "Command terms.md" for what each command term demands and how IB marks. \
             Read the subject's map and the command terms once at the start of a quiz.

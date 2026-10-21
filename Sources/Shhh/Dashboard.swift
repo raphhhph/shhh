@@ -1978,6 +1978,10 @@ private struct StudyPage: View {
                         Text("\(topic.subject) · \(topic.when)").font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
                     }
                     Spacer()
+                    if topic.lastScore < 0.5 {
+                        Button("Teach me") { model.actions.ask("Quiz me on \(topic.subject), topic \(topic.topic): teach me it first with a short lesson, then test me.") }
+                            .buttonStyle(PillButton())
+                    }
                     Button("Review") { model.actions.ask("Quiz me on \(topic.subject), topic \(topic.topic): it's due for review.") }
                         .buttonStyle(PillButton())
                 }

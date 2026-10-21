@@ -353,7 +353,9 @@ final class AlarmClock {
         model.heard = heard
         if challenge.check(heard) {
             model.challenge = nil
+            let streak = Self.countWakeUp(snoozed: snoozedThisMorning)
             stop()
+            if streak > 1 { onNotice("Up on the first ring \(streak) mornings in a row") }
             onWokeUp()
             return true
         }
@@ -367,6 +369,19 @@ final class AlarmClock {
     }
 
     private var misses = 0
+
+    /// Mornings in a row the challenge was passed without a snooze (a snooze starts it again).
+    /// Counted once a morning; a day with no wake-up alarm doesn't break it (weekends).
+    static func countWakeUp(snoozed: Bool, now: Date = Date()) -> Int {
+        let defaults = UserDefaults.standard
+        let today = now.formatted(.iso8601.year().month().day())
+        var streak = defaults.integer(forKey: "wakeStreak")
+        guard defaults.string(forKey: "wakeStreakDay") != today else { return streak }
+        streak = snoozed ? 0 : streak + 1
+        defaults.set(today, forKey: "wakeStreakDay")
+        defaults.set(streak, forKey: "wakeStreak")
+        return streak
+    }
 
     /// An alarm stopped by the user (not snoozed, not missed): for a focus timer's wrap-up.
     var onStopped: (Alarm) -> Void = { _ in }
@@ -492,6 +507,8 @@ final class AlarmClock {
 
     func stop(missed: Bool = false) {
         guard let alarm = ringing else { return }
+        // A challenge left to ring out ends the wake-up streak.
+        if missed, model.challenge != nil { UserDefaults.standard.set(0, forKey: "wakeStreak") }
         ringing = nil
         stopWork?.cancel()
         player.stop()

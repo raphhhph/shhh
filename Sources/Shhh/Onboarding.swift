@@ -930,10 +930,13 @@ private struct ClaudeStep: View {
     @State private var key = ""
     @State private var code = ""
     @State private var saved = AIAccount.maskedKey
+    @AppStorage("aiProvider") private var aiProvider = "claude"
+    @State private var codexStatus = ""
+    @State private var codexBusy = false
 
     var body: some View {
         StepFrame(model: model, title: "My brain: Claude", subtitle: "I think with Claude. One click and I'll set it up, on your own Claude plan.",
-                  canContinue: claude.isReady || (useAPIKey && saved != nil)) {
+                  canContinue: aiProvider == "chatgpt" ? codexStatus.hasPrefix("Signed in with ChatGPT") : claude.isReady || (useAPIKey && saved != nil)) {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(spacing: 14) {
                     Group {
@@ -976,8 +979,27 @@ private struct ClaudeStep: View {
                     }
                     if let saved { Text("Saved: \(saved)").font(.system(size: 12.5)).foregroundStyle(.green) }
                 }
+                // Students who pay for ChatGPT instead: Joe runs on OpenAI's Codex, signed in to that plan.
+                Toggle("I have ChatGPT, not Claude", isOn: Binding(get: { aiProvider == "chatgpt" },
+                                                                   set: { aiProvider = $0 ? "chatgpt" : "claude" }))
+                    .font(.system(size: 14)).tint(Tint.accent)
+                if aiProvider == "chatgpt" {
+                    HStack(spacing: 10) {
+                        Text(codexBusy ? "Finish signing in to ChatGPT in your browser…" : codexStatus)
+                            .font(.system(size: 13)).foregroundStyle(codexStatus.hasPrefix("Signed in with ChatGPT") ? .green : Tint.soft)
+                        Spacer()
+                        if !codexStatus.hasPrefix("Signed in with ChatGPT") {
+                            Primary(title: CodexSession.executable == nil ? "Install and connect" : "Connect ChatGPT", enabled: !codexBusy) {
+                                codexBusy = true
+                                Task { codexStatus = await CodexAccount.connect(); codexBusy = false }
+                            }
+                            .frame(width: 190)
+                        }
+                    }
+                }
             }
         }
+        .task(id: aiProvider) { if aiProvider == "chatgpt" { codexStatus = await CodexAccount.status() } }
     }
 
     private var title: String {

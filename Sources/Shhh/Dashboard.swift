@@ -1351,7 +1351,7 @@ private struct UsagePage: View {
 
     var body: some View {
         HStack(alignment: .top) {
-            PageTitle(title: "Usage", subtitle: (AIAccount.usesAPIKey ? "Billed to your API key, per request." : "On your Claude plan. Costs show what the same use would cost on the API.")
+            PageTitle(title: "Usage", subtitle: (AIAccount.usesChatGPT ? "On your ChatGPT plan: requests count against its limits, not dollars." : AIAccount.usesAPIKey ? "Billed to your API key, per request." : "On your Claude plan. Costs show what the same use would cost on the API.")
                 + (currency == "CNY" ? " RMB at ¥\(String(format: "%.1f", Self.yuanPerDollar)) per $1." : ""))
             Spacer()
             Picker("", selection: $currency) {
@@ -2665,12 +2665,16 @@ private struct SettingsPage: View {
         }
     }
     @State private var apiKeyDraft = ""
+    @AppStorage("aiProvider") private var aiProvider = "claude"
+    @AppStorage("chatGPTModel") private var chatGPTModel = ""
+    @State private var codexStatus = "Checking…"
+    @State private var codexSigningIn = false
     @State private var openRouterDraft = ""
     @AppStorage("useOpenRouter") private var useOpenRouter = false
     @AppStorage("openRouterModel") private var openRouterModel = "openrouter/auto"
     @AppStorage("customEndpoint") private var customEndpoint = "https://openrouter.ai/api"
     @AppStorage("strongModelForWork") private var strongForWork = true
-    @AppStorage("assistantModel") private var assistantModel = Assistant.Model.opus.rawValue
+    @AppStorage("assistantModel") private var assistantModel = Assistant.Model.haiku.rawValue
     @AppStorage("assistantEffort") private var effort = Assistant.Effort.low.rawValue
     @AppStorage("assistantAutonomy") private var autonomy = Assistant.Autonomy.careful.rawValue
     @AppStorage("rememberConversations") private var remember = true
@@ -2916,6 +2920,31 @@ private struct SettingsPage: View {
     }
 
     @ViewBuilder private var advanced: some View {
+        section("AI", "sparkles") {
+            row("Joe runs on", aiProvider == "chatgpt" ? "Your ChatGPT plan, through OpenAI's Codex. No Chrome control or Claude connectors in this mode"
+                : "Your Claude plan, through Claude Code", last: aiProvider != "chatgpt") {
+                Choice(options: [("claude", "Claude"), ("chatgpt", "ChatGPT")], selection: $aiProvider)
+            }
+            if aiProvider == "chatgpt" {
+                row("ChatGPT", codexStatus) {
+                    Button(codexSigningIn ? "Finish in your browser…" : CodexSession.executable == nil ? "Install and sign in" : "Sign in") {
+                        codexSigningIn = true
+                        Task {
+                            codexStatus = await CodexAccount.connect()
+                            codexSigningIn = false
+                            model.settingsVersion += 1
+                        }
+                    }
+                    .buttonStyle(PillButton(prominent: !codexStatus.hasPrefix("Signed in with ChatGPT")))
+                    .disabled(codexSigningIn)
+                }
+                row("Model", "Empty: your plan's default, which follows OpenAI's newest", last: true) {
+                    TextField("Default", text: $chatGPTModel)
+                        .textFieldStyle(.roundedBorder).frame(width: 220)
+                }
+            }
+        }
+        .task(id: aiProvider) { if aiProvider == "chatgpt" { codexStatus = await CodexAccount.status() } }
         section("AI account", "creditcard") {
             row("Pay for Claude with", useAPIKey ? "An Anthropic API key, billed per request" : "The Claude plan Claude Code is signed in to", last: !useAPIKey) {
                 Choice(options: [(false, "Claude plan"), (true, "API key")], selection: $useAPIKey)

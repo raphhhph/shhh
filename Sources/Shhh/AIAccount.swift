@@ -75,6 +75,26 @@ enum AIAccount {
                 "ANTHROPIC_API_KEY": "", "CLAUDE_CONFIG_DIR": folder.path]
     }
 
+    // MARK: ChatGPT
+
+    /// Settings → Advanced → AI: "ChatGPT" runs Joe on OpenAI's Codex CLI signed in to the user's
+    /// ChatGPT plan (`CodexSession`), for students who pay for ChatGPT instead of Claude.
+    static var usesChatGPT: Bool {
+        get { UserDefaults.standard.string(forKey: "aiProvider") == "chatgpt" }
+        set { UserDefaults.standard.set(newValue ? "chatgpt" : "claude", forKey: "aiProvider") }
+    }
+
+    /// A Codex model ID, or nil for the plan's default (which follows OpenAI's newest).
+    static var chatGPTModel: String? {
+        UserDefaults.standard.string(forKey: "chatGPTModel").flatMap {
+            let trimmed = $0.trimmingCharacters(in: .whitespaces)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+    }
+
+    /// Whose AI answers, for messages: "Claude" or "ChatGPT".
+    static var brainName: String { usesChatGPT ? "ChatGPT" : "Claude" }
+
     /// "sk-ant-…a1b2", for showing which key is saved without showing it.
     static var maskedKey: String? {
         storedKey.map { $0.count > 12 ? String($0.prefix(7)) + "…" + String($0.suffix(4)) : "saved" }

@@ -16,8 +16,9 @@ Joe acting on other apps and services.
 ## Decisions
 - Sending, deleting, submitting, inviting pause for the user's OK; Joe never reads secrets.
 - Spotify button never disabled; a second click reopens sign-in; port conflicts named.
+- Spotify for other users (21 Oct 2026): since Feb 2026 a development-mode Spotify app allows only 5 allow-listed users and needs a Premium owner; extended quota is for businesses only. So: "play X" without search (no app secret and no sign-in on that Mac) goes to Claude, which finds the open.spotify.com link with WebSearch and runs `--spotify "play <link>"` (`Spotify.quick`, `.playLink`). Liked songs and playlists stay for allow-listed testers (Spotify developer dashboard, User Management). A sign-in from an account not on the list gets a 403 on /me: Joe says so and keeps no token.
 
 ## Known issues / to-do
-- Spotify for other users: add their emails in the Spotify developer dashboard (dev mode, 25 users) or apply for extended quota.
+- Spotify: test keyless play on a Mac with no Spotify.json (time from request to music); allow-list up to 5 testers.
 - Plip-style guided walkthroughs ("show me how to submit on ManageBac" with pointers step by step).
 - Undo for desktop tidy-ups everywhere; confirm before risky actions consistently.

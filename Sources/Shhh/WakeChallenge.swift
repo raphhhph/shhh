@@ -135,7 +135,22 @@ struct WakeChallenge: Equatable {
 
     /// Their subjects, from Settings (all of them when none are set).
     private static var subjects: [String] {
-        Profile.subjects.components(separatedBy: ",").compactMap { StudyBuddy.pack(for: $0) }
+        Profile.subjects.components(separatedBy: ",").compactMap { StudyBuddy.pack(for: $0) ?? otherSubject($0) }
+    }
+
+    /// Subjects with challenges but no Study pack yet, so a student taking them gets their own facts.
+    private static func otherSubject(_ subject: String) -> String? {
+        let words = subject.lowercased()
+        let keys: [(String, [String])] = [
+            ("Biology", ["biology", "bio "]),
+            ("Chemistry", ["chemistry", "chem "]),
+            ("Physics", ["physics"]),
+            ("History", ["history"]),
+            ("Psychology", ["psychology", "psych "]),
+            ("Mathematics AA", ["math aa", "maths aa", "analysis and approaches", "a&a"]),
+            ("Geography", ["geography"]),
+        ]
+        return keys.first { entry in entry.1.contains { (words + " ").contains($0) } }?.0
     }
 
     private struct Fact { let subject: String; let topic: String; let text: String }
@@ -215,6 +230,32 @@ struct WakeChallenge: Equatable {
         Fact(subject: "Theory of Knowledge", topic: "Human sciences: reliability", text: "In 2015 a large project tried to repeat 100 published psychology studies and got the same significant result in only about 36% of them."),
         Fact(subject: "Theory of Knowledge", topic: "Natural sciences: ethics", text: "Thalidomide was sold from 1957 as safe in pregnancy and caused birth defects in over 10,000 babies before it was withdrawn."),
         Fact(subject: "Theory of Knowledge", topic: "Shared knowledge", text: "A 2005 study in Nature found Wikipedia's science articles about as accurate as Encyclopaedia Britannica's, though anyone can edit them."),
+        Fact(subject: "Biology", topic: "Enzymes", text: "Most human enzymes work best near 37 degrees. Well above their optimum the active site changes shape: the enzyme is denatured, and that can't be undone."),
+        Fact(subject: "Biology", topic: "Cell structure", text: "Prokaryotic cells have no nucleus and small 70S ribosomes. Eukaryotic cells have 80S ribosomes, but their mitochondria and chloroplasts still carry 70S ones."),
+        Fact(subject: "Biology", topic: "Antibiotic resistance", text: "Antibiotics kill bacteria but not viruses, which have no metabolism of their own. Overusing them selects for resistant bacteria such as MRSA."),
+        Fact(subject: "Biology", topic: "Exam technique", text: "Outline means a brief account; explain means give reasons. In an explain answer, every point needs its because."),
+        Fact(subject: "Chemistry", topic: "Equilibrium", text: "Le Chatelier's principle: a system at equilibrium shifts to oppose a change. A catalyst moves neither the position nor the constant, it only gets there faster."),
+        Fact(subject: "Chemistry", topic: "The Haber process", text: "The Haber process makes ammonia from nitrogen and hydrogen over an iron catalyst at about 450 degrees: a compromise between yield and rate."),
+        Fact(subject: "Chemistry", topic: "The mole", text: "One mole holds 6.02 times ten to the 23 particles, and one mole of an ideal gas fills 22.7 cubic decimetres at STP in the IB data booklet."),
+        Fact(subject: "Chemistry", topic: "Exam technique", text: "Give units with every answer and state symbols in every equation that asks for them: both are easy marks to lose."),
+        Fact(subject: "Physics", topic: "Energy", text: "Kinetic energy is half m v squared, so doubling your speed makes four times the kinetic energy: why braking distances grow so fast."),
+        Fact(subject: "Physics", topic: "Radioactive decay", text: "Half-life is the time for half the radioactive nuclei to decay. After three half-lives, one eighth of the original nuclei remain."),
+        Fact(subject: "Physics", topic: "Waves", text: "Light from the Sun takes about eight minutes and twenty seconds to reach Earth: you always see the Sun as it was."),
+        Fact(subject: "Physics", topic: "Exam technique", text: "Use g as 9.81 metres per second squared from the data booklet, and match the significant figures of the data you were given."),
+        Fact(subject: "History", topic: "Cold War", text: "The Berlin Wall went up in August 1961 and fell on 9 November 1989. Germany reunified less than a year later, on 3 October 1990."),
+        Fact(subject: "History", topic: "World War One", text: "The Treaty of Versailles was signed on 28 June 1919, five years to the day after Franz Ferdinand was shot in Sarajevo."),
+        Fact(subject: "History", topic: "Rise of authoritarian states", text: "Mao Zedong proclaimed the People's Republic of China on 1 October 1949, after the Communists won the civil war against the Guomindang."),
+        Fact(subject: "History", topic: "Source analysis", text: "For a source's value and limitations, use origin, purpose and content, and tie each point to the question, not to sources in general."),
+        Fact(subject: "Psychology", topic: "Memory", text: "Patient HM had parts of both hippocampi removed in 1953. Afterwards he could not form new long-term memories of facts and events."),
+        Fact(subject: "Psychology", topic: "Conformity", text: "In Asch's line study, about 75% of participants went along with the group's wrong answer at least once."),
+        Fact(subject: "Psychology", topic: "Research methods", text: "A correlation can't show cause and effect. Only an experiment, where the independent variable is changed on purpose, can."),
+        Fact(subject: "Psychology", topic: "Memory", text: "Miller's 1956 paper suggested short-term memory holds about seven items, plus or minus two."),
+        Fact(subject: "Mathematics AA", topic: "Calculus", text: "The derivative of sine x is cosine x, and of cosine x is minus sine x, but only with angles in radians."),
+        Fact(subject: "Mathematics AA", topic: "Proof by induction", text: "Induction needs a base case, the step from n equals k to n equals k plus one, and a concluding sentence: the sentence carries a mark."),
+        Fact(subject: "Mathematics AA", topic: "Exam technique", text: "Paper 1 has no calculator: know exact values, like sine of thirty degrees is one half and cosine of sixty degrees is one half."),
+        Fact(subject: "Geography", topic: "Population", text: "Japan's population peaked around 2008 at about 128 million and has fallen since: a key case study of an ageing population."),
+        Fact(subject: "Geography", topic: "Climate change", text: "The 2015 Paris Agreement aims to keep warming well below 2 degrees, and to try for 1.5 degrees, above pre-industrial levels."),
+        Fact(subject: "Geography", topic: "Hazards", text: "The 2004 Indian Ocean tsunami, set off by a magnitude 9.1 earthquake near Sumatra, killed about 230,000 people in 14 countries."),
     ]
 
     private static let allQuestions: [Question] = [
@@ -241,5 +282,20 @@ struct WakeChallenge: Equatable {
         Question(subject: "Chinese B", text: "How do you say good morning in Chinese?", answers: ["早上好", "早安", "zao shang hao", "zaoshang hao"]),
         Question(subject: "Chinese B", text: "How do you say teacher in Chinese?", answers: ["老师", "lao shi", "laoshi"]),
         Question(subject: "Theory of Knowledge", text: "Name one of the five areas of knowledge in TOK.", answers: ["history", "human science", "natural science", "mathematics", "math", "the arts", "arts"]),
+        Question(subject: "Biology", text: "Which organelle is the site of aerobic respiration?", answers: ["mitochondria", "mitochondrion"]),
+        Question(subject: "Biology", text: "How many chromosomes are in a human body cell?", answers: ["46"]),
+        Question(subject: "Biology", text: "Which molecule brings amino acids to the ribosome?", answers: ["trna", "t rna", "transfer"]),
+        Question(subject: "Chemistry", text: "What is the pH of pure water at 25 degrees?", answers: ["7"]),
+        Question(subject: "Chemistry", text: "Which group of the periodic table are the noble gases?", answers: ["18"]),
+        Question(subject: "Physics", text: "What is the SI unit of force?", answers: ["newton"]),
+        Question(subject: "Physics", text: "What is the SI unit of power?", answers: ["watt"]),
+        Question(subject: "History", text: "In which year did World War Two end?", answers: ["1945", "19 45"]),
+        Question(subject: "History", text: "Who led the Bolsheviks in the 1917 October Revolution?", answers: ["lenin"]),
+        Question(subject: "Psychology", text: "Which brain structure, damaged in patient HM, is key to forming new memories?", answers: ["hippocampus", "hippocampi"]),
+        Question(subject: "Psychology", text: "In an experiment, what do you call the variable the researcher changes?", answers: ["independent"]),
+        Question(subject: "Mathematics AA", text: "What is log base 10 of 1000?", answers: ["3"]),
+        Question(subject: "Mathematics AA", text: "What is the derivative of x squared?", answers: ["2x", "2 x"]),
+        Question(subject: "Geography", text: "Which river does the Three Gorges Dam cross?", answers: ["yangtze", "yangzi", "chang jiang"]),
+        Question(subject: "Geography", text: "What is the largest ocean?", answers: ["pacific"]),
     ]
 }

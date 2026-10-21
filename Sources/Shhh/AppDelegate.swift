@@ -695,6 +695,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         self.key = key
         alarms.quiet(true) // answering the wake-up challenge: the beeping waits
         speech.stop() // never talk into the microphone
+        if key == .rightOption { speech.warmUp() } // a question: the voice loads while they talk
         pauseMusic() // nor over music
         if notepad.isListening { notepad.stopListening() } // one recording at a time
         pressedAt = Date()
@@ -1879,6 +1880,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             items.append(item)
         }
         items.append(.separator())
+        for speed in SpeechOutput.speeds {
+            let item = item("Speed: \(speed.name)", #selector(selectVoiceSpeed(_:)))
+            item.representedObject = speed.value
+            item.state = speed.value == SpeechOutput.speed ? .on : .off
+            items.append(item)
+        }
+        items.append(.separator())
         let briefing = item("Read the morning briefing aloud", #selector(toggleSpeakBriefing))
         briefing.state = SpeechOutput.speakBriefing ? .on : .off
         items.append(briefing)
@@ -1891,6 +1899,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         speech.stop()
         SpeechOutput.engine = engine
         speech.prepare() // downloads the model the first time; lets go of the other
+    }
+
+    @objc private func selectVoiceSpeed(_ sender: NSMenuItem) {
+        guard let speed = sender.representedObject as? Double else { return }
+        SpeechOutput.speed = speed
     }
 
     @objc private func toggleSpeakBriefing() {

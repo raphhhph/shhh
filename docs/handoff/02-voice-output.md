@@ -19,6 +19,7 @@ Text to speech: Alba (English), the Mandarin voice, the Mac's voices for other s
 - Holding the ask key (right ⌥) warms Alba up (`warmUp`), so the reload after an idle unload happens while the user talks. Concurrent loads share one load (`loadingEnglish`).
 - Short lines (≤ 40 characters: "One sec.", "Checking your calendar.") are kept as audio after the first time (up to 40, `clips`, survives the idle unload), so they play instantly.
 - The first sentence of a reply starts at its first comma when that comes after 6+ words, instead of waiting for the full stop.
+- "Read this to me" / "read it out loud" (spoken to Joe, `readAloud` in AppDelegate): the selected text, or the front window's text when nothing is selected (not browsers), read in full by Alba with no Claude call. A key press stops it. If there's nothing to read, a toast says to select text.
 - Speed (Voice menu: Normal / A bit faster / Fast = 1, 1.15, 1.3) via `AVAudioUnitTimePitch` (no pitch change) and the Mac voice's rate. Setting `voiceSpeed`.
 - Voices unload after **10 quiet minutes** (~800 MB) and reload with the next sentence. If a voice fails or isn't downloaded, that sentence is said by the Mac's voice.
 - After 2.5 s of silence from Claude on a spoken request, Joe says the status ("Checking your calendar.") or "One sec." once (`acknowledgeIfSlow`).
@@ -29,4 +30,4 @@ Text to speech: Alba (English), the Mandarin voice, the Mac's voices for other s
 - The Mandarin path doesn't get `spokenMaths` (Chinese numbers are handled by `chineseNumbers`).
 - Speaking before the answer exists: done as the acknowledgement; true early speech needs input streaming (see 01).
 - Branch `wip-voice-samples` (an uncompiled `--voice-samples` comparison) predates choosing Alba; it can be dropped.
-- Ideas: read selected text aloud (revision by ear), a per-subject pronunciation list.
+- Ideas: a per-subject pronunciation list; "read the next paragraph" / pause and resume for long read-alouds.

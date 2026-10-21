@@ -121,6 +121,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     /// "Quiz me on econ externalities", "test me on…": the study whiteboard, not the notch.
+    /// "Read this to me", "read it out loud": the selected text (or the front window's, in a PDF or
+    /// a document) in Joe's voice, all of it, for revising by ear. Nothing goes to Claude, so it's
+    /// instant and costs nothing. A key press stops it.
+    private func readAloud(_ request: String) -> Bool {
+        let pattern = #"^\W*((hey|ok|okay),?\s+)?(joe,?\s+)?(can you\s+|could you\s+|please\s+)?read\s+(this|that|it|the (selected|highlighted) text|the selection|this (page|paragraph|passage|text))(\s+out)?\s*(aloud|out loud|to me|for me)?\W*$"#
+        guard request.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil else { return false }
+        Task { [weak self] in
+            var passage = await ScreenContext.selection(limit: 20_000)?.text
+            if passage == nil { passage = await ScreenContext.windowText(limit: 20_000)?.text.text }
+            guard let self else { return }
+            guard let passage, !passage.isEmpty else {
+                self.toast.show("Select the text to read, then ask again", symbol: "text.cursor", tint: .orange)
+                return
+            }
+            self.speech.stop()
+            if SpeechOutput.engine == .off { self.speech.useForThisReply(.lifelike) }
+            self.speech.update(passage)
+            self.speech.finish()
+            self.toast.show("Reading it aloud. Press a key to stop", symbol: "speaker.wave.2", tint: .blue)
+        }
+        return true
+    }
+
     private func openStudy(_ request: String) -> Bool {
         // "Quiz me on…", "let's start a quiz", "study session", "open (up) the whiteboard"…
         let quiz = #"^\W*((hey|ok|okay|yo),?\s+)?(joe,?\s+)?(can you\s+)?(quiz|test) me\b|give me (a|an|one) (full )?exam(-style)? question|\b(start|do|begin|run)\b[^.?!]{0,12}\b(quiz|study session|revision session|practice session)\b|\b(open|pull|bring|start|show|get)\b[^.?!]{0,15}\bwhite ?board\b|^\W*(the )?white ?board\W*$"#
@@ -1483,6 +1506,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 if openStudy(text) { return }
                 if openPen(text) { return }
+                if readAloud(text) {
+                    if task.question.isEmpty { end(task) }
+                    return
+                }
                 if Self.isDismissRequest(text) {
                     if Self.isClearAll(text) { for other in tasks where other !== task { end(other) } }
                     // Said with nothing on the card: "it" is the finished answers waiting at the notch.

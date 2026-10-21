@@ -1093,10 +1093,10 @@ private struct TodayTimeline: View {
 
     /// "Maths AI HL" → "Maths", "Chinese B" → "Chinese": what fits in a block.
     /// The block's label: the whole title when short, else its first word, cut (without "…") to what
-    /// fits, so a short class reads "Adv" rather than "A…". About 6.5 pt a letter at this size.
+    /// fits, so a short class reads "Adv" rather than "A…". About 7.5 pt a letter at this size, to be safe.
     private static func short(_ title: String, fitting width: CGFloat) -> String {
         let word = title.count <= 7 ? title : String(title.split(separator: " ").first ?? Substring(title))
-        return String(word.prefix(max(1, Int(width / 6.5))))
+        return String(word.prefix(max(1, Int(width / 7.5))))
     }
 
     private static func times(_ slot: Daybook.Slot) -> String {
@@ -1301,7 +1301,7 @@ private struct HistoryRow: View {
                 if continuing {
                     HStack(spacing: 8) {
                         TextField("Ask a follow-up…", text: $followUp)
-                            .textFieldStyle(.roundedBorder)
+                            .joeField()
                             .onSubmit(send)
                         Button("Send", action: send).buttonStyle(PillButton(prominent: true)).disabled(followUp.isEmpty)
                     }
@@ -2187,7 +2187,7 @@ private struct AlarmsPage: View {
             }
             HStack(spacing: 10) {
                 TextField(kind == .timer ? "Label: pasta, focus…" : kind == .reminder ? "What to remind you about" : "Label: Go to school, gym…", text: $label)
-                    .textFieldStyle(.roundedBorder)
+                    .joeField()
                     .onSubmit(set)
                 Button(kind == .timer ? "Start timer" : "Set \(kind.rawValue)", action: set)
                     .buttonStyle(PillButton(prominent: true))
@@ -2222,7 +2222,7 @@ private struct AlarmsPage: View {
         Card(title: "Or type it", symbol: "text.cursor") {
             HStack {
                 TextField("Timer for 25 minutes · alarm at 6:30 every weekday · remind me at 3pm to submit the form", text: $request)
-                    .textFieldStyle(.roundedBorder)
+                    .joeField()
                     .onSubmit(add)
                 Button("Set", action: add).buttonStyle(PillButton()).disabled(request.isEmpty)
             }
@@ -2401,8 +2401,8 @@ private struct DictionaryPage: View {
 
         Card(title: "Add", symbol: "plus") {
             HStack(spacing: 10) {
-                TextField("Spelled: Ammiel, ManageBac, WellPrepped", text: $word).textFieldStyle(.roundedBorder).onSubmit(add)
-                TextField("Joe hears (optional): manage back", text: $heardAs).textFieldStyle(.roundedBorder).onSubmit(add)
+                TextField("Spelled: Ammiel, ManageBac, WellPrepped", text: $word).joeField().onSubmit(add)
+                TextField("Joe hears (optional): manage back", text: $heardAs).joeField().onSubmit(add)
                 Button("Add", action: add).buttonStyle(PillButton(prominent: true)).disabled(word.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             Text("Leave “Joe hears” empty and he fixes anything that sounds close. Fill it in and he swaps those exact words every time.")
@@ -2410,7 +2410,7 @@ private struct DictionaryPage: View {
         }
 
         Card(title: "Try it", symbol: "wand.and.stars") {
-            TextField("Type a sentence the way Joe might mishear it…", text: $trial).textFieldStyle(.roundedBorder)
+            TextField("Type a sentence the way Joe might mishear it…", text: $trial).joeField()
             if !trial.isEmpty {
                 let fixed = Vocabulary.apply(trial)
                 HStack(alignment: .top, spacing: 8) {
@@ -2551,7 +2551,7 @@ private struct MusicPage: View {
             .font(.system(size: 18))
             HStack {
                 TextField("Play… (a song, artist, album, or “my liked songs”)", text: $request)
-                    .textFieldStyle(.roundedBorder)
+                    .joeField()
                     .onSubmit(play)
                 Button("Play", action: play).disabled(request.isEmpty)
             }
@@ -2631,6 +2631,18 @@ private struct PillButton: ButtonStyle {
             .overlay(Capsule().strokeBorder(prominent ? Color.clear : Look.line))
             .opacity(configuration.isPressed ? 0.7 : 1)
             .contentShape(Capsule())
+    }
+}
+
+private extension View {
+    /// A text field in Joe's style: a soft capsule like `Choice`, instead of the stock square border.
+    func joeField() -> some View {
+        textFieldStyle(.plain)
+            .font(.system(size: 13))
+            .padding(.horizontal, 12)
+            .frame(height: 30)
+            .background(Color.primary.opacity(0.06), in: Capsule())
+            .overlay(Capsule().strokeBorder(Look.line))
     }
 }
 
@@ -3222,7 +3234,7 @@ private struct SettingsPage: View {
                 row("API key", AIAccount.maskedKey.map { "Saved: \($0). New conversations use it." } ?? "From console.anthropic.com → API keys", last: true) {
                     HStack(spacing: 8) {
                         SecureField("sk-ant-…", text: $apiKeyDraft)
-                            .textFieldStyle(.roundedBorder)
+                            .joeField()
                             .frame(width: 220)
                         Button("Save") { AIAccount.save(apiKeyDraft); apiKeyDraft = ""; model.settingsVersion += 1 }
                             .buttonStyle(PillButton(prominent: true))
@@ -3237,18 +3249,18 @@ private struct SettingsPage: View {
             }
             row("Endpoint", "OpenRouter, or any Anthropic-compatible base URL (LiteLLM, a gateway, a local server)") {
                 TextField("https://openrouter.ai/api", text: $customEndpoint)
-                    .textFieldStyle(.roundedBorder).frame(width: 260)
+                    .joeField().frame(width: 260)
             }
             row("API key", AIAccount.maskedOpenRouterKey.map { "Saved: \($0)" } ?? "OpenRouter: openrouter.ai → Keys") {
                 HStack(spacing: 8) {
-                    SecureField("sk-or-…", text: $openRouterDraft).textFieldStyle(.roundedBorder).frame(width: 220)
+                    SecureField("sk-or-…", text: $openRouterDraft).joeField().frame(width: 220)
                     Button("Save") { AIAccount.save(openRouterDraft, as: "openRouterKey"); openRouterDraft = ""; model.settingsVersion += 1 }
                         .buttonStyle(PillButton(prominent: true)).disabled(openRouterDraft.count < 20)
                 }
             }
             row("Model", "An OpenRouter model ID, e.g. openai/…, deepseek/…, qwen/…; openrouter/auto picks one", last: true) {
                 TextField("openrouter/auto", text: $openRouterModel)
-                    .textFieldStyle(.roundedBorder).frame(width: 260)
+                    .joeField().frame(width: 260)
             }
         }
         section("Brain", "cpu") {

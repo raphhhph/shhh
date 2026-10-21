@@ -869,6 +869,7 @@ private struct NotesStep: View {
             try? FileManager.default.createDirectory(at: folder.appendingPathComponent(sub), withIntermediateDirectories: true)
         }
         Assistant.vaultURL = folder
+        Daybook.addDefaultRoutines()
     }
 }
 

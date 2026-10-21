@@ -74,6 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private let greeting = NotchGreeting()
     private let studyBoard = StudyBoard()
+    private lazy var overview = NotchOverview(data: dashboard.model)
     private let pen = ScreenPen()
 
     /// Silence while Claude works feels like nothing's happening: after 2.5 s with no answer yet, Joe
@@ -304,6 +305,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let trim = Timer(timeInterval: 60, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.speech.trimMemory() } }
         RunLoop.main.add(trim, forMode: .common)
         Task.detached(priority: .background) { Self.pruneModelCache() }
+        // The notch overview: rest the pointer on the notch while Joe's idle.
+        overview.runningTasks = { [weak self] in self?.tasks.filter(\.isWorking).map(\.question) ?? [] }
+        overview.canShow = { [weak self] in
+            guard let self else { return false }
+            return self.state == .idle && !self.answerPanel.isVisible && !self.alarms.isRinging && !self.pen.isOpen
+        }
+        overview.start()
         // ManageBac and Google calendar links: read at launch and every half hour.
         Task { await CalendarFeed.refreshLinks() }
         let calendarLinks = Timer(timeInterval: 1800, repeats: true) { _ in Task { await CalendarFeed.refreshLinks() } }

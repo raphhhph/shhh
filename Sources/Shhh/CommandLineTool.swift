@@ -315,6 +315,17 @@ enum CommandLineTool {
                 _ = await speech.prepareNow(.lifelike)
                 print("+ Alba voice (PocketTTS): \(footprint()) MB")
             }
+        case ("--overview-preview", 2):
+            MainActor.assumeIsolated {
+                NSApplication.shared.setActivationPolicy(.accessory)
+                let model = DashboardModel(actions: .init(ask: { _ in }, askInBackground: { _ in }, status: { "" }, setVoice: { _ in },
+                    setNotch: { _ in }, setCleanup: { _ in }, setScreenControl: { _ in }, chooseVault: {}, showOnboarding: {},
+                    openNotepad: {}, microphones: { [] }, setSpeechLanguages: { _ in }, cancelAlarm: { _ in }, addAlarm: { _ in }))
+                let overview = NotchOverview(data: model)
+                overview.preview(to: URL(fileURLWithPath: args[1])) { _ = overview; exit(0) }
+            }
+            NSApplication.shared.run()
+            exit(0)
         case ("--challenge", 1...):
             // Joe --challenge [seed] ["what I said"]: a wake-up challenge, and whether that answer passes.
             let seed = args.count > 1 ? Int(args[1]) ?? 0 : 0

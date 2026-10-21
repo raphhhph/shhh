@@ -2643,6 +2643,8 @@ private struct SettingsPage: View {
     @AppStorage("wakeChallenge") private var wakeChallenge = true
     @AppStorage("reduceNoise") private var reduceNoise = true
     @AppStorage("liveCaption") private var liveWords = true
+    @AppStorage("notchOverview") private var overviewOn = true
+    @State private var overviewWidgets = NotchOverview.widgets.map(\.rawValue)
     @AppStorage("chineseVoice") private var chineseVoice = "zf_001"
     @AppStorage("modelMirrorChina") private var chinaMirror = false
     @AppStorage("profileSchool") private var profileSchool = ""
@@ -2802,6 +2804,30 @@ private struct SettingsPage: View {
             }
         }
         section("Notch", "rectangle.topthird.inset.filled") {
+            row("Overview on hover", "Rest the pointer on the notch: time, next class, what's due, your tasks, music") { switchOn($overviewOn) }
+            row("Overview widgets", overviewWidgets.map { NotchOverview.Widget(rawValue: $0)?.title ?? $0 }.joined(separator: " · ")) {
+                Menu {
+                    ForEach(NotchOverview.Widget.allCases) { widget in
+                        Button {
+                            if overviewWidgets.contains(widget.rawValue) { overviewWidgets.removeAll { $0 == widget.rawValue } }
+                            else { overviewWidgets.append(widget.rawValue) }
+                            NotchOverview.widgets = overviewWidgets.compactMap(NotchOverview.Widget.init)
+                        } label: {
+                            if overviewWidgets.contains(widget.rawValue) { Label(widget.title, systemImage: "checkmark") } else { Text(widget.title) }
+                        }
+                    }
+                    Divider()
+                    ForEach(Array(overviewWidgets.enumerated()), id: \.offset) { index, raw in
+                        if index > 0 {
+                            Button("Move \(NotchOverview.Widget(rawValue: raw)?.title ?? raw) left") {
+                                overviewWidgets.swapAt(index, index - 1)
+                                NotchOverview.widgets = overviewWidgets.compactMap(NotchOverview.Widget.init)
+                            }
+                        }
+                    }
+                } label: { Text("Choose…") }
+                .menuStyle(.borderlessButton).fixedSize()
+            }
             row("Answers at the notch", "Answers drop down from the notch") { switchOn($notch) { model.actions.setNotch($0) } }
             row("Alarms at the notch", "The capsule beside the notch", last: true) {
                 Choice(options: [("full", "Time"), ("icon", "Icon only"), ("soon", "Last hour only"), ("off", "Hidden")], selection: $alarmsAtNotch)

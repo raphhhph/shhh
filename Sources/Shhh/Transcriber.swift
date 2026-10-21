@@ -50,7 +50,16 @@ actor Transcriber {
         _ = try? await transcribe([Float](repeating: 0, count: 16_000))
         // Chinese comes after, without holding up the keys: after an update macOS recompiles it for
         // the Neural Engine, which can take minutes. Until then everything goes to Parakeet.
-        if Self.languages == .chinese { Task { await self.loadChinese() } }
+        if Self.languages == .chinese { Task { await self.loadChinese() } } else { warmedUp = true }
+    }
+
+    /// Every speech model loaded and run once (Chinese too, when it's on), or given up on.
+    private(set) var warmedUp = false
+
+    /// Returns once `warmedUp` (or after `seconds`): for starting other GPU models (voices, noise
+    /// filter) only after these, so they don't all compile and warm up at once after an install.
+    func waitUntilWarmedUp(seconds: Double = 120) async {
+        for _ in 0..<Int(seconds * 10) where !warmedUp { try? await Task.sleep(for: .milliseconds(100)) }
     }
 
     private var loadingChinese = false
@@ -83,6 +92,7 @@ actor Transcriber {
             }
         }
         loadingChinese = false
+        warmedUp = true // or failed: either way, nothing more is coming
     }
 
     /// SenseVoice with its encoder on the GPU. FluidAudio puts it on the Neural Engine, where each

@@ -776,7 +776,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     let samples = self.recorder.tail(recording, seconds: min(elapsed, 30))
                     guard let text = try? await withTimeout(4, { try await transcriber.transcribe(samples) }),
                           self.state == .recording else { return }
-                    self.caption.show(text)
+                    self.caption.show(Vocabulary.apply(text)) // spelled as the final text will be
                 }
             }
         }

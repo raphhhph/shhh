@@ -2397,7 +2397,7 @@ private struct DictionaryPage: View {
                 TextField("Joe hears (optional): manage back", text: $heardAs).textFieldStyle(.roundedBorder).onSubmit(add)
                 Button("Add", action: add).buttonStyle(PillButton(prominent: true)).disabled(word.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            Text("Leave “Joe hears” empty and he fixes anything that sounds close. Fill it in and he swaps those exact words every time.")
+            Text("Leave “Joe hears” empty and he fixes anything that sounds close. Fill it in and he swaps those exact words every time. IB words (ManageBac, TOK, CAS, IA, EE, HL, SL, MYP) are built in.")
                 .font(.system(size: 11.5)).foregroundStyle(.secondary)
         }
 

@@ -22,8 +22,16 @@ Everything from a key press to text: hotkeys, double-tap lock, "Hey Joe" hands-f
 - Live words: every 0.9 s the recording so far is transcribed (one at a time) and shown; the final text still comes from the whole recording.
 - Spoken alarm commands, study, pen and Spotify are handled on the Mac without Claude (fast, free).
 
+- **IB words are built in** (`Vocabulary.builtInSwaps`, `builtInTerms`): ManageBac by sound, and exact swaps for TOK, CAS, IA, EE, HL/SL, DP1/DP2, MYP, ATL, ESS, Math AA/AI. Applied after the user's own dictionary, and an exact swap the user wrote for the same words wins. Off with the European languages ("cas", "ee" are ordinary words there). Fuzzy matching is kept to ManageBac on purpose: "Turnitin" by sound swallowed "turning in".
+- Live words go through the dictionary too, so the caption already reads "ManageBac", like the final text.
+
+## Audit (21 Oct 2026) and plan
+Goal: a student talks and gets the right words with nothing to set up.
+- Done: built-in IB words; live words spelled like the final text; the Dictionary page says IB words are built in.
+- Dropped: **streaming words to Claude while talking**. Claude Code takes a user message as a whole turn, so sending half a sentence would start an answer to the wrong question. Joe already starts the Claude session the moment right ⌥ goes down, which is the part that saves time.
+- Next: add the student's teachers' and classmates' names from the timetable / ManageBac feed to the dictionary automatically (needs `08-school-data-calendar`); measure the ManageBac fix with `--transcribe` on recordings of "ManageBac".
+
 ## Known issues / to-do
-- **Input streaming to Claude** (send words while still talking so Claude starts early) isn't built; live words are display only.
-- ManageBac is misheard by both models ("Manage BO", "manageBok"); the dictionary fixes known spellings after transcription.
+- Built-in IB words are not compiled or tested yet (written in a cloud thread). Check on the Mac: `swift build -c release`, then Dashboard → Dictionary → Try it with "check manage back for my tok and cas deadlines, hl math ai".
 - Live words haven't been tested by speaking (no mic access for the agent).
 - Option: let users pick Parakeet for English even with Chinese on (accuracy vs 1.2 GB).

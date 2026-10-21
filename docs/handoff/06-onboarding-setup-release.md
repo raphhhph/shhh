@@ -24,6 +24,7 @@ First run for a new user (a friend with the DMG), getting Claude, models and acc
 - Claude sign-in from scratch is untested (needs a fresh Mac; testing would log Raph out).
 - Downloads: resume isn't implemented (a broken download restarts); FluidAudio has partial-download checks for some models only. A hung download can't be restarted from the app (`loadSpeechModel` ignores a second start while one is loading); the stuck warning tells the user to relaunch, which the crash guard turns into a clean restart.
 - `MorningStep`: wake-up time and days (school days or every day); on the way forward it adds a repeating "Wake up" alarm (first ring on one of its days, via `Alarm.next(after:)`), unless a repeating "wake" alarm exists. The challenge and morning briefing then work from the first morning.
-- To do: timetable from a photo/PDF during onboarding (no timetable source for new users yet; asked School data for an import function); detect whether Gmail is already connected on claude.ai.
+- `ConnectStep` also takes a timetable photo/screenshot/PDF (plus an optional "today is Day N" for rotating timetables) and calls `Daybook.importTimetable(from:dayToday:)` from School data (PR #10, must merge first).
+- To do: detect whether Gmail is already connected on claude.ai.
 - Not signed/notarised: needs an Apple Developer account ($99/yr); `release.sh` supports `JOE_IDENTITY` once there is one.
 - Error handling everywhere the network is used: short message + retry (partly done: Spotify, calendar links, models).

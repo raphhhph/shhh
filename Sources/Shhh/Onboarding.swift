@@ -2,6 +2,7 @@ import EventKit
 import AppKit
 import AVFoundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The first launch, as a window of its own: Joe says hi at the notch, learns the user's name,
 /// shows what he does in short animations, sets up school, notes, permissions and Claude, and ends
@@ -824,6 +825,9 @@ private struct ConnectStep: View {
     @State private var found: [String] = []
     @State private var reading = false
     @State private var macCalendar = EKEventStore.authorizationStatus(for: .event) == .fullAccess
+    @State private var dayToday = ""
+    @State private var timetableStatus: String?
+    @State private var importing = false
 
     var body: some View {
         StepFrame(model: model, title: "Your school, connected",
@@ -849,6 +853,19 @@ private struct ConnectStep: View {
                     } else if !links.isEmpty {
                         Text("\(links.count) calendar link\(links.count == 1 ? "" : "s") added").font(.system(size: 12.5)).foregroundStyle(.green)
                     }
+                }
+                // Lessons aren't in the ManageBac link: a picture of the timetable gives Joe today's classes,
+                // Now and Next, and the Daybook's lessons.
+                card(icon: "tablecells", tint: .purple, title: "Your timetable",
+                     detail: "A photo, screenshot or PDF of your class timetable. I'll read it once; it takes a minute or two.") {
+                    HStack(spacing: 10) {
+                        Primary(title: importing ? "Reading…" : "Choose a file", enabled: !importing) { chooseTimetable() }.frame(width: 160)
+                        TextField("Rotating timetable? Today's day, e.g. Day 3", text: $dayToday)
+                            .textFieldStyle(.plain).padding(.horizontal, 12).frame(height: 36)
+                            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+                        if importing { ProgressView().controlSize(.small) }
+                    }
+                    if let timetableStatus { Text(timetableStatus).font(.system(size: 12.5)).foregroundStyle(Tint.soft) }
                 }
                 if links.isEmpty {
                     card(icon: "calendar", tint: .blue, title: "Or your Mac's Calendar", detail: "If your school calendar is already in the Calendar app, I can read it from there.") {
@@ -898,6 +915,20 @@ private struct ConnectStep: View {
             if Profile.subjects.isEmpty, !subjects.isEmpty { Profile.subjects = subjects.joined(separator: ", ") }
             linkStatus = nil
             withAnimation { found = summary() }
+        }
+    }
+
+    private func chooseTimetable() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image, .pdf]
+        panel.message = "Choose a photo, screenshot or PDF of your timetable"
+        guard panel.runModal() == .OK, let file = panel.url else { return }
+        importing = true
+        timetableStatus = "Reading your timetable…"
+        let day = dayToday.trimmingCharacters(in: .whitespaces)
+        Task {
+            timetableStatus = await Daybook.importTimetable(from: file, dayToday: day.isEmpty ? nil : day)
+            importing = false
         }
     }
 

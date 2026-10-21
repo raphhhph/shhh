@@ -208,7 +208,14 @@ enum PastPapers {
         let when = [session, year].compactMap { $0 }.joined(separator: " ")
         let parts: [String?] = [number.map { "Paper \($0)" }, when, level, zone.map { "TZ\($0)" }]
         let title = parts.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
-        let questions = split(pages).map { part -> Question in
+        var parts = split(pages)
+        if parts.isEmpty, pages.contains(where: { !$0.isEmpty }) {
+            // No numbered questions (a language Paper 1, a source booklet): the paper as one entry,
+            // from its first page with text, so the tutor can still use it.
+            let first = pages.firstIndex { $0.trimmingCharacters(in: .whitespacesAndNewlines).count > 40 } ?? 0
+            parts = [(0, Array((first + 1)...pages.count), pages[first...].joined(separator: "\n"))]
+        }
+        let questions = parts.map { part -> Question in
             Question(number: part.number, pages: part.pages,
                      marks: isMarkscheme ? nil : marks(in: part.text),
                      topic: topic(of: part.text, in: sections),
@@ -335,7 +342,7 @@ enum PastPapers {
         }
         var lines: [String] = []
         for (paper, question) in ordered.prefix(limit) {
-            var line = "- \(paper.title) Q\(question.number)"
+            var line = "- \(paper.title) " + (question.number == 0 ? "(whole paper)" : "Q\(question.number)")
             if let topic = question.topic { line += " · \(topic)" }
             if let marks = question.marks { line += " · [\(marks)]" }
             line += " · paper [\(reference(paper.path))] p.\(pageRange(question.pages))"

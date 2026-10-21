@@ -130,6 +130,12 @@ final class DashboardModel: ObservableObject {
 
     let actions: Actions
     @Published var page: Page = .home
+
+    /// Settings, open on one of its tabs (General, Personality, …).
+    func openSettings(_ tab: String) {
+        UserDefaults.standard.set(tab, forKey: "settingsTab")
+        page = .settings
+    }
     @Published var activity: [Activity] = []
     @Published var stats = ActivityLog.Stats()
     @Published var focus: String?
@@ -674,7 +680,8 @@ private struct HomePage: View {
                     }
                 }
             }
-            DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil, stretch: true) { model.page = .calendar }
+            DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil, stretch: true,
+                    connect: { model.openSettings("general") }) { model.page = .calendar }
                 .frame(width: narrow ? nil : 320)
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -687,12 +694,17 @@ private struct HomePage: View {
                 .map { Daybook.Slot(start: $0.fireAt, title: $0.title, kind: .alarm) })
         }
 
+        // Kept short: the rest is one click away in History.
         Card(title: "Recent", symbol: "clock") {
             if model.activity.isEmpty {
                 Text("What you dictate and ask shows up here.").font(.system(size: 13)).foregroundStyle(.secondary)
             }
-            ForEach(model.activity.prefix(5)) { entry in
+            ForEach(model.activity.prefix(3)) { entry in
                 ActivityRow(entry: entry)
+            }
+            if model.activity.count > 3 {
+                Button { model.page = .history } label: { Label("All history", systemImage: "arrow.right").labelStyle(.titleAndIcon) }
+                    .buttonStyle(ChipButton())
             }
         }
 
@@ -819,13 +831,20 @@ private struct DueSoon: View {
     let deadlines: [CalendarFeed.Item]
     let synced: Bool
     var stretch = false
+    /// Where ManageBac's calendar link goes in: shown while nothing has come in yet.
+    var connect: (() -> Void)?
     var open: () -> Void
 
     var body: some View {
         Card(title: "Due soon", symbol: "flag", stretch: stretch) {
             if deadlines.isEmpty {
-                Text(synced ? "Nothing due in the next two weeks." : "Sync the calendar to bring in ManageBac.")
+                Text(synced ? "Nothing due in the next two weeks." : "Your ManageBac deadlines show up here once its calendar is linked.")
                     .font(.system(size: 13)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !synced, let connect {
+                    Button(action: connect) { Label("Link ManageBac", systemImage: "link") }
+                        .buttonStyle(PillButton(prominent: true))
+                }
             }
             VStack(spacing: 0) {
                 ForEach(deadlines.prefix(5)) { item in
@@ -1527,7 +1546,7 @@ private struct CalendarPage: View {
                 } else {
                     if let selected { detail(selected) }
                     Card { week(dates, items, now) }
-                    DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil) {}
+                    DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil, connect: { model.openSettings("general") }) {}
                 }
             }
         }
@@ -1774,7 +1793,7 @@ private struct CalendarPage: View {
     private func rail(_ now: Date) -> some View {
         VStack(spacing: 16) {
             if let selected { detail(selected) }
-            DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil) {}
+            DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil, connect: { model.openSettings("general") }) {}
             Card(title: "Subjects", symbol: "square.grid.2x2") {
                 VStack(alignment: .leading, spacing: 7) {
                     ForEach(SubjectGroup.allCases, id: \.self) { group in

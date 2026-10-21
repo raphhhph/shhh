@@ -19,4 +19,5 @@ The dashboard window: pages Home, Calendar, Study, History, Routines, Alarms, No
 
 ## Known issues / to-do
 - "Less default SwiftUI": switches and segmented pickers are now Joe's own (Oct 2026). Still to do: History, Alarms, Dictionary, Spotify pages beyond their pickers; the remaining stock `ColorPicker` and `DatePicker`.
-- "Declutter" (from notes): ask Raph which screen; candidates: Home's Recent, the sidebar footer.
+- Declutter: Home's Recent is three lines with "All history" (Oct 2026); the sidebar footer is the other candidate.
+- Empty states should offer the fix, not just say what's missing: Due soon shows "Link ManageBac" (opens Settings → General via `DashboardModel.openSettings`) until the calendar has synced.

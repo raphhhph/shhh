@@ -7,7 +7,7 @@ Everything Joe draws over other apps: the resting notch band, the recording pill
 
 ## Files
 - `Notch.swift`: `Notch` (geometry, `screenUnderMouse`), `NotchPanel`, `NotchSpace` (pins panels to every Space via a private CGS API), `RestingNotch` (the black band with the sparkle, `ignoresMouseEvents`), `NotchGreeting`.
-- `NotchOverview.swift`: hover overview (NotchNook-style). Polls the pointer every 0.15 s; opens after 0.35 s on the notch while Joe is idle; widgets clock, next class (tomorrow's first in the evening), due soon, today's five, Joe's tasks, next alarm, now playing (each has a `symbol` for the editor); order/selection saved in `notchWidgets`, edited with the drag editor in Settings. Data from `DashboardModel`.
+- `NotchOverview.swift`: hover overview (NotchNook-style). Polls the pointer every 0.15 s; opens after 0.35 s on the notch while Joe is idle; widgets clock, next class (tomorrow's first in the evening), due soon, today's five, Joe's tasks, next alarm, now playing, Ask Joe (three one-tap questions; asking hides the overview so the card can drop), focus timer (25 or 50 min, a real `.timer` alarm, counts down) (each has a `symbol` for the editor); order/selection saved in `notchWidgets`, edited with the drag editor in Settings. Data from `DashboardModel`.
 - `AnswerPanel.swift`: the card (status steps, plan checklist, approval cards, reply). `MarkdownText` renders headings, lists, numbered lists, checklists, quotes, code, tables, rules.
 - `RecordingPanel.swift` (pill), `LiveCaption.swift`, `TaskShelf.swift` (background tasks capsule), `Toast.swift`, `ScreenPen.swift` (draw over the screen; "Ask Joe about this" sends a screenshot), `ScreenPointer.swift` (point tags on screen from Claude's replies).
 
@@ -17,6 +17,6 @@ Everything Joe draws over other apps: the resting notch band, the recording pill
 - The overview never opens while recording, with the answer card up, an alarm ringing, or the pen open.
 
 ## Known issues / to-do
-- Overview widgets: arranged in Settings → General → Notch → Edit (`WidgetEditor` in `Dashboard.swift`): a mini notch of tiles you drag to reorder (they trade places as you pass), a minus or a drag down to the tray removes one, drag up or tap in the tray adds one. At most `NotchOverview.maxWidgets` (5) fit the 680 pt overview. Next: more widgets (quick ask, weather, focus timer, study streak).
+- Overview widgets: arranged in Settings → General → Notch → Edit (`WidgetEditor` in `Dashboard.swift`): a mini notch of tiles you drag to reorder (they trade places as you pass), a minus or a drag down to the tray removes one, drag up or tap in the tray adds one. At most `NotchOverview.maxWidgets` (5) fit the 680 pt overview. Next: weather (needs a location without a permission prompt) and a study streak (from the quiz log, once Study records one).
 - The overview and pen haven't been tried by hand (no screen access for the agent); check on Raph's built-in display + ultrawide setup.
 - `Joe --overview-preview`, `--alarm-preview` draw them off screen.

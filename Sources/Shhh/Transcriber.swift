@@ -50,10 +50,21 @@ actor Transcriber {
         _ = try? await transcribe([Float](repeating: 0, count: 16_000))
         // Chinese comes after, without holding up the keys: after an update macOS recompiles it for
         // the Neural Engine, which can take minutes. Until then everything goes to Parakeet.
-        if Self.languages == .chinese { Task { await self.loadChinese() } }
+        if Self.languages == .chinese { Task { await self.loadChinese() } } else { warmedUp = true }
+    }
+
+    /// Every speech model loaded and run once (Chinese too, when it's on), or given up on.
+    private(set) var warmedUp = false
+
+    /// Returns once `warmedUp` (or after `seconds`): for starting other GPU models (voices, noise
+    /// filter) only after these, so they don't all compile and warm up at once after an install.
+    func waitUntilWarmedUp(seconds: Double = 120) async {
+        for _ in 0..<Int(seconds * 10) where !warmedUp { try? await Task.sleep(for: .milliseconds(100)) }
     }
 
     private var loadingChinese = false
+    /// Transcriptions running on Parakeet right now (it mustn't be freed under them).
+    private var parakeetRunning = 0
 
     private func loadChinese() async {
         guard chinese == nil, !loadingChinese else { return }
@@ -71,13 +82,17 @@ actor Transcriber {
             _ = try? await manager.transcribeDetailed(audio: [Float](repeating: 0, count: 16_000))
             chinese = manager
             // SenseVoice hears English about as well, so Parakeet (1.2 GB on the GPU) goes: it was only
-            // there for the first seconds after launch.
+            // there for the first seconds after launch. Not under a transcription still running on it:
+            // the actor lets this run while that one awaits, and freeing its GPU buffers mid-prediction
+            // aborted Joe a few seconds after launch (a Metal assertion in CoreML, no Joe frames).
             if let parakeet = self.manager {
-                self.manager = nil
-                await parakeet.cleanup()
+                self.manager = nil // nothing new starts on it
+                for _ in 0..<600 where parakeetRunning > 0 { try? await Task.sleep(for: .milliseconds(50)) }
+                if parakeetRunning == 0 { await parakeet.cleanup() } // still busy after 30 s: let it be freed with the Transcriber
             }
         }
         loadingChinese = false
+        warmedUp = true // or failed: either way, nothing more is coming
     }
 
     /// SenseVoice with its encoder on the GPU. FluidAudio puts it on the Neural Engine, where each
@@ -122,8 +137,11 @@ actor Transcriber {
         }
         // Padded with silence to a whole number of 5-second blocks: on the GPU each new length of
         // audio is prepared once (about a second), so a handful of lengths keeps it fast.
+        // At least half a second of it after the last word: speech that runs right up to the end
+        // lost its last word ("…to ManageBac tonight" came out "…to manage back To").
         let block = 16_000 * 5
-        let blocked = samples + [Float](repeating: 0, count: (block - samples.count % block) % block)
+        let tailed = samples + [Float](repeating: 0, count: 8_000)
+        let blocked = tailed + [Float](repeating: 0, count: (block - tailed.count % block) % block)
         if let chinese, samples.count < 16_000 * 100,
            let heard = try? await chinese.transcribeDetailed(audio: blocked) {
             let text = heard.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -134,6 +152,8 @@ actor Transcriber {
         // The model wants at least one second of audio.
         var padded = samples
         if padded.count < 16_000 { padded += [Float](repeating: 0, count: 16_000 - padded.count) }
+        parakeetRunning += 1
+        defer { parakeetRunning -= 1 }
         var state = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
         let result = try await manager.transcribe(padded, decoderState: &state)
         return result.text.trimmingCharacters(in: .whitespacesAndNewlines)

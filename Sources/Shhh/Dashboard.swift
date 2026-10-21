@@ -3320,7 +3320,8 @@ extension Dashboard {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-        let view = NSHostingView(rootView: DashboardView(model: model))
+        // The window's own colour behind it, as on screen: Classic's see-through page drew grey in the bitmap.
+        let view = NSHostingView(rootView: DashboardView(model: model).background(Color(nsColor: .windowBackgroundColor)))
         window.contentView = view
         window.orderFrontRegardless()
         // Let the page load its data and settle before drawing it.

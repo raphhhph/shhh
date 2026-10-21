@@ -23,6 +23,8 @@ final class AnswerPanel {
     private var leftAt: Date?
     var onClose: () -> Void = {}
     var onStopSpeaking: () -> Void = {}
+    /// A typed follow-up from the card's chips (Simpler, Example, Quiz me), in the same conversation.
+    var onFollowUp: (String) -> Void = { _ in }
 
     /// Whether Joe is reading the answer aloud (checked every second): the stop button.
     func setSpeaking(_ speaking: Bool) {
@@ -226,6 +228,7 @@ final class AnswerPanel {
         panel = makePanel()
         model.onClose = { [weak self] in self?.onClose() }
         model.onStopSpeaking = { [weak self] in self?.onStopSpeaking() }
+        model.onFollowUp = { [weak self] in self?.onFollowUp($0) }
         // objectWillChange fires before the change lands: measure on the next turn.
         changes = model.objectWillChange.sink { [weak self] in
             DispatchQueue.main.async {
@@ -330,6 +333,7 @@ final class AnswerModel: ObservableObject {
     var peek: Bool { !expanded && !listening && !seen && isDone && error == nil && !(subject ?? "").isEmpty }
 
     var onClose: () -> Void = {}
+    var onFollowUp: (String) -> Void = { _ in }
 }
 
 private struct AnswerView: View {
@@ -378,10 +382,13 @@ private struct AnswerView: View {
             // Outside the scrolling area, so it's never scrolled out of sight.
             if let approval = model.approval {
                 ApprovalView(approval: approval)
-            } else if notch == nil, model.isDone, model.canFollowUp {
-                Text("Hold right ⌥ to follow up")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+            } else if model.isDone, model.canFollowUp, !model.answer.isEmpty {
+                followUpChips
+                if notch == nil {
+                    Text("Or hold right ⌥ to follow up")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
             }
         }
         .padding(.horizontal, notch == nil ? 16 : 20)
@@ -389,6 +396,29 @@ private struct AnswerView: View {
         .padding(.top, notch.map { $0.height + 4 } ?? 16) // right under the notch
         .frame(width: AnswerPanel.width)
         .frame(maxHeight: scrolls ? .infinity : nil, alignment: .top)
+    }
+
+    /// What a student asks next most, one tap each, in the same conversation.
+    private static let followUps: [(label: String, symbol: String, request: String)] = [
+        ("Simpler", "wand.and.stars", "Explain that more simply, as if I'm new to it. Keep it short."),
+        ("Example", "lightbulb", "Give me one worked example of that, step by step."),
+        ("Quiz me", "checkmark.bubble", "Quiz me on that: three short questions, one at a time. Wait for my answer and mark it before the next."),
+    ]
+
+    private var followUpChips: some View {
+        HStack(spacing: 6) {
+            ForEach(Self.followUps, id: \.label) { item in
+                Button { model.onFollowUp(item.request) } label: {
+                    Label(item.label, systemImage: item.symbol)
+                        .font(.caption.weight(.medium))
+                        .padding(.horizontal, 10)
+                        .frame(height: 24)
+                        .background(Color.primary.opacity(0.08), in: Capsule())
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 
     private var background: some View {

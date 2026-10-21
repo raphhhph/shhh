@@ -221,6 +221,7 @@ private struct OverviewView: View {
                     Button { ask(item.startRequest) } label: {
                         HStack(alignment: .firstTextBaseline, spacing: 5) {
                             Text(item.start.formatted(.dateTime.weekday(.abbreviated))).font(.system(size: 10.5, weight: .bold)).foregroundStyle(.red.opacity(0.85))
+                                .frame(width: 26, alignment: .leading) // titles share a left edge
                             Text(item.title).font(.system(size: 11.5)).lineLimit(2).multilineTextAlignment(.leading)
                         }
                         .contentShape(Rectangle())

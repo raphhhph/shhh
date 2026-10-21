@@ -2060,6 +2060,28 @@ private struct StudyPage: View {
                 }
             }
             .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+            let coverage = StudyReview.coverage(subject: subject, from: topics)
+            if coverage.total > 0 {
+                VStack(alignment: .leading, spacing: 4) {
+                    GeometryReader { geometry in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color.primary.opacity(0.08))
+                            Capsule().fill(color).frame(width: geometry.size.width * Double(coverage.done) / Double(coverage.total))
+                        }
+                    }
+                    .frame(height: 5)
+                    HStack(spacing: 8) {
+                        Text("Syllabus practised: \(coverage.done) of \(coverage.total) subtopics").font(.system(size: 11.5)).foregroundStyle(.secondary)
+                        Spacer()
+                        if !coverage.untouched.isEmpty {
+                            Button("Something new") {
+                                model.actions.ask("Quiz me on \(subject): something new, from the subtopics I've never practised (start with \(coverage.untouched.prefix(3).joined(separator: "; "))).")
+                            }
+                            .buttonStyle(.plain).font(.system(size: 11.5, weight: .medium)).foregroundStyle(color)
+                        }
+                    }
+                }
+            }
             let mistakes = Mistakes.count(subject)
             if mistakes > 0 {
                 HStack(spacing: 12) {

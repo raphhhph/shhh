@@ -31,13 +31,13 @@ enum StudyReview {
 
         /// "due today", "3 days overdue", "in 4 days".
         var when: String {
-            if let test, due > Calendar.current.startOfDay(for: Date()) {
-                return "before \(test.title), \(test.date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)))"
-            }
+            let testDay = test.map { "\($0.title), \($0.date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)))" }
+            if let testDay, due > Calendar.current.startOfDay(for: Date()) { return "before \(testDay)" }
             let days = daysOverdue
-            if days == 0 { return "due today" }
-            if days > 0 { return days == 1 ? "1 day overdue" : "\(days) days overdue" }
-            return -days == 1 ? "tomorrow" : "in \(-days) days"
+            let state = days == 0 ? "due today" : days > 0 ? (days == 1 ? "1 day overdue" : "\(days) days overdue")
+                : (-days == 1 ? "tomorrow" : "in \(-days) days")
+            // Why it's near the top: a test is coming.
+            return testDay.map { "\(state) · test: \($0)" } ?? state
         }
     }
 
@@ -80,7 +80,8 @@ enum StudyReview {
     static func key(_ topic: String) -> String {
         let trimmed = topic.trimmingCharacters(in: .whitespaces)
         if let number = trimmed.range(of: #"^(AHL\s+)?([A-Z]{1,3}\.?)?\d+(\.\d+)*\b"#, options: .regularExpression) {
-            return String(trimmed[number]).uppercased()
+            // "AHL 1.12" in the map is "1.12" in the log.
+            return String(trimmed[number]).uppercased().replacingOccurrences(of: #"^AHL\s+"#, with: "", options: .regularExpression)
         }
         return trimmed.lowercased()
     }
@@ -135,13 +136,26 @@ enum StudyReview {
         .sorted { a, b in
             let testA = a.test?.date ?? .distantFuture, testB = b.test?.date ?? .distantFuture
             if testA != testB { return testA < testB }
-            return (a.daysOverdue, -a.lastScore) > (b.daysOverdue, -b.lastScore)
+            if (a.daysOverdue, -a.lastScore) != (b.daysOverdue, -b.lastScore) {
+                return (a.daysOverdue, -a.lastScore) > (b.daysOverdue, -b.lastScore)
+            }
+            return (a.subject, a.topic) < (b.subject, b.topic) // a steady order for ties
         }
     }
 
     /// The next topic to come up, when nothing is due.
     static func upcoming(from all: [Topic]? = nil) -> Topic? {
         (all ?? topics()).filter { !$0.isDue }.min { $0.due < $1.due }
+    }
+
+    /// How much of a subject's syllabus map they've been marked on: the numbered subtopics, and those
+    /// with no quiz answer yet (in syllabus order).
+    static func coverage(subject: String, from all: [Topic]? = nil) -> (total: Int, done: Int, untouched: [String]) {
+        guard let pack = StudyBuddy.pack(for: subject) else { return (0, 0, []) }
+        let sections = PastPapers.sections(pack)
+        let practised = Set((all ?? topics()).filter { $0.pack == pack }.map { key($0.topic) })
+        let untouched = sections.filter { !practised.contains(key($0.label)) }.map(\.label)
+        return (sections.count, sections.count - untouched.count, untouched)
     }
 
     /// For a tutor's or Claude's instructions: what's due, one line each.

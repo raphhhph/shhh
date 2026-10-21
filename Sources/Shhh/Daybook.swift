@@ -366,7 +366,8 @@ enum Daybook {
             "## Today's five",
         ]
         lines += five.isEmpty ? ["Nothing carried over and nothing due today or tomorrow."] : five
-        let plan = studyPlan(deadlines, now)
+        let busy = events.filter { !$0.allDay }.map { ($0.start, $0.end ?? $0.start.addingTimeInterval(3600)) }
+        let plan = studyPlan(deadlines, now, busy: busy)
         if !plan.isEmpty { lines += ["", "## Plan"] + plan }
         lines += ["", "## Classes", classTable(on: now), "", "## Rest of today"] + rest
         lines += ["", "## Deadlines"] + due
@@ -412,7 +413,7 @@ enum Daybook {
     /// When to work on what's due: today's free periods, after school and the evening, each given
     /// to the most pressing deadline of the next two weeks (tests and summatives first on the same
     /// day), so the student sees a plan, not just a list. Suggestions, written at the morning build.
-    private static func studyPlan(_ deadlines: [CalendarFeed.Item], _ now: Date) -> [String] {
+    private static func studyPlan(_ deadlines: [CalendarFeed.Item], _ now: Date, busy: [(Date, Date)] = []) -> [String] {
         let calendar = Calendar.current
         guard let fortnight = calendar.date(byAdding: .day, value: 14, to: now) else { return [] }
         let weighty = #"\b(test|exam|summative|paper|ia|assessment|essay|quiz)\b"#
@@ -443,6 +444,15 @@ enum Daybook {
         if let start = at(19, 30), let end = at(21) { blocks.append(("evening", start, end)) }
         // Two blocks for the most pressing one, then one each.
         let order = [work[0]] + work
+        // Around what's already on: a block that meets an event starts when it ends (gym 15:45–16:45
+        // moves after-school work to 16:45), and goes if less than half an hour is left.
+        blocks = blocks.compactMap { block in
+            var block = block
+            for (start, end) in busy.sorted(by: { $0.0 < $1.0 }) where start < block.end && end > block.start {
+                if start > block.start, start.timeIntervalSince(block.start) >= 30 * 60 { block.end = start } else { block.start = end }
+            }
+            return block.end.timeIntervalSince(block.start) >= 30 * 60 ? block : nil
+        }
         return blocks.filter { $0.end > now }.enumerated().compactMap { index, block in
             guard index < order.count, order[index].start > block.end else { return nil }
             let item = order[index]

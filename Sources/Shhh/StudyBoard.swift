@@ -371,6 +371,8 @@ private let accent = Color(red: 1, green: 0.58, blue: 0.12)
 private struct StudyBoardView: View {
     @ObservedObject var model: StudyBoardModel
     var startSketching = false
+    /// For the preview: a diagram already drawn.
+    var demoStrokes: [SketchPad.Stroke] = []
     @FocusState private var typing: Bool
     @State private var sketching = false
     @State private var started = false
@@ -411,7 +413,7 @@ private struct StudyBoardView: View {
         }
         .frame(minWidth: 620, minHeight: 520)
         .background(Color(nsColor: .textBackgroundColor))
-        .onAppear { if !started { started = true; sketching = startSketching } }
+        .onAppear { if !started { started = true; sketching = startSketching; strokes = demoStrokes } }
         .tint(accent)
     }
 
@@ -652,7 +654,18 @@ extension StudyBoard {
             """) + [.answer(text: "Supply shifts up by the tax, price rises, quantity falls.", spoken: true)] + StudyBoardModel.parse("""
             <feedback n="1" score="3" total="4">✓ Supply shifts up by the tax\\n✓ Higher price, lower quantity\\n✗ missing: the price producers receive</feedback><model>S shifts vertically by the tax; consumers pay Pc, producers get Pp.</model>
             """), subject: "Economics HL", sketching: sketch)
-        let host = NSHostingView(rootView: StudyBoardView(model: board.model, startSketching: sketch))
+        // A tax diagram in the three inks: black axes and demand, blue supply, red supply after the tax.
+        func line(_ a: CGPoint, _ b: CGPoint, _ color: Color) -> SketchPad.Stroke {
+            SketchPad.Stroke(points: (0...20).map { t in CGPoint(x: a.x + (b.x - a.x) * Double(t) / 20, y: a.y + (b.y - a.y) * Double(t) / 20) }, color: color)
+        }
+        let demo = sketch ? [
+            line(CGPoint(x: 60, y: 20), CGPoint(x: 60, y: 200), .black), line(CGPoint(x: 60, y: 200), CGPoint(x: 520, y: 200), .black),
+            line(CGPoint(x: 100, y: 40), CGPoint(x: 460, y: 190), .black),
+            line(CGPoint(x: 100, y: 185), CGPoint(x: 460, y: 45), .blue),
+            line(CGPoint(x: 100, y: 145), CGPoint(x: 440, y: 12), .red),
+            line(CGPoint(x: 236, y: 132), CGPoint(x: 236, y: 92), .red),
+        ] : []
+        let host = NSHostingView(rootView: StudyBoardView(model: board.model, startSketching: sketch, demoStrokes: demo))
         let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 860, height: 760), styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
         window.contentView = host
         window.orderFrontRegardless()

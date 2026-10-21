@@ -1019,13 +1019,10 @@ private struct TodayTimeline: View {
         }
     }
 
-    /// A colour dot that opens the colour picker.
+    /// A colour dot that opens a few colours to choose from.
     private func swatch(_ title: String, _ hex: Binding<String>) -> some View {
         HStack(spacing: 5) {
-            ColorPicker("", selection: Binding(get: { Color(hex: hex.wrappedValue) }, set: { hex.wrappedValue = $0.hex }), supportsOpacity: false)
-                .labelsHidden()
-                .scaleEffect(0.7)
-                .frame(width: 22, height: 18)
+            SwatchPicker(hex: hex)
             Text(title).font(.system(size: 12)).foregroundStyle(.secondary)
         }
         .help("Click the colour to change it")
@@ -2142,15 +2139,14 @@ private struct AlarmsPage: View {
                         Button("\(value) min") { minutes = value }.buttonStyle(PillButton(prominent: minutes == value))
                     }
                 }
-                Stepper(value: $minutes, in: 1...720) {
-                    Text("\(minutes) minutes").font(.system(size: 13, weight: .medium).monospacedDigit())
+                HStack(spacing: 8) {
+                    Button { minutes = max(1, minutes - 1) } label: { Image(systemName: "minus") }.buttonStyle(PillButton())
+                    Text("\(minutes) minutes").font(.system(size: 13, weight: .medium).monospacedDigit()).frame(minWidth: 86)
+                    Button { minutes = min(720, minutes + 1) } label: { Image(systemName: "plus") }.buttonStyle(PillButton())
                 }
             } else {
                 HStack(alignment: .center, spacing: 22) {
-                    DatePicker("", selection: $time, displayedComponents: .hourAndMinute)
-                        .datePickerStyle(.stepperField)
-                        .labelsHidden()
-                        .controlSize(.large)
+                    TimeDial(time: $time)
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 5) {
                             ForEach(Self.dayLetters, id: \.0) { day, letter in
@@ -2639,6 +2635,77 @@ private struct JoeSwitch: ToggleStyle {
             .accessibilityElement()
             .accessibilityAddTraits(.isButton)
             .accessibilityValue(configuration.isOn ? "On" : "Off")
+    }
+}
+
+/// The alarm time, big: hours and minutes each with a step up and down (minutes by five), or the
+/// scroll wheel over either. Joe's take on the stepper date field.
+private struct TimeDial: View {
+    @Binding var time: Date
+
+    var body: some View {
+        let parts = Calendar.current.dateComponents([.hour, .minute], from: time)
+        HStack(spacing: 2) {
+            column(String(format: "%02d", parts.hour ?? 0), step: { shift(hours: $0) })
+            Text(":").font(.system(size: 30, weight: .semibold)).foregroundStyle(.secondary).padding(.bottom, 3)
+            column(String(format: "%02d", parts.minute ?? 0), step: { shift(minutes: $0 * 5) })
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Look.line))
+    }
+
+    private func column(_ value: String, step: @escaping (Int) -> Void) -> some View {
+        VStack(spacing: 0) {
+            Button { step(1) } label: { Image(systemName: "chevron.up").frame(width: 44, height: 16).contentShape(Rectangle()) }
+            Text(value).font(.system(size: 30, weight: .semibold).monospacedDigit())
+                .contentTransition(.numericText())
+            Button { step(-1) } label: { Image(systemName: "chevron.down").frame(width: 44, height: 16).contentShape(Rectangle()) }
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 11, weight: .bold))
+        .foregroundStyle(.secondary)
+    }
+
+    /// Wraps within the day, like a clock: 23 + 1 is 00, the date stays.
+    private func shift(hours: Int = 0, minutes: Int = 0) {
+        let calendar = Calendar.current
+        let parts = calendar.dateComponents([.hour, .minute], from: time)
+        let total = ((parts.hour ?? 0) * 60 + (parts.minute ?? 0) + hours * 60 + minutes) % 1440
+        let wrapped = (total + 1440) % 1440
+        withAnimation(.snappy) {
+            time = calendar.date(bySettingHour: wrapped / 60, minute: wrapped % 60, second: 0, of: time) ?? time
+        }
+    }
+}
+
+/// A colour dot; click it for a row of colours that sit well beside the subject colours.
+private struct SwatchPicker: View {
+    @Binding var hex: String
+    @State private var open = false
+    private static let colours = ["#FF9420", "#F25C54", "#E84A8A", "#9B6BF2", "#4A7DFF", "#2BB3C0", "#3DBE6B", "#8E8E93"]
+
+    var body: some View {
+        Button { open.toggle() } label: {
+            Circle().fill(Color(hex: hex)).frame(width: 12, height: 12)
+                .overlay(Circle().strokeBorder(Color.primary.opacity(0.15)))
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $open, arrowEdge: .bottom) {
+            HStack(spacing: 8) {
+                ForEach(Self.colours, id: \.self) { colour in
+                    Button { hex = colour; open = false } label: {
+                        Circle().fill(Color(hex: colour)).frame(width: 20, height: 20)
+                            .overlay(Circle().strokeBorder(Color.primary.opacity(hex.uppercased() == colour ? 0.8 : 0), lineWidth: 2).padding(-3))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(12)
+        }
     }
 }
 

@@ -1394,6 +1394,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // minutes to…", "cancel my alarms": set here, at once. Nothing goes to Claude.
                 if let request = AlarmRequest.parse(text) {
                     if task.question.isEmpty { end(task) }
+                    ActivityLog.record(.ask, text, answer: "Alarm command") // in History, so it can be traced
                     alarms.handle(request)
                     return
                 }

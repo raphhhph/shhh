@@ -41,10 +41,27 @@ enum CalendarFeed {
         items += linkItems().filter { $0.start >= first && $0.start < last } // ManageBac and Google links
         items += macCalendar(from: first, to: last)
         var seen = Set<String>()
-        return items.sorted { $0.start < $1.start }.filter { item in
+        var kept: [Item] = []
+        for item in items.sorted(by: { $0.start < $1.start }) {
             let key = "\(item.title.lowercased()) \(Int(item.start.timeIntervalSince1970 / 60))"
-            return seen.insert(key).inserted
+            guard seen.insert(key).inserted else { continue }
+            // The same deadline from two places (a calendar link and Joe's sync), named a little
+            // differently: "BM Unit 1 Summative Assessment" and "Unit 1 Summative Assessment 2".
+            if item.kind == .deadline, kept.contains(where: { $0.kind == .deadline && calendar.isDate($0.start, inSameDayAs: item.start)
+                                                              && Self.sameThing($0.title, item.title) }) { continue }
+            kept.append(item)
         }
+        return kept
+    }
+
+    /// Titles that are mostly the same words.
+    static func sameThing(_ a: String, _ b: String) -> Bool {
+        func words(_ text: String) -> Set<String> {
+            Set(text.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { $0.count > 1 })
+        }
+        let x = words(a), y = words(b)
+        guard !x.isEmpty, !y.isEmpty else { return false }
+        return Double(x.intersection(y).count) / Double(min(x.count, y.count)) >= 0.6
     }
 
     // MARK: - Sources

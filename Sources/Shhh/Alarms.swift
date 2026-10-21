@@ -77,9 +77,16 @@ enum AlarmStore {
 
     /// Cancels the ones whose title contains `words` (all of them for nil). Returns how many.
     @discardableResult
+    /// A wake-up challenge alarm in its last hour: it can't be cancelled, only solved. Otherwise,
+    /// half asleep, "cancel my alarm" at 7:27 beat the 7:30 challenge (it happened).
+    static func isLocked(_ alarm: Alarm) -> Bool {
+        WakeChallenge.applies(to: alarm) && alarm.fireAt.timeIntervalSinceNow < 3600 && alarm.fireAt > Date()
+    }
+
     static func cancel(matching words: String?, kind: Alarm.Kind? = nil) -> Int {
         let all = load()
         let keep = all.filter { alarm in
+            if isLocked(alarm) { return true }
             if let kind, alarm.kind != kind { return true }
             guard let words, !words.isEmpty else { return false }
             // "cancel my 6:45 alarm": by its time, as well as by its title.
@@ -368,6 +375,10 @@ final class AlarmClock {
     var onChange: () -> Void = {}
 
     func cancel(id: UUID) {
+        if let alarm = AlarmStore.load().first(where: { $0.id == id }), AlarmStore.isLocked(alarm) {
+            onNotice("Wake-up alarms can't be cancelled in their last hour: solve the challenge to stop it")
+            return
+        }
         AlarmStore.save(AlarmStore.load().filter { $0.id != id })
         tick()
     }
@@ -420,9 +431,11 @@ final class AlarmClock {
         case .list:
             onNotice(AlarmStore.summary)
         case let .cancel(words, kind):
+            let locked = AlarmStore.load().filter(AlarmStore.isLocked).count
             let count = AlarmStore.cancel(matching: words, kind: kind)
             tick()
-            onNotice(count == 0 ? "No matching alarms" : "Cancelled \(count) \(count == 1 ? (kind?.rawValue ?? "alarm") : (kind?.rawValue ?? "alarm") + "s")")
+            let note = locked > 0 ? " (a wake-up alarm in its last hour stays: solve the challenge)" : ""
+            onNotice((count == 0 ? "No matching alarms" : "Cancelled \(count) \(count == 1 ? (kind?.rawValue ?? "alarm") : (kind?.rawValue ?? "alarm") + "s")") + note)
         }
     }
 

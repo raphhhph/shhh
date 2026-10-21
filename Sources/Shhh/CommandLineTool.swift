@@ -49,8 +49,8 @@ enum CommandLineTool {
                 try file.write(from: buffer)
                 print(cleaned == samples ? "Unchanged (filter not ready or off)." : "Cleaned: \(args[2])")
             }
-        case ("--transcribe", 2):
-            run { try await transcribe(file: args[1]) }
+        case ("--transcribe", 2...):
+            run { try await transcribe(files: Array(args.dropFirst())) }
         case ("--clean", 2):
             run { try await clean(args[1]) }
         case ("--record", 2):
@@ -339,7 +339,7 @@ enum CommandLineTool {
         }
     }
 
-    private static func transcribe(file: String) async throws {
+    private static func transcribe(files: [String]) async throws {
         let transcriber = Transcriber()
         let loading = Date()
         try await transcriber.load { _ in }
@@ -347,9 +347,11 @@ enum CommandLineTool {
             for _ in 0..<1200 where !(await transcriber.chineseReady) { try await Task.sleep(for: .milliseconds(100)) }
             print(String(format: "(Chinese ready %.1fs after loading began)", Date().timeIntervalSince(loading)))
         }
-        let start = Date()
-        let text = try await transcriber.transcribe(fileURL: URL(fileURLWithPath: file))
-        print(String(format: "[%.2fs] %@", Date().timeIntervalSince(start), text))
+        for file in files { // several: the later ones show the warm speed
+            let start = Date()
+            let text = try await transcriber.transcribe(fileURL: URL(fileURLWithPath: file))
+            print(String(format: "[%.2fs] %@", Date().timeIntervalSince(start), text))
+        }
     }
 
     private static func clean(_ input: String) async throws {

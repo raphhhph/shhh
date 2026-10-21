@@ -447,13 +447,14 @@ final class SpeechOutput {
     /// English parts go to Alba as words, not symbols. Without maths it's left as it is, so times,
     /// numbers and percentages are still said in Chinese.
     nonisolated static func mathsInChinese(_ text: String) -> String {
-        text.range(of: #"[=^²³√∫×÷−]|\\[A-Za-z]+"#, options: .regularExpression) != nil ? spokenMaths(text) : text
+        text.range(of: #"[=^²³√∫×÷−]|\\[A-Za-z]+"#, options: .regularExpression) != nil ? spokenMaths(text, inChinese: true) : text
     }
 
     /// Maths, science and units the way a teacher says them, for Alba, who would skip or spell out
     /// the symbols: "v = 3.2 × 10⁻⁴ m/s²" → "v equals 3.2 times 10 to the power of minus 4 metres per
     /// second squared". Study questions and feedback are full of these.
-    nonisolated static func spokenMaths(_ text: String) -> String {
+    /// `inChinese`: times, ranges and percentages are left for `chineseNumbers` to say in Chinese.
+    nonisolated static func spokenMaths(_ text: String, inChinese: Bool = false) -> String {
         // Bare fractions ("3/4") and " - " are only read as maths in a sentence that is maths, not
         // in a date or a dash between words.
         let isMaths = text.range(of: #"[=+×÷^²³√∫−]|\\(frac|sqrt)"#, options: .regularExpression) != nil
@@ -462,12 +463,14 @@ final class SpeechOutput {
             text = text.replacingOccurrences(of: pattern, with: template, options: .regularExpression)
         }
         // Clock times as said: "08:30" → "8:30", "9:00 AM" → "9 AM", "9:00" → "9 o'clock".
-        sub(#"(?<![0-9:])0([0-9]):([0-9]{2})"#, "$1:$2")
-        sub(#"(?<![0-9:])([0-9]{1,2}):00\s?[Aa]\.?[Mm]\b\.?(?=\S)"#, "$1 AM")
-        sub(#"(?<![0-9:])([0-9]{1,2}):00\s?[Pp]\.?[Mm]\b\.?(?=\S)"#, "$1 PM")
-        sub(#"(?<![0-9:])([0-9]{1,2}):00\s?[Aa]\.?[Mm]\b"#, "$1 AM")
-        sub(#"(?<![0-9:])([0-9]{1,2}):00\s?[Pp]\.?[Mm]\b"#, "$1 PM")
-        sub(#"(?<![0-9:])([0-9]|1[0-2]):00(?![0-9:])"#, "$1 o'clock")
+        if !inChinese {
+            sub(#"(?<![0-9:])0([0-9]):([0-9]{2})"#, "$1:$2")
+            sub(#"(?<![0-9:])([0-9]{1,2}):00\s?[Aa]\.?[Mm]\b\.?(?=\S)"#, "$1 AM")
+            sub(#"(?<![0-9:])([0-9]{1,2}):00\s?[Pp]\.?[Mm]\b\.?(?=\S)"#, "$1 PM")
+            sub(#"(?<![0-9:])([0-9]{1,2}):00\s?[Aa]\.?[Mm]\b"#, "$1 AM")
+            sub(#"(?<![0-9:])([0-9]{1,2}):00\s?[Pp]\.?[Mm]\b"#, "$1 PM")
+            sub(#"(?<![0-9:])([0-9]|1[0-2]):00(?![0-9:])"#, "$1 o'clock")
+        }
         // Money, then LaTeX ($x^2$, \(…\), \frac{a}{b}) into plain symbols.
         sub(#"\$([0-9][0-9,]*(\.[0-9]+)?)"#, "$1 dollars")
         sub(#"\\[()\[\]]|\$"#, " ")
@@ -539,6 +542,7 @@ final class SpeechOutput {
         sub(#"\^\(?3\)?(?![0-9A-Za-z.])"#, " cubed")
         sub(#"\^\((-?[^()]+)\)"#, " to the power of $1")
         sub(#"\^(-?[0-9a-zA-Z.]+)"#, " to the power of $1")
+        sub(#"to the power of -"#, "to the power of minus ") // e^{-x}: the minus is said, not dropped
         // Fractions.
         sub(#"\b([a-z])/([a-z])\b"#, "$1 over $2")
         if isMaths {
@@ -559,10 +563,14 @@ final class SpeechOutput {
             ("÷", " divided by "), ("∞", " infinity "), ("π", " pi "), ("θ", " theta "), ("Δ", " delta "),
             ("∫", " the integral of "), ("∑", " the sum of "), ("⇌", " is in equilibrium with "),
             (#"\b([a-z])\s*→\s*(?=-?[0-9∞])"#, "$1 tends to "), ("→", " gives "),
-            ("=", " equals "), (#"([0-9])\s?[–—]\s?([0-9])"#, "$1 to $2"), ("%", " percent"),
+            ("=", " equals "),
             (#"(^|[\s(,])-(?=[0-9.])"#, "$1minus "),
         ]
         for (pattern, template) in symbols { sub(pattern, template) }
+        if !inChinese {
+            sub(#"([0-9])\s?[–—]\s?([0-9])"#, "$1 to $2")
+            sub("%", " percent")
+        }
         if isMaths {
             sub(#"\s<\s"#, " is less than ")
             sub(#"\s>\s"#, " is greater than ")

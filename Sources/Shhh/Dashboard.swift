@@ -2638,8 +2638,8 @@ private struct JoeSwitch: ToggleStyle {
     }
 }
 
-/// The alarm time, big: hours and minutes each with a step up and down (minutes by five), or the
-/// scroll wheel over either. Joe's take on the stepper date field.
+/// The alarm time, big: hours and minutes each with a step up and down (minutes by five). Joe's
+/// take on the stepper date field.
 private struct TimeDial: View {
     @Binding var time: Date
 

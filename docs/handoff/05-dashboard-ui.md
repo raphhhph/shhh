@@ -18,6 +18,6 @@ The dashboard window: pages Home, Calendar, Study, History, Routines, Alarms, No
 - Verify with `Joe --snapshot <page> file.png 1280 820 [dark]` and look at the image; a tiling script (Swift, AppKit) makes contact sheets.
 
 ## Known issues / to-do
-- "Less default SwiftUI": switches and segmented pickers are now Joe's own (Oct 2026). Still to do: History, Alarms, Dictionary, Spotify pages beyond their pickers; the remaining stock `ColorPicker` and `DatePicker`.
+- "Less default SwiftUI": switches and segmented pickers are now Joe's own (Oct 2026). The alarm time is a `TimeDial` (big hours and minutes with steps; minutes by five) and the timeline colour a `SwatchPicker` (a popover of eight colours). Still to do: History, Dictionary, Spotify pages beyond their pickers.
 - Declutter: Home's Recent is three lines with "All history" (Oct 2026); the sidebar footer is the other candidate.
 - Empty states should offer the fix, not just say what's missing: Due soon shows "Link ManageBac" (opens Settings → General via `DashboardModel.openSettings`) until the calendar has synced.

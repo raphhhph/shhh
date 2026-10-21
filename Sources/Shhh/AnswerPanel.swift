@@ -340,6 +340,7 @@ private struct AnswerView: View {
     /// At the notch, its size: the card is an island that comes out of it (see `Island`).
     let notch: CGSize?
     @State private var copied = false
+    @State private var saved = false
 
     var body: some View {
         if let notch, scrolls {
@@ -408,7 +409,7 @@ private struct AnswerView: View {
         .buttonStyle(.borderless)
     }
 
-    /// Stop Joe talking (while he is), copy (once the reply is done) and close.
+    /// Stop Joe talking (while he is), copy and save to notes (once the reply is done) and close.
     @ViewBuilder
     private var buttons: some View {
         if model.speaking {
@@ -424,7 +425,16 @@ private struct AnswerView: View {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
             }
             .help("Copy answer")
-            .onChange(of: model.answer) { copied = false }
+            .onChange(of: model.answer) { copied = false; saved = false }
+            if NoteSaver.root != nil {
+                Button {
+                    saved = NoteSaver.saveAnswer(model.answer, question: model.question, subject: model.subject) != nil
+                } label: {
+                    Image(systemName: saved ? "checkmark" : "square.and.arrow.down")
+                }
+                .help(saved ? "Saved to your notes" : "Save to notes")
+                .disabled(saved)
+            }
         }
         Button { model.onClose() } label: { Image(systemName: "xmark") }
             .help("Close")

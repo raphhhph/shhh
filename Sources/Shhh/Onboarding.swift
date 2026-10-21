@@ -590,10 +590,12 @@ private struct SchoolStep: View {
                                 Button { withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) { toggle(subject) } } label: {
                                     HStack(spacing: 6) {
                                         Image(systemName: picked ? "checkmark" : "plus").font(.system(size: 11, weight: .bold))
-                                        Text(subject).font(.system(size: 13, weight: picked ? .semibold : .regular)).lineLimit(1).minimumScaleFactor(0.85)
+                                        // Two lines for the long names ("Literature & Performance") rather than cut short.
+                                        Text(subject).font(.system(size: 12.5, weight: picked ? .semibold : .regular)).lineLimit(2)
+                                            .minimumScaleFactor(0.9).fixedSize(horizontal: false, vertical: true)
                                         Spacer(minLength: 0)
                                     }
-                                    .padding(.horizontal, 12).frame(height: 36)
+                                    .padding(.horizontal, 12).frame(minHeight: 36)
                                     .background(picked ? Tint.accent.opacity(0.2) : Tint.card, in: RoundedRectangle(cornerRadius: 10))
                                     .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(picked ? Tint.accent : Tint.line))
                                     .foregroundStyle(picked ? Tint.accent : .white)
@@ -791,9 +793,9 @@ private struct ModelsStep: View {
                 case .notDownloaded: Text("\(Int(item.megabytes)) MB").font(.system(size: 12)).foregroundStyle(Tint.soft)
                 case .downloading(let fraction):
                     ProgressView(value: fraction).tint(isStalled(item) ? .orange : Tint.accent).frame(maxWidth: 380)
-                    // A hung download can't be restarted from here; a relaunch clears it (the crash guard) and
-                    // the welcome reopens on this page.
-                    Text(isStalled(item) ? "Stuck at \(Int(fraction * 100))%. Check your internet. If it still doesn't move, quit and reopen Joe: the download starts over and you'll be back on this page."
+                    // A hung download can't be restarted from here; after a relaunch it resumes (FluidAudio's
+                    // .partial files, kept by ModelGuard) and the welcome reopens on this page.
+                    Text(isStalled(item) ? "Stuck at \(Int(fraction * 100))%. Check your internet. If it still doesn't move, quit and reopen Joe: the download carries on from where it stopped, and you'll be back on this page."
                                          : "\(Int(fraction * 100))% of \(Int(item.megabytes)) MB")
                         .font(.system(size: 11.5)).foregroundStyle(isStalled(item) ? .orange : Tint.soft)
                 case .ready: Label("Ready", systemImage: "checkmark.circle.fill").font(.system(size: 12.5)).foregroundStyle(.green)
@@ -940,8 +942,10 @@ private struct ConnectStep: View {
         if let next = CalendarFeed.upcomingDeadlines(1).first {
             lines.append("Next due: \(next.title), \(next.start.formatted(.dateTime.weekday(.wide).day().month()))")
         }
+        // Only when it filled them in: subjects they'd already chosen stay theirs, and listing other
+        // guesses here would disagree with the next page.
         let subjects = CalendarFeed.subjectGuesses()
-        if !subjects.isEmpty {
+        if !subjects.isEmpty, Profile.subjects == subjects.joined(separator: ", ") {
             lines.append("Subjects: \(subjects.joined(separator: ", ")). Check them on the next page")
         }
         return lines
@@ -954,8 +958,7 @@ private struct NotesStep: View {
 
     var body: some View {
         StepFrame(model: model, title: "Where should I keep notes?",
-                  subtitle: "Lecture notes, your daily plan and my memory of your days go in one folder you own.",
-                  canContinue: Assistant.vaultURL != nil) {
+                  subtitle: "Lecture notes, your daily plan and my memory of your days go in one folder you own. Not sure? Just continue and I'll make a Joe folder.") {
             VStack(spacing: 16) {
                 HStack(spacing: 16) {
                     option("book.closed", "My Obsidian vault", "Use the vault you already have.") { model.actions.chooseVault(); refresh += 1 }
@@ -968,6 +971,10 @@ private struct NotesStep: View {
                 }
             }
             .id(refresh)
+        }
+        .onDisappear {
+            // Moving on without choosing: the Joe folder, so notes and the Daybook work anyway.
+            if Assistant.vaultURL == nil, model.step.rawValue > OnboardingModel.Step.notes.rawValue { makeFolder() }
         }
     }
 
@@ -1148,7 +1155,7 @@ private struct ClaudeStep: View {
                 // so they're one click away here instead of something to discover later.
                 if claude.isReady, !useAPIKey {
                     HStack(spacing: 14) {
-                        Image(systemName: "envelope.fill").font(.system(size: 18)).foregroundStyle(Tint.accent).frame(width: 26)
+                        Image(systemName: "envelope.fill").font(.system(size: 18)).foregroundStyle(Tint.accent).frame(width: 32)
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Your email and Google Calendar").font(.system(size: 14.5, weight: .semibold))
                             Text("Connect Gmail, Google Calendar and Drive on claude.ai, and I can read your school email and draft replies.")
@@ -1305,15 +1312,28 @@ private struct DoneStep: View {
     @ObservedObject var model: OnboardingModel
 
     var body: some View {
-        VStack(spacing: 22) {
+        VStack(spacing: 16) {
             Spacer()
-            Star(size: 80).frame(height: 200)
+            Star(size: 56).frame(height: 120)
             Typed(text: "You’re all set, \(Profile.name).")
             VStack(alignment: .leading, spacing: 10) {
                 tip("command", "Hold right ⌘ to write with your voice")
                 tip("option", "Hold right ⌥ to ask me anything (double-tap for a long one)")
-                tip("graduationcap", "Say “quiz me on economics” to study on the whiteboard")
-                tip("sparkle", "Click my star in the menu bar for your dashboard")
+            }
+            // What's working now, so nothing is left to discover; anything missing is one place away.
+            LazyVGrid(columns: [GridItem(.fixed(300), alignment: .leading), GridItem(.fixed(300), alignment: .leading)], spacing: 8) {
+                ForEach(ready, id: \.0) { title, done in
+                    HStack(spacing: 8) {
+                        Image(systemName: done ? "checkmark.circle.fill" : "circle.dashed").frame(width: 18)
+                        Text(title)
+                    }
+                    .font(.system(size: 13)).foregroundStyle(done ? Color.green : Tint.soft)
+                }
+            }
+            .padding(14)
+            .background(Tint.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            if ready.contains(where: { !$0.1 }) {
+                Text("Anything not ticked can be added any time in Settings.").font(.system(size: 12)).foregroundStyle(Tint.soft)
             }
             Spacer()
             Primary(title: "Start using Joe") {
@@ -1323,8 +1343,27 @@ private struct DoneStep: View {
         }
     }
 
+    /// Icons in a fixed-width column, so each line's text starts in the same place.
     private func tip(_ symbol: String, _ text: String) -> some View {
-        Label(text, systemImage: symbol).font(.system(size: 15)).foregroundStyle(Tint.soft)
+        HStack(spacing: 10) {
+            Image(systemName: symbol).frame(width: 22)
+            Text(text)
+        }
+        .font(.system(size: 15)).foregroundStyle(Tint.soft)
+    }
+
+    private var ready: [(String, Bool)] {
+        let timetable = Daybook.timetableURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+        return [
+            ("Speech recognition", ModelGuard.status(.speech) == .ready),
+            ("My voice", ModelGuard.status(.voice) == .ready),
+            ("ManageBac deadlines and events", !CalendarFeed.links.isEmpty),
+            ("Your subjects", !Profile.subjects.isEmpty),
+            ("Your timetable", timetable),
+            ("Wake-up alarm and morning briefing", AlarmStore.load().contains { $0.repeats != nil && $0.title.lowercased().contains("wake") }),
+            ("Notes folder", Assistant.vaultURL != nil),
+            ("Gmail", ClaudeConnectors.has("gmail")),
+        ]
     }
 }
 

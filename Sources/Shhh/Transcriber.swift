@@ -54,6 +54,8 @@ actor Transcriber {
     }
 
     private var loadingChinese = false
+    /// Transcriptions running on Parakeet right now (it mustn't be freed under them).
+    private var parakeetRunning = 0
 
     private func loadChinese() async {
         guard chinese == nil, !loadingChinese else { return }
@@ -71,10 +73,13 @@ actor Transcriber {
             _ = try? await manager.transcribeDetailed(audio: [Float](repeating: 0, count: 16_000))
             chinese = manager
             // SenseVoice hears English about as well, so Parakeet (1.2 GB on the GPU) goes: it was only
-            // there for the first seconds after launch.
+            // there for the first seconds after launch. Not under a transcription still running on it:
+            // the actor lets this run while that one awaits, and freeing its GPU buffers mid-prediction
+            // aborted Joe a few seconds after launch (a Metal assertion in CoreML, no Joe frames).
             if let parakeet = self.manager {
-                self.manager = nil
-                await parakeet.cleanup()
+                self.manager = nil // nothing new starts on it
+                for _ in 0..<600 where parakeetRunning > 0 { try? await Task.sleep(for: .milliseconds(50)) }
+                if parakeetRunning == 0 { await parakeet.cleanup() } // still busy after 30 s: let it be freed with the Transcriber
             }
         }
         loadingChinese = false
@@ -137,6 +142,8 @@ actor Transcriber {
         // The model wants at least one second of audio.
         var padded = samples
         if padded.count < 16_000 { padded += [Float](repeating: 0, count: 16_000 - padded.count) }
+        parakeetRunning += 1
+        defer { parakeetRunning -= 1 }
         var state = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
         let result = try await manager.transcribe(padded, decoderState: &state)
         return result.text.trimmingCharacters(in: .whitespacesAndNewlines)

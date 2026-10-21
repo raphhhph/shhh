@@ -2642,6 +2642,7 @@ private struct SettingsPage: View {
     @AppStorage("ibQuestion") private var ibQuestion = true
     @AppStorage("wakeChallenge") private var wakeChallenge = true
     @AppStorage("reduceNoise") private var reduceNoise = true
+    @AppStorage("liveCaption") private var liveWords = true
     @AppStorage("chineseVoice") private var chineseVoice = "zf_001"
     @AppStorage("modelMirrorChina") private var chinaMirror = false
     @AppStorage("profileSchool") private var profileSchool = ""
@@ -2792,6 +2793,7 @@ private struct SettingsPage: View {
             row("Microphone") {
                 Choice(options: [("", "Automatic")] + model.actions.microphones().map { ($0.uid, $0.name) }, selection: $microphone)
             }
+            row("Live words", "Shows what you're saying under the pill as you talk") { switchOn($liveWords) }
             row("Reduce background noise", "Takes out fans and chatter before your words are written, on this Mac") { switchOn($reduceNoise) }
             row("Languages", "What you speak to Joe in. English only stops it mishearing you as Russian", last: true) {
                 Choice(options: [("english", "English only"), ("chinese", "English + Chinese"), ("european", "25 European languages")],

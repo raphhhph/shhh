@@ -205,6 +205,15 @@ final class SpeechOutput {
         Task { await neural.prepare(engine) }
     }
 
+    /// Lets go of the voices after ten quiet minutes (they take about 800 MB); the next sentence
+    /// loads them again, a second or two. Called every minute.
+    func trimMemory() {
+        guard !isSpeaking, Date().timeIntervalSince(lastSpoke) > 600 else { return }
+        neural.release()
+    }
+
+    private var lastSpoke = Date()
+
     /// Loads Alba even with the voice off, for the welcome tour, so she's ready when Joe speaks.
     func prepareForTour() {
         Task { await neural.prepare(.lifelike) }
@@ -247,6 +256,7 @@ final class SpeechOutput {
             while let self, !Task.isCancelled, !self.pending.isEmpty {
                 let sentence = self.pending.removeFirst()
                 let started = Date()
+                self.lastSpoke = started
                 var first: TimeInterval?
                 var seconds = 0.0
                 do {
@@ -347,6 +357,14 @@ private final class NeuralVoices {
     struct Audio {
         let samples: [Float]
         let sampleRate: Int
+    }
+
+    /// Both voices out of memory until they're needed again.
+    func release() {
+        if let pocket { Task { await pocket.cleanup() } }
+        pocket = nil
+        kokoroChinese = nil
+        kokoroChineseVoice = nil
     }
 
     func prepare(_ engine: SpeechOutput.Engine) async {

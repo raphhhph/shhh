@@ -84,6 +84,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// macOS keeps a compiled copy of each Neural Engine model per build of Joe, and never clears the
+    /// old ones (1.8 GB after a day of updates). Anything compiled before this build was installed
+    /// belongs to an old build and goes; this build's own copies are made after it was installed.
+    nonisolated private static func pruneModelCache() {
+        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first,
+              let bundle = Bundle.main.bundleIdentifier else { return }
+        let root = caches.appendingPathComponent(bundle).appendingPathComponent("com.apple.e5rt.e5bundlecache")
+        let installed = Bundle.main.executableURL
+            .flatMap { try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate } ?? .distantPast
+        let cutoff = installed.addingTimeInterval(-60)
+        let keys: [URLResourceKey] = [.contentAccessDateKey, .contentModificationDateKey]
+        for version in (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? [] {
+            for entry in (try? FileManager.default.contentsOfDirectory(at: version, includingPropertiesForKeys: keys)) ?? [] {
+                let values = try? entry.resourceValues(forKeys: Set(keys))
+                if (values?.contentModificationDate ?? .distantPast) < cutoff { try? FileManager.default.removeItem(at: entry) }
+            }
+        }
+    }
+
     /// "Let me draw on the screen", "annotate my screen", "pen": the drawing overlay.
     private func openPen(_ request: String) -> Bool {
         guard request.range(of: #"\b(draw|drawing|annotate|scribble|pen)\b[^.?!]{0,30}\b(screen|this|it)\b|^\W*(screen )?pen\W*$|^\W*(let me )?(draw|annotate)\W*$"#,
@@ -170,6 +189,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var followingUp = false
     private var showPanelWork: DispatchWorkItem?
     private var startTask: Task<AudioRecorder.Recording?, Never>?
+    /// Live words while a key is held (Settings → Live words).
+    private let caption = LiveCaption()
+    private var liveTimer: Timer?
+    private var livePartial = false
     /// The screen when right ⌥ went down, in case the request turns out to be about it.
     private var screenTask: Task<ScreenCapture.Screenshot?, Never>?
     /// Bumped on every press, so a late result from an earlier dictation can't touch this one.
@@ -263,6 +286,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard alarm.title.hasPrefix("Focus"), Assistant.vaultURL != nil else { return }
             self?.startInBackground("[Focus session over: \(alarm.title).] In one or two short lines: well done, and ask me what I finished so you can tick it in my Daybook.")
         }
+        // Memory: the voices go after ten quiet minutes; compiled models from old builds after a week.
+        let trim = Timer(timeInterval: 60, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.speech.trimMemory() } }
+        RunLoop.main.add(trim, forMode: .common)
+        Task.detached(priority: .background) { Self.pruneModelCache() }
         // ManageBac and Google calendar links: read at launch and every half hour.
         Task { await CalendarFeed.refreshLinks() }
         let calendarLinks = Timer(timeInterval: 1800, repeats: true) { _ in Task { await CalendarFeed.refreshLinks() } }
@@ -692,6 +719,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         showPanelWork = work
         // A follow-up shows it at once: the answer has just folded into the notch beneath it.
         DispatchQueue.main.asyncAfter(deadline: .now() + (followingUp ? 0 : 0.15), execute: work)
+        startLiveWords()
         if doubleTap {
             locked = true
             work.perform() // the pill at once
@@ -706,6 +734,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             lockTimeout = timeout
             DispatchQueue.main.asyncAfter(deadline: .now() + 300, execute: timeout)
         }
+    }
+
+    /// About once a second while recording: what's been said so far, transcribed and shown under the
+    /// pill. One at a time; the final text still comes from the whole recording.
+    private func startLiveWords() {
+        liveTimer?.invalidate()
+        guard LiveCaption.isEnabled else { return }
+        let timer = Timer(timeInterval: 0.9, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.state == .recording, !self.livePartial, let start = self.startTask else { return }
+                let elapsed = Date().timeIntervalSince(self.pressedAt)
+                guard elapsed > 1 else { return }
+                self.livePartial = true
+                let transcriber = self.transcriber
+                Task {
+                    defer { self.livePartial = false }
+                    guard let recording = await start.value else { return }
+                    let samples = self.recorder.tail(recording, seconds: min(elapsed, 30))
+                    guard let text = try? await withTimeout(4, { try await transcriber.transcribe(samples) }),
+                          self.state == .recording else { return }
+                    self.caption.show(text)
+                }
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        liveTimer = timer
+    }
+
+    private func stopLiveWords() {
+        liveTimer?.invalidate()
+        liveTimer = nil
+        caption.hide()
     }
 
     private func unlock() {
@@ -1295,6 +1355,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func cancelRecording() {
         guard state == .recording else { return }
         if locked { return } // a shortcut typed while it's locked on is just typing; the next tap ends it
+        stopLiveWords()
         handsFreeTake = false
         endListener.stop()
         showPanelWork?.cancel()
@@ -1309,6 +1370,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func finishRecording() {
         guard state == .recording, !locked else { return } // locked on: letting go doesn't end it
+        stopLiveWords()
         showPanelWork?.cancel()
         let heldFor = Date().timeIntervalSince(pressedAt)
 

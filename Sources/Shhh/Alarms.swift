@@ -258,7 +258,8 @@ enum AlarmRequest {
         rest = rest.replacingOccurrences(of: #"^(i need to|i have to|i've got to|i gotta|that i need to|that i have to)\s+"#, with: "", options: .regularExpression)
             .trimmingCharacters(in: CharacterSet.whitespaces.union(.punctuationCharacters))
         rest = rest.replacingOccurrences(of: #"^(i need to|i have to|i've got to|i gotta|that i need to|that i have to)\s+"#, with: "", options: .regularExpression)
-        let fallback = ["alarm": "Alarm", "timer": "Timer", "reminder": "Reminder"][kind.rawValue]!
+        // "Wake me up at 2" is a wake-up, so it gets the challenge at any hour (it needs "wake" in the title).
+        let fallback = trimmed.hasPrefix("wake me") ? "Wake up" : ["alarm": "Alarm", "timer": "Timer", "reminder": "Reminder"][kind.rawValue]!
         // In their own capitals ("Call Ammiel", "the EE form"), when it's word for word in what they said.
         if let original = request.range(of: rest, options: .caseInsensitive) { rest = String(request[original]) }
         let title = rest.isEmpty ? fallback : rest.prefix(1).uppercased() + rest.dropFirst()

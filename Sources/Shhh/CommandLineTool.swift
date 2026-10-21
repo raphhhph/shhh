@@ -144,7 +144,7 @@ enum CommandLineTool {
             // Shhh --alarm-check "<request>"…: what each would set (testing the phrases).
             for text in args.dropFirst() {
                 switch AlarmRequest.parse(text) {
-                case let .add(alarm)?: print("Set: \(alarm.kind.rawValue) \(alarm.fireAt.formatted(.dateTime.weekday(.abbreviated).hour().minute().second())) “\(alarm.title)” · \(text)")
+                case let .add(alarm)?: print("Would set (nothing saved): \(alarm.kind.rawValue) \(alarm.fireAt.formatted(.dateTime.weekday(.abbreviated).hour().minute().second())) “\(alarm.title)”\(alarm.repeats.map { ", repeating \($0)" } ?? "") · \(text)")
                 case .list?: print("list · \(text)")
                 case let .cancel(words, kind)?: print("cancel \(kind?.rawValue ?? "any") \(words ?? "all") · \(text)")
                 case nil: print("→ Claude · \(text)")

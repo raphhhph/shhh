@@ -26,7 +26,7 @@ actor Transcriber {
     /// For "English and Chinese": SenseVoice hears everything first and says which language it was.
     private var chinese: SenseVoiceManager?
 
-    var isReady: Bool { manager != nil }
+    var isReady: Bool { manager != nil || chinese != nil }
 
     /// Downloads the model on first use (~500 MB, cached afterwards) and loads it.
     func load(progress: @escaping @Sendable (Double) -> Void) async throws {
@@ -62,6 +62,12 @@ actor Transcriber {
             // and every request after that one.
             _ = try? await manager.transcribeDetailed(audio: [Float](repeating: 0, count: 16_000))
             chinese = manager
+            // SenseVoice hears English about as well, so Parakeet (1.2 GB on the GPU) goes: it was only
+            // there for the first seconds after launch.
+            if let parakeet = self.manager {
+                self.manager = nil
+                await parakeet.cleanup()
+            }
         }
         loadingChinese = false
     }
@@ -91,14 +97,21 @@ actor Transcriber {
     var chineseReady: Bool { chinese != nil }
 
     func transcribe(_ samples: [Float]) async throws -> String {
-        guard let manager else { throw TranscriberError.notLoaded }
         // Chinese still loading (just after launch): wait for it rather than have Parakeet turn
         // Chinese into made-up English.
         for _ in 0..<250 where Self.languages == .chinese && chinese == nil && loadingChinese {
             try await Task.sleep(for: .milliseconds(100))
         }
-        // English and Chinese: Chinese (or mixed) speech is SenseVoice's; English stays with
-        // Parakeet, which is more accurate on English. SenseVoice takes up to ~100 s at a time.
+        // English and Chinese: SenseVoice hears everything once it's loaded (Parakeet only covers the
+        // first seconds after launch). It takes up to ~100 s at a time, so longer audio goes in pieces.
+        if let chinese, manager == nil, samples.count >= 16_000 * 100 {
+            var parts: [String] = []
+            for start in stride(from: 0, to: samples.count, by: 16_000 * 90) {
+                let piece = Array(samples[start..<min(start + 16_000 * 90, samples.count)])
+                if let heard = try? await chinese.transcribeDetailed(audio: piece) { parts.append(heard.text) }
+            }
+            return parts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         // Padded with silence to a whole number of 5-second blocks: on the GPU each new length of
         // audio is prepared once (about a second), so a handful of lengths keeps it fast.
         let block = 16_000 * 5
@@ -106,8 +119,10 @@ actor Transcriber {
         if let chinese, samples.count < 16_000 * 100,
            let heard = try? await chinese.transcribeDetailed(audio: blocked) {
             let text = heard.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if ["zh", "yue"].contains(heard.language ?? "") || SpeechOutput.isChinese(text) { return text }
+            // English and Chinese: SenseVoice hears both (Parakeet is unloaded once it's ready).
+            if manager == nil || ["zh", "yue"].contains(heard.language ?? "") || SpeechOutput.isChinese(text) { return text }
         }
+        guard let manager else { throw TranscriberError.notLoaded }
         // The model wants at least one second of audio.
         var padded = samples
         if padded.count < 16_000 { padded += [Float](repeating: 0, count: 16_000 - padded.count) }

@@ -289,6 +289,32 @@ enum CommandLineTool {
             }
             NSApplication.shared.run()
             exit(0)
+        case ("--memory-test", 1):
+            // Joe --memory-test: memory after loading each model in turn.
+            run {
+                func footprint() -> Int {
+                    var info = task_vm_info_data_t()
+                    var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+                    _ = withUnsafeMutablePointer(to: &info) { $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                        task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) } }
+                    return Int(info.phys_footprint) / 1_048_576
+                }
+                print("start: \(footprint()) MB")
+                // English and Chinese, as Joe runs it: Parakeet first, then SenseVoice, then Parakeet goes.
+                Transcriber.languages = .chinese
+                let both = Transcriber()
+                try await both.load { _ in }
+                print("+ English speech (Parakeet, while Chinese loads): \(footprint()) MB")
+                for _ in 0..<600 where !(await both.chineseReady) { try await Task.sleep(for: .milliseconds(100)) }
+                try await Task.sleep(for: .seconds(2))
+                print("+ Chinese speech (SenseVoice), Parakeet let go: \(footprint()) MB")
+                await NoiseFilter.shared.prepare()
+                try await Task.sleep(for: .seconds(3))
+                print("+ noise filter: \(footprint()) MB")
+                let speech = await SpeechOutput()
+                _ = await speech.prepareNow(.lifelike)
+                print("+ Alba voice (PocketTTS): \(footprint()) MB")
+            }
         case ("--challenge", 1...):
             // Joe --challenge [seed] ["what I said"]: a wake-up challenge, and whether that answer passes.
             let seed = args.count > 1 ? Int(args[1]) ?? 0 : 0

@@ -2,12 +2,13 @@ import AppKit
 import SwiftUI
 
 /// Rest the pointer on the notch and an overview drops out of it, like NotchNook: the time, the
-/// next class, what's due, today's five, Joe's running tasks, the next alarm and the music. Which
-/// widgets show, and in what order, is chosen in Settings → General → Notch overview.
+/// next class, what's due, today's five, Joe's running tasks, the next alarm, the music, one-tap
+/// questions for Joe and a focus timer. Which
+/// widgets show, and in what order, is arranged by dragging in Settings → General → Notch → Edit.
 @MainActor
 final class NotchOverview {
     enum Widget: String, CaseIterable, Identifiable {
-        case clock, nextClass, dueSoon, today, tasks, alarm, music
+        case clock, nextClass, dueSoon, today, tasks, alarm, music, ask, focus
         var id: String { rawValue }
 
         var title: String {
@@ -19,9 +20,28 @@ final class NotchOverview {
             case .tasks: "Joe's tasks"
             case .alarm: "Next alarm"
             case .music: "Now playing"
+            case .ask: "Ask Joe"
+            case .focus: "Focus timer"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .clock: "clock"
+            case .nextClass: "graduationcap"
+            case .dueSoon: "calendar.badge.exclamationmark"
+            case .today: "checklist"
+            case .tasks: "sparkle"
+            case .alarm: "alarm"
+            case .music: "music.note"
+            case .ask: "bubble.left.and.text.bubble.right"
+            case .focus: "timer"
             }
         }
     }
+
+    /// How many widgets fit side by side in the overview.
+    static let maxWidgets = 5
 
     static var isEnabled: Bool {
         get { UserDefaults.standard.object(forKey: "notchOverview") as? Bool ?? true }
@@ -89,6 +109,15 @@ final class NotchOverview {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.contentView = NSHostingView(rootView: OverviewView(model: model, notchHeight: notch.height, music: { [weak self] command in
             self?.data.music(command)
+        }, ask: { [weak self] request in
+            // The answer card takes over the notch.
+            self?.hide()
+            self?.data.actions.ask(request)
+        }, focus: { [weak self] minutes in
+            guard let self else { return }
+            data.actions.addAlarm(.add(Alarm(fireAt: Date().addingTimeInterval(Double(minutes) * 60), title: "Focus", kind: .timer)))
+            data.reload()
+            model.fill(from: data, tasks: runningTasks())
         }))
         panel.orderFrontRegardless()
         NotchSpace.pin(panel)
@@ -110,6 +139,8 @@ private final class OverviewModel: ObservableObject {
     @Published var tasks: [String] = []
     @Published var alarm: Alarm?
     @Published var music: String?
+    /// A timer running now (the focus timer's, or one asked for).
+    @Published var timer: Alarm?
 
     func fill(from data: DashboardModel, tasks: [String]) {
         widgets = NotchOverview.widgets
@@ -124,6 +155,7 @@ private final class OverviewModel: ObservableObject {
         self.tasks = tasks
         alarm = data.alarms.first
         music = data.nowPlaying
+        timer = data.alarms.filter { $0.kind == .timer && $0.fireAt > now }.min { $0.fireAt < $1.fireAt }
     }
 }
 
@@ -131,6 +163,16 @@ private struct OverviewView: View {
     @ObservedObject var model: OverviewModel
     let notchHeight: CGFloat
     var music: (Spotify.Command) -> Void
+    var ask: (String) -> Void = { _ in }
+    /// Starts a focus timer of so many minutes.
+    var focus: (Int) -> Void = { _ in }
+
+    /// One-tap questions a student asks most, short enough for a tile.
+    private static let quickAsks: [(label: String, request: String)] = [
+        ("What's due?", "What's due this week?"),
+        ("Plan my evening", "Plan my evening around my deadlines"),
+        ("Quiz me", "Quiz me on my weakest subject"),
+    ]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -209,6 +251,37 @@ private struct OverviewView: View {
                     Button { music(.next) } label: { Image(systemName: "forward.fill") }
                 }
                 .buttonStyle(.plain).font(.system(size: 13))
+            case .ask:
+                ForEach(Self.quickAsks, id: \.label) { item in
+                    Button { ask(item.request) } label: {
+                        Text(item.label).font(.system(size: 11.5, weight: .medium)).lineLimit(1)
+                            .padding(.horizontal, 9).frame(height: 22)
+                            .background(Color.white.opacity(0.1), in: Capsule())
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            case .focus:
+                if let timer = model.timer {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        let left = max(0, Int(timer.fireAt.timeIntervalSince(context.date)))
+                        Text(String(format: "%d:%02d", left / 60, left % 60)).font(.system(size: 24, weight: .semibold).monospacedDigit())
+                    }
+                    Text(timer.title).font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
+                } else {
+                    Text("Nothing running").font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.45))
+                    HStack(spacing: 6) {
+                        ForEach([25, 50], id: \.self) { minutes in
+                            Button { focus(minutes) } label: {
+                                Text("\(minutes) min").font(.system(size: 11.5, weight: .semibold))
+                                    .padding(.horizontal, 9).frame(height: 22)
+                                    .background(Color.orange.opacity(0.85), in: Capsule())
+                                    .contentShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
             }
             Spacer(minLength: 0)
         }
@@ -228,9 +301,9 @@ extension NotchOverview {
     func preview(to file: URL, done: @escaping () -> Void) {
         data.reload()
         model.fill(from: data, tasks: ["Consolidating Econ notes"])
-        model.widgets = Widget.allCases.filter { $0 != .today } // a full row
+        model.widgets = [.clock, .nextClass, .dueSoon, .ask, .focus] // a full row, as wide as on screen
         let host = NSHostingView(rootView: OverviewView(model: model, notchHeight: 32, music: { _ in }))
-        let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 900, height: 190), styleMask: [.borderless], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 680, height: 190), styleMask: [.borderless], backing: .buffered, defer: false)
         window.backgroundColor = .gray
         window.contentView = host
         window.orderFrontRegardless()

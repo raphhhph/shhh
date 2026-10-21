@@ -468,7 +468,7 @@ final class Session {
             "--permission-prompt-tool", "stdio", // permission requests come to us (handleControl)
             "--disable-slash-commands",
             "--no-session-persistence",
-            "--model", (model ?? Assistant.model).rawValue,
+            "--model", AIAccount.model((model ?? Assistant.model).rawValue),
             "--effort", effort.rawValue,
             "--system-prompt", Self.systemPrompt(effort, autonomy: autonomy, instructions: instructions.text, vault: vault),
         ]
@@ -485,7 +485,7 @@ final class Session {
                 "--permission-prompt-tool", "stdio",
                 "--disable-slash-commands",
                 "--no-session-persistence",
-                "--model", (model ?? Assistant.model).rawValue,
+                "--model", AIAccount.model((model ?? Assistant.model).rawValue),
                 "--effort", effort.rawValue,
                 "--system-prompt", tutor,
             ]
@@ -569,6 +569,8 @@ final class Session {
         }
         // "API key" mode (Settings → Advanced): Claude Code bills that key per request instead.
         if let key = AIAccount.apiKey { environment["ANTHROPIC_API_KEY"] = key }
+        // "Other models": through OpenRouter instead.
+        if let openRouter = AIAccount.openRouterEnvironment { environment.merge(openRouter) { $1 } }
         // Keep the instructions in Claude's cache for an hour instead of five minutes: requests come
         // minutes apart, and a cached prompt is read at a tenth of the price, and sooner.
         environment["CLAUDE_CODE_PROMPT_CACHE_TTL"] = "1h"

@@ -2662,6 +2662,9 @@ private struct SettingsPage: View {
         }
     }
     @State private var apiKeyDraft = ""
+    @State private var openRouterDraft = ""
+    @AppStorage("useOpenRouter") private var useOpenRouter = false
+    @AppStorage("openRouterModel") private var openRouterModel = "openrouter/auto"
     @AppStorage("strongModelForWork") private var strongForWork = true
     @AppStorage("assistantModel") private var assistantModel = Assistant.Model.opus.rawValue
     @AppStorage("assistantEffort") private var effort = Assistant.Effort.low.rawValue
@@ -2899,6 +2902,22 @@ private struct SettingsPage: View {
                             .disabled(apiKeyDraft.count < 20)
                     }
                 }
+            }
+        }
+        section("Other models (OpenRouter)", "square.stack.3d.up") {
+            row("Use OpenRouter", "GPT, DeepSeek, Qwen, Gemini… with an OpenRouter key, often cheaper. Gmail, Calendar and Chrome connectors aren't available in this mode") {
+                switchOn($useOpenRouter)
+            }
+            row("OpenRouter key", AIAccount.maskedOpenRouterKey.map { "Saved: \($0)" } ?? "From openrouter.ai → Keys") {
+                HStack(spacing: 8) {
+                    SecureField("sk-or-…", text: $openRouterDraft).textFieldStyle(.roundedBorder).frame(width: 220)
+                    Button("Save") { AIAccount.save(openRouterDraft, as: "openRouterKey"); openRouterDraft = ""; model.settingsVersion += 1 }
+                        .buttonStyle(PillButton(prominent: true)).disabled(openRouterDraft.count < 20)
+                }
+            }
+            row("Model", "An OpenRouter model ID, e.g. openai/…, deepseek/…, qwen/…; openrouter/auto picks one", last: true) {
+                TextField("openrouter/auto", text: $openRouterModel)
+                    .textFieldStyle(.roundedBorder).frame(width: 260)
             }
         }
         section("Brain", "cpu") {

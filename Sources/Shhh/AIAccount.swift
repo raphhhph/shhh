@@ -19,18 +19,53 @@ enum AIAccount {
         return storedKey
     }
 
-    static var storedKey: String? {
+    static var storedKey: String? { stored("anthropicKey") }
+
+    private static func stored(_ name: String) -> String? {
         guard let data = try? Data(contentsOf: url),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: String] else { return nil }
-        return json["anthropicKey"].flatMap { $0.isEmpty ? nil : $0 }
+        return json[name].flatMap { $0.isEmpty ? nil : $0 }
     }
 
-    static func save(_ key: String) {
+    static func save(_ key: String, as name: String = "anthropicKey") {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        var json = ((try? Data(contentsOf: url)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: String] }) ?? [:]
+        json[name] = trimmed
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        guard let data = try? JSONSerialization.data(withJSONObject: ["anthropicKey": trimmed]) else { return }
+        guard let data = try? JSONSerialization.data(withJSONObject: json) else { return }
         try? data.write(to: url, options: .atomic)
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
+    // MARK: OpenRouter
+
+    /// Settings → Advanced → Other models: GPT, DeepSeek, Qwen, Gemini… through OpenRouter, which
+    /// speaks Claude Code's protocol. Cheaper for simple things; Claude stays the best at using the Mac.
+    static var usesOpenRouter: Bool {
+        get { UserDefaults.standard.bool(forKey: "useOpenRouter") && stored("openRouterKey") != nil }
+        set { UserDefaults.standard.set(newValue, forKey: "useOpenRouter") }
+    }
+
+    static var openRouterModel: String {
+        get { UserDefaults.standard.string(forKey: "openRouterModel").flatMap { $0.isEmpty ? nil : $0 } ?? "openrouter/auto" }
+        set { UserDefaults.standard.set(newValue, forKey: "openRouterModel") }
+    }
+
+    static var maskedOpenRouterKey: String? {
+        stored("openRouterKey").map { $0.count > 12 ? String($0.prefix(8)) + "…" + String($0.suffix(4)) : "saved" }
+    }
+
+    /// The model to ask for: the OpenRouter one in that mode, else Claude's.
+    static func model(_ claude: String) -> String { usesOpenRouter ? openRouterModel : claude }
+
+    /// What Claude Code needs to talk to OpenRouter. Its own settings folder, so the Claude plan's
+    /// sign-in (kept in the usual one) isn't used, and isn't signed out either.
+    static var openRouterEnvironment: [String: String]? {
+        guard usesOpenRouter, let key = stored("openRouterKey") else { return nil }
+        let folder = url.deletingLastPathComponent().appendingPathComponent("OpenRouter Claude", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return ["ANTHROPIC_BASE_URL": "https://openrouter.ai/api", "ANTHROPIC_AUTH_TOKEN": key,
+                "ANTHROPIC_API_KEY": "", "CLAUDE_CONFIG_DIR": folder.path]
     }
 
     /// "sk-ant-…a1b2", for showing which key is saved without showing it.

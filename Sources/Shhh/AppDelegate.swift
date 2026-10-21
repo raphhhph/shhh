@@ -68,6 +68,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let studyBoard = StudyBoard()
     private let pen = ScreenPen()
 
+    /// Silence while Claude works feels like nothing's happening: after 2.5 s with no answer yet, Joe
+    /// says what he's doing ("Checking your calendar.") or just "One sec.", once.
+    private func acknowledgeIfSlow(_ task: AssistantTask) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, task === self.focused, task.reply.isEmpty, !task.isDone, !task.background,
+                      SpeechOutput.engine != .off, !self.speech.isSpeaking, self.state == .idle else { return }
+                let status = (task.status ?? "").replacingOccurrences(of: "…", with: "")
+                let line = status.range(of: #"^(Checking|Reading|Searching|Looking|Opening|Finding)\b"#, options: .regularExpression) != nil
+                    ? status + "." : "One sec."
+                self.speech.update(line)
+                self.speech.finish()
+            }
+        }
+    }
+
     /// "Let me draw on the screen", "annotate my screen", "pen": the drawing overlay.
     private func openPen(_ request: String) -> Bool {
         guard request.range(of: #"\b(draw|drawing|annotate|scribble|pen)\b[^.?!]{0,30}\b(screen|this|it)\b|^\W*(screen )?pen\W*$|^\W*(let me )?(draw|annotate)\W*$"#,
@@ -1510,6 +1526,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if Self.wantsBackground(text) { task.background = true }
                 task.assistant.ask(request, screenshot: image)
                 asked = true
+                acknowledgeIfSlow(task)
                 return
             }
             // "… make it a prompt": rewritten as a clear prompt for an AI app before it's typed.

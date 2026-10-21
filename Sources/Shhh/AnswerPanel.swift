@@ -681,48 +681,136 @@ private struct CapsuleButton: ButtonStyle {
 }
 
 /// Renders the markdown Claude writes: paragraphs, "- " bullets, bold, italics, code and links.
+/// Claude's Markdown on the card: headings (title, subtitle), bullets and numbered lists, checklists,
+/// quotes, code blocks, tables and dividers; bold, italics, links and code inline.
 private struct MarkdownText: View {
     let markdown: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, paragraph in
-                if let bullet = paragraph.bullet {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text("•").foregroundStyle(.secondary)
-                        Text(inline(bullet))
-                    }
-                    .padding(.leading, CGFloat(paragraph.indent) * 14)
-                } else {
-                    Text(inline(paragraph.text))
-                }
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                view(for: block)
             }
         }
         .font(.body)
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    private struct Paragraph {
-        let text: String
-        let bullet: String?
-        let indent: Int
+    private enum Block {
+        case heading(Int, String)
+        case paragraph(String)
+        case bullet(String, indent: Int)
+        case numbered(String, String, indent: Int)
+        case task(Bool, String)
+        case quote(String)
+        case code(String)
+        case table([[String]])
+        case rule
     }
 
-    private var paragraphs: [Paragraph] {
-        markdown.components(separatedBy: "\n").compactMap { line in
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty else { return nil }
-            let indent = (line.prefix { $0 == " " }.count) / 2
-            for marker in ["- ", "* ", "• "] where trimmed.hasPrefix(marker) {
-                return Paragraph(text: trimmed, bullet: String(trimmed.dropFirst(marker.count)), indent: indent)
+    @ViewBuilder
+    private func view(for block: Block) -> some View {
+        switch block {
+        case let .heading(level, text):
+            Text(inline(text))
+                .font(.system(size: level == 1 ? 17 : level == 2 ? 15 : 13.5, weight: .semibold))
+                .foregroundStyle(level >= 3 ? .secondary : .primary)
+                .padding(.top, 4)
+        case let .paragraph(text):
+            Text(inline(text))
+        case let .bullet(text, indent):
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(indent > 0 ? "◦" : "•").foregroundStyle(.secondary)
+                Text(inline(text))
             }
-            // Headings, in case Claude writes one anyway: show them as bold text.
-            if trimmed.hasPrefix("#") {
-                let title = trimmed.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces)
-                return Paragraph(text: "**\(title)**", bullet: nil, indent: 0)
+            .padding(.leading, CGFloat(indent) * 14)
+        case let .numbered(number, text, indent):
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(number + ".").foregroundStyle(.secondary).monospacedDigit()
+                Text(inline(text))
             }
-            return Paragraph(text: trimmed, bullet: nil, indent: 0)
+            .padding(.leading, CGFloat(indent) * 14)
+        case let .task(done, text):
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: done ? "checkmark.square.fill" : "square").foregroundStyle(done ? Color.accentColor : .secondary)
+                Text(inline(text)).strikethrough(done).foregroundStyle(done ? .secondary : .primary)
+            }
+        case let .quote(text):
+            HStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 1).fill(Color.secondary.opacity(0.5)).frame(width: 3)
+                Text(inline(text)).foregroundStyle(.secondary)
+            }
+        case let .code(text):
+            Text(text)
+                .font(.system(size: 12, design: .monospaced))
+                .textSelection(.enabled)
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+        case let .table(rows):
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                    GridRow {
+                        ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                            Text(inline(cell)).font(.system(size: 12.5, weight: index == 0 ? .semibold : .regular))
+                        }
+                    }
+                    if index == 0 { Divider().gridCellUnsizedAxes(.horizontal) }
+                }
+            }
+            .padding(8)
+            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
+        case .rule:
+            Divider().padding(.vertical, 2)
         }
+    }
+
+    private var blocks: [Block] {
+        var blocks: [Block] = []
+        var code: [String]?
+        var table: [[String]] = []
+        func flushTable() { if !table.isEmpty { blocks.append(.table(table)); table = [] } }
+        for line in markdown.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") {
+                if let lines = code { blocks.append(.code(lines.joined(separator: "\n"))); code = nil } else { flushTable(); code = [] }
+                continue
+            }
+            if code != nil { code?.append(line); continue }
+            // Tables: | a | b |, skipping the |---| row.
+            if trimmed.hasPrefix("|"), trimmed.hasSuffix("|") {
+                let cells = trimmed.dropFirst().dropLast().components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+                if !cells.allSatisfy({ $0.allSatisfy { "-: ".contains($0) } }) { table.append(cells) }
+                continue
+            }
+            flushTable()
+            guard !trimmed.isEmpty else { continue }
+            let indent = (line.prefix { $0 == " " }.count) / 2
+            if trimmed.range(of: #"^(-{3,}|\*{3,}|_{3,})$"#, options: .regularExpression) != nil { blocks.append(.rule); continue }
+            if trimmed.hasPrefix("#") {
+                let level = trimmed.prefix { $0 == "#" }.count
+                blocks.append(.heading(level, trimmed.dropFirst(level).trimmingCharacters(in: .whitespaces)))
+                continue
+            }
+            if trimmed.hasPrefix("> ") { blocks.append(.quote(String(trimmed.dropFirst(2)))); continue }
+            if let match = trimmed.range(of: #"^[-*] \[( |x|X)\] "#, options: .regularExpression) {
+                blocks.append(.task(trimmed[match].lowercased().contains("x"), String(trimmed[match.upperBound...])))
+                continue
+            }
+            if let marker = ["- ", "* ", "• "].first(where: { trimmed.hasPrefix($0) }) {
+                blocks.append(.bullet(String(trimmed.dropFirst(marker.count)), indent: indent))
+                continue
+            }
+            if let match = trimmed.range(of: #"^\d{1,3}[.)] "#, options: .regularExpression) {
+                let number = trimmed[match].trimmingCharacters(in: CharacterSet(charactersIn: ".) "))
+                blocks.append(.numbered(number, String(trimmed[match.upperBound...]), indent: indent))
+                continue
+            }
+            blocks.append(.paragraph(trimmed))
+        }
+        if let lines = code { blocks.append(.code(lines.joined(separator: "\n"))) }
+        flushTable()
+        return blocks
     }
 
     private func inline(_ text: String) -> AttributedString {

@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Rest the pointer on the notch and an overview drops out of it, like NotchNook: the time, the
 /// next class, what's due, today's five, Joe's running tasks, the next alarm and the music. Which
-/// widgets show, and in what order, is chosen in Settings → General → Notch overview.
+/// widgets show, and in what order, is arranged by dragging in Settings → General → Notch → Edit.
 @MainActor
 final class NotchOverview {
     enum Widget: String, CaseIterable, Identifiable {
@@ -21,7 +21,22 @@ final class NotchOverview {
             case .music: "Now playing"
             }
         }
+
+        var symbol: String {
+            switch self {
+            case .clock: "clock"
+            case .nextClass: "graduationcap"
+            case .dueSoon: "calendar.badge.exclamationmark"
+            case .today: "checklist"
+            case .tasks: "sparkle"
+            case .alarm: "alarm"
+            case .music: "music.note"
+            }
+        }
     }
+
+    /// How many widgets fit side by side in the overview.
+    static let maxWidgets = 5
 
     static var isEnabled: Bool {
         get { UserDefaults.standard.object(forKey: "notchOverview") as? Bool ?? true }

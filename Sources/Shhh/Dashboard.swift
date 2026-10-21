@@ -444,7 +444,7 @@ private struct DashboardView: View {
                     .environment(\.narrow, content < 820)
                     .environment(\.wide, content >= 1000)
                     .padding(.horizontal, content < 820 ? 24 : 40)
-                    .padding(.top, 44)
+                    .padding(.top, 20) // the title sits in the title bar row, beside the window buttons
                     .padding(.bottom, 36)
                     .frame(maxWidth: model.page == .calendar ? 1500 : 1060, alignment: .leading)
                     .frame(maxWidth: .infinity)
@@ -1148,14 +1148,7 @@ private struct HistoryPage: View {
     var body: some View {
         PageTitle(title: "History", subtitle: "Everything you've dictated and asked · on this Mac only")
         HStack(spacing: 10) {
-            Picker("", selection: $kind) {
-                Text("All").tag("all")
-                Text("Dictation").tag("dictation")
-                Text("Joe").tag("ask")
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 240)
+            Segmented(options: [("all", "All"), ("dictation", "Dictation"), ("ask", "Joe")], selection: $kind)
             Spacer()
             SearchField(text: $search)
         }
@@ -1354,14 +1347,8 @@ private struct UsagePage: View {
             PageTitle(title: "Usage", subtitle: (AIAccount.usesAPIKey ? "Billed to your API key, per request." : "On your Claude plan. Costs show what the same use would cost on the API.")
                 + (currency == "CNY" ? " RMB at ¥\(String(format: "%.1f", Self.yuanPerDollar)) per $1." : ""))
             Spacer()
-            Picker("", selection: $currency) {
-                Text("USD $").tag("USD")
-                Text("RMB ¥").tag("CNY")
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 150)
-            .padding(.top, 6)
+            Segmented(options: [("USD", "USD $"), ("CNY", "RMB ¥")], selection: $currency)
+                .padding(.top, 6)
         }
         let calendar = Calendar.current
         let today = entries.filter { calendar.isDateInToday($0.date) }
@@ -2027,16 +2014,15 @@ private struct PointsCalculator: View {
                     RoundedRectangle(cornerRadius: 2).fill(SubjectGroup.of(subject)?.color ?? Look.accent).frame(width: 4, height: 16)
                     Text(subject).font(.system(size: 13))
                     Spacer()
-                    Picker("", selection: grade(subject)) { ForEach((1...7).reversed(), id: \.self) { Text("\($0)").tag($0) } }
-                        .pickerStyle(.segmented).labelsHidden().frame(width: 230)
+                    Segmented(options: (1...7).reversed().map { ($0, "\($0)") }, selection: grade(subject))
                 }
             }
             HStack(spacing: 16) {
                 Text("TOK").font(.system(size: 13))
-                Picker("", selection: $tok) { ForEach(["A", "B", "C", "D", "E"], id: \.self) { Text($0).tag($0) } }.pickerStyle(.segmented).labelsHidden().frame(width: 170)
+                Segmented(options: ["A", "B", "C", "D", "E"].map { ($0, $0) }, selection: $tok)
                 Spacer()
                 Text("EE").font(.system(size: 13))
-                Picker("", selection: $ee) { ForEach(["A", "B", "C", "D", "E"], id: \.self) { Text($0).tag($0) } }.pickerStyle(.segmented).labelsHidden().frame(width: 170)
+                Segmented(options: ["A", "B", "C", "D", "E"].map { ($0, $0) }, selection: $ee)
             }
             ForEach(problems, id: \.self) { Text($0).font(.system(size: 12)).foregroundStyle(.red) }
             Text("Also needed for a diploma: CAS completed, at least 12 points from HL subjects and 9 from SL, and no academic misconduct.")
@@ -2127,14 +2113,8 @@ private struct AlarmsPage: View {
     var body: some View {
         PageTitle(title: "Alarms", subtitle: "They ring loudly on this Mac (lid open), with Stop and Snooze, and on your iPhone through Reminders.")
         Card(title: "New", symbol: "plus") {
-            Picker("", selection: $kind) {
-                Label("Alarm", systemImage: "alarm").tag(Alarm.Kind.alarm)
-                Label("Timer", systemImage: "timer").tag(Alarm.Kind.timer)
-                Label("Reminder", systemImage: "bell").tag(Alarm.Kind.reminder)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: 320)
+            Segmented(options: [(Alarm.Kind.alarm, "Alarm"), (.timer, "Timer"), (.reminder, "Reminder")],
+                      symbols: ["alarm", "timer", "bell"], selection: $kind)
 
             if kind == .timer {
                 HStack(spacing: 6) {
@@ -2302,12 +2282,7 @@ private struct NotesPage: View {
                 .buttonStyle(PillButton(prominent: true))
             Text("Or say “take notes, this is a lecture”.").font(.system(size: 12.5)).foregroundStyle(.secondary)
             Spacer()
-            Picker("", selection: $kind) {
-                ForEach(["All", "Lecture", "Meeting", "Notes"], id: \.self) { Text($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 280)
+            Segmented(options: ["All", "Lecture", "Meeting", "Notes"].map { ($0, $0) }, selection: $kind)
         }
         let shown = model.notes.filter { kind == "All" || $0.kind.hasPrefix(kind) }
         let calendar = Calendar.current
@@ -2626,6 +2601,255 @@ private struct PillButton: ButtonStyle {
     }
 }
 
+/// Joe's on/off switch: a capsule in the theme's accent with a knob that springs across.
+private struct JoeSwitch: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Capsule()
+            .fill(configuration.isOn ? Look.accent : Color.primary.opacity(0.13))
+            .overlay(Capsule().strokeBorder(configuration.isOn ? Color.clear : Look.line))
+            .frame(width: 36, height: 21)
+            .overlay(alignment: configuration.isOn ? .trailing : .leading) {
+                Circle()
+                    .fill(.white)
+                    .shadow(color: .black.opacity(0.22), radius: 1.5, y: 1)
+                    .padding(2.5)
+            }
+            .contentShape(Capsule())
+            .onTapGesture { withAnimation(.spring(response: 0.28, dampingFraction: 0.72)) { configuration.isOn.toggle() } }
+            .accessibilityElement()
+            .accessibilityAddTraits(.isButton)
+            .accessibilityValue(configuration.isOn ? "On" : "Off")
+    }
+}
+
+/// A row of choices in a soft tray, the current one raised like a card. Joe's segmented control.
+private struct Segmented<Value: Hashable>: View {
+    let options: [(value: Value, title: String)]
+    var symbols: [String] = []
+    @Binding var selection: Value
+    /// Bigger, for the Settings tabs.
+    var large = false
+    @Namespace private var raised
+
+    var body: some View {
+        HStack(spacing: large ? 4 : 2) {
+            ForEach(options.indices, id: \.self) { index in
+                let option = options[index]
+                let current = option.value == selection
+                Button { withAnimation(.easeOut(duration: 0.18)) { selection = option.value } } label: {
+                    HStack(spacing: 6) {
+                        if index < symbols.count { Image(systemName: symbols[index]).foregroundStyle(current ? Look.accent : .secondary) }
+                        Text(option.title)
+                    }
+                    .font(.system(size: large ? 13 : 12.5, weight: current ? .semibold : .medium))
+                    .foregroundStyle(current ? .primary : .secondary)
+                    .padding(.horizontal, large ? 12 : 10)
+                    .frame(minWidth: large ? nil : 26)
+                    .frame(height: large ? 30 : 24)
+                    .background {
+                        if current {
+                            RoundedRectangle(cornerRadius: large ? 8 : 6, style: .continuous)
+                                .fill(Look.card)
+                                .overlay(RoundedRectangle(cornerRadius: large ? 8 : 6, style: .continuous).strokeBorder(Look.line))
+                                .shadow(color: .black.opacity(0.06), radius: 2, y: 1)
+                                .matchedGeometryEffect(id: "raised", in: raised)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(large ? 4 : 3)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: large ? 11 : 9, style: .continuous))
+        .fixedSize()
+    }
+}
+
+/// One line of a Settings card: what it is, a short note, and its control on the right. Lights up
+/// softly under the pointer.
+private struct SettingsRow<Content: View>: View {
+    let label: String
+    let detail: String?
+    let last: Bool
+    let content: Content
+    @State private var hovering = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(label).font(.system(size: 13.5, weight: .medium))
+                    if let detail { Text(detail).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1) }
+                }
+                Spacer(minLength: 12)
+                content
+            }
+            .padding(.vertical, 11)
+            .padding(.horizontal, 10)
+            .background(hovering ? Color.primary.opacity(0.035) : .clear, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .padding(.horizontal, -10)
+            .onHover { hovering = $0 }
+            if !last { Rectangle().fill(Look.line).frame(height: 1) }
+        }
+    }
+}
+
+/// Settings → Notch → Edit: the overview's widgets as tiles in a little notch. Drag a tile to move
+/// it, drag it down (or tap its minus) to take it off; drag one up from the tray (or tap it) to add it.
+private struct WidgetEditor: View {
+    @Binding var widgets: [NotchOverview.Widget]
+    @Environment(\.dismiss) private var dismiss
+    /// The tile being dragged, so the others make room for it as it passes.
+    @State private var dragging: NotchOverview.Widget?
+    @State private var overTray = false
+
+    private var unused: [NotchOverview.Widget] { NotchOverview.Widget.allCases.filter { !widgets.contains($0) } }
+    private var full: Bool { widgets.count >= NotchOverview.maxWidgets }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Notch overview").font(.system(size: 20, weight: .bold, design: Look.titleDesign))
+                Text("Drag to arrange. Up to \(NotchOverview.maxWidgets) fit side by side.")
+                    .font(.system(size: 13)).foregroundStyle(.secondary)
+            }
+
+            notch
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text(overTray ? "Drop here to take it off" : full ? "More widgets · the overview is full" : "More widgets")
+                    .font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    if unused.isEmpty {
+                        Text("All of them are in the overview.").font(.system(size: 12.5)).foregroundStyle(.tertiary)
+                    }
+                    ForEach(unused) { widget in
+                        Button { add(widget) } label: {
+                            Label(widget.title, systemImage: widget.symbol)
+                                .font(.system(size: 12.5, weight: .medium))
+                                .labelStyle(TitleIconLabel())
+                                .padding(.horizontal, 12)
+                                .frame(height: 30)
+                                .background(Look.card, in: Capsule())
+                                .overlay(Capsule().strokeBorder(Look.line))
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(full)
+                        .opacity(full ? 0.5 : 1)
+                        .draggable(widget.rawValue)
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+            }
+            .padding(14)
+            .background(overTray ? Look.accent.opacity(0.08) : Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(overTray ? Look.accent.opacity(0.5) : Look.line, style: StrokeStyle(lineWidth: 1, dash: overTray ? [4, 3] : [])))
+            .dropDestination(for: String.self) { items, _ in
+                guard let widget = items.first.flatMap(NotchOverview.Widget.init) else { return false }
+                withAnimation(.snappy) { widgets.removeAll { $0 == widget } }
+                dragging = nil
+                return true
+            } isTargeted: { overTray = $0 && dragging != nil }
+
+            HStack {
+                Button("Reset") { withAnimation(.snappy) { widgets = [.clock, .nextClass, .dueSoon, .tasks, .music] } }
+                    .buttonStyle(PillButton())
+                Spacer()
+                Button("Done") { dismiss() }.buttonStyle(PillButton(prominent: true)).keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 640)
+        .background(Look.page)
+        .tint(Look.accent)
+    }
+
+    /// The overview as it drops from the notch, in miniature.
+    private var notch: some View {
+        VStack(spacing: 0) {
+            UnevenRoundedRectangle(bottomLeadingRadius: 8, bottomTrailingRadius: 8, style: .continuous)
+                .fill(Color.black)
+                .frame(width: 120, height: 14)
+            HStack(spacing: 8) {
+                if widgets.isEmpty {
+                    Text("Drag widgets here").font(.system(size: 12.5)).foregroundStyle(.white.opacity(0.45))
+                        .frame(maxWidth: .infinity, minHeight: 92)
+                }
+                ForEach(widgets) { widget in tile(widget) }
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 4)
+            .padding(.bottom, 12)
+        }
+        .frame(maxWidth: .infinity)
+        .background(Color.black, in: UnevenRoundedRectangle(bottomLeadingRadius: 22, bottomTrailingRadius: 22, style: .continuous))
+        .environment(\.colorScheme, .dark)
+        // Dropped on the strip itself, past the last tile: it goes on the end.
+        .dropDestination(for: String.self) { items, _ in
+            guard let widget = items.first.flatMap(NotchOverview.Widget.init) else { return false }
+            withAnimation(.snappy) {
+                if !widgets.contains(widget), !full { widgets.append(widget) }
+            }
+            dragging = nil
+            return true
+        }
+    }
+
+    private func tile(_ widget: NotchOverview.Widget) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Image(systemName: widget.symbol).font(.system(size: 17, weight: .medium)).foregroundStyle(Look.accent)
+            Spacer(minLength: 0)
+            Text(widget.title).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, minHeight: 92, maxHeight: 92, alignment: .topLeading)
+        .background(Color.white.opacity(dragging == widget ? 0.03 : 0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .strokeBorder(Color.white.opacity(dragging == widget ? 0.25 : 0), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+        .overlay(alignment: .topTrailing) {
+            Button { remove(widget) } label: {
+                Image(systemName: "minus.circle.fill")
+                    .font(.system(size: 14))
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, Color.white.opacity(0.25))
+            }
+            .buttonStyle(.plain)
+            .padding(5)
+            .help("Take \(widget.title) off")
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        // The payload is made as the drag starts: note which tile is moving.
+        .draggable({ dragging = widget; return widget.rawValue }())
+        .dropDestination(for: String.self) { items, _ in
+            guard let dropped = items.first.flatMap(NotchOverview.Widget.init) else { return false }
+            withAnimation(.snappy) {
+                if !widgets.contains(dropped), !full, let index = widgets.firstIndex(of: widget) { widgets.insert(dropped, at: index) }
+            }
+            dragging = nil
+            return true
+        } isTargeted: { over in
+            // A tile from the strip passing over another: they trade places as it goes, like the home screen.
+            guard over, let moving = dragging, moving != widget,
+                  let from = widgets.firstIndex(of: moving), let to = widgets.firstIndex(of: widget) else { return }
+            withAnimation(.snappy) { widgets.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to) }
+        }
+    }
+
+    private func add(_ widget: NotchOverview.Widget) {
+        guard !full, !widgets.contains(widget) else { return }
+        dragging = nil
+        withAnimation(.snappy) { widgets.append(widget) }
+    }
+
+    private func remove(_ widget: NotchOverview.Widget) {
+        dragging = nil
+        withAnimation(.snappy) { widgets.removeAll { $0 == widget } }
+    }
+}
+
 private struct SettingsPage: View {
     @ObservedObject var model: DashboardModel
     @AppStorage("writingStyle") private var writingStyle = WritingStyle.casual.rawValue
@@ -2645,6 +2869,7 @@ private struct SettingsPage: View {
     @AppStorage("liveCaption") private var liveWords = true
     @AppStorage("notchOverview") private var overviewOn = true
     @State private var overviewWidgets = NotchOverview.widgets.map(\.rawValue)
+    @State private var editingWidgets = false
     @AppStorage("chineseVoice") private var chineseVoice = "zf_001"
     @AppStorage("modelMirrorChina") private var chinaMirror = false
     @AppStorage("profileSchool") private var profileSchool = ""
@@ -2716,23 +2941,7 @@ private struct SettingsPage: View {
         PageTitle(title: "Settings")
             .onAppear { login = SMAppService.mainApp.status == .enabled }
 
-        HStack(spacing: 4) {
-            ForEach(Self.tabs, id: \.id) { item in
-                Button { withAnimation(.easeOut(duration: 0.15)) { tab = item.id } } label: {
-                    Label(item.title, systemImage: item.symbol)
-                        .font(.system(size: 13, weight: tab == item.id ? .semibold : .medium))
-                        .padding(.horizontal, 12)
-                        .frame(height: 30)
-                        .background(tab == item.id ? Look.card : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(tab == item.id ? Look.line : .clear))
-                        .foregroundStyle(tab == item.id ? .primary : .secondary)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(4)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        Segmented(options: Self.tabs.map { ($0.id, $0.title) }, symbols: Self.tabs.map(\.symbol), selection: $tab, large: true)
 
         switch tab {
         case "personality": personality
@@ -2807,27 +3016,12 @@ private struct SettingsPage: View {
         section("Notch", "rectangle.topthird.inset.filled") {
             row("Overview on hover", "Rest the pointer on the notch: time, next class, what's due, your tasks, music") { switchOn($overviewOn) }
             row("Overview widgets", overviewWidgets.map { NotchOverview.Widget(rawValue: $0)?.title ?? $0 }.joined(separator: " · ")) {
-                Menu {
-                    ForEach(NotchOverview.Widget.allCases) { widget in
-                        Button {
-                            if overviewWidgets.contains(widget.rawValue) { overviewWidgets.removeAll { $0 == widget.rawValue } }
-                            else { overviewWidgets.append(widget.rawValue) }
-                            NotchOverview.widgets = overviewWidgets.compactMap(NotchOverview.Widget.init)
-                        } label: {
-                            if overviewWidgets.contains(widget.rawValue) { Label(widget.title, systemImage: "checkmark") } else { Text(widget.title) }
-                        }
+                Button("Edit…") { editingWidgets = true }.buttonStyle(PillButton())
+                    .sheet(isPresented: $editingWidgets) {
+                        WidgetEditor(widgets: Binding(
+                            get: { overviewWidgets.compactMap(NotchOverview.Widget.init) },
+                            set: { overviewWidgets = $0.map(\.rawValue); NotchOverview.widgets = $0 }))
                     }
-                    Divider()
-                    ForEach(Array(overviewWidgets.enumerated()), id: \.offset) { index, raw in
-                        if index > 0 {
-                            Button("Move \(NotchOverview.Widget(rawValue: raw)?.title ?? raw) left") {
-                                overviewWidgets.swapAt(index, index - 1)
-                                NotchOverview.widgets = overviewWidgets.compactMap(NotchOverview.Widget.init)
-                            }
-                        }
-                    }
-                } label: { Text("Choose…") }
-                .menuStyle(.borderlessButton).fixedSize()
             }
             row("Answers at the notch", "Answers drop down from the notch") { switchOn($notch) { model.actions.setNotch($0) } }
             row("Alarms at the notch", "The capsule beside the notch", last: true) {
@@ -2994,26 +3188,13 @@ private struct SettingsPage: View {
     }
 
     private func row<Content: View>(_ label: String, _ detail: String? = nil, last: Bool = false, @ViewBuilder _ content: () -> Content) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(label).font(.system(size: 13.5, weight: .medium))
-                    if let detail { Text(detail).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1) }
-                }
-                Spacer(minLength: 12)
-                content()
-            }
-            .padding(.vertical, 10)
-            if !last { Rectangle().fill(Look.line).frame(height: 1) }
-        }
+        SettingsRow(label: label, detail: detail, last: last, content: content())
     }
 
     private func switchOn(_ value: Binding<Bool>, _ changed: ((Bool) -> Void)? = nil) -> some View {
         Toggle("", isOn: Binding(get: { value.wrappedValue }, set: { value.wrappedValue = $0; changed?($0) }))
-            .toggleStyle(.switch)
-            .tint(Look.accent)
+            .toggleStyle(JoeSwitch())
             .labelsHidden()
-            .controlSize(.small)
     }
 
     private func permission(_ label: String, _ detail: String, _ granted: Bool, _ pane: String, last: Bool = false,

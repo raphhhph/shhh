@@ -74,6 +74,9 @@ final class StudyBoard: NSObject, NSWindowDelegate {
             "Psychology": ["psych"],
             "English B": ["english"],
             "Spanish": ["spanish", "español", "espanol"],
+            "Geography": ["geog"],
+            "Computer Science": ["computer", "coding", "programming", "algorithm", "sql"],
+            "Global Politics": ["politic", "sovereignty", "human rights"],
         ]
         // Their own name for the subject ("quiz me on Geography") wins, with or without a map.
         if let named = subjects.first(where: {
@@ -226,14 +229,21 @@ final class StudyBoardModel: ObservableObject {
         let date = Date().formatted(.iso8601.year().month().day())
         var lines: [String] = []
         var topic = items.reversed().compactMap { if case let .question(_, _, topic, _, _) = $0 { return topic } else { return nil } }.first ?? ""
+        var question = items.reversed().compactMap { if case let .question(_, _, _, _, text) = $0 { return text } else { return nil } }.first ?? ""
+        var lost: [Mistakes.Entry] = []
         for item in parsed {
-            if case let .question(_, _, next, _, _) = item { topic = next }
+            if case let .question(_, _, next, _, text) = item { topic = next; question = text }
+            if case let .feedback(score, total, text, model) = item, total > 0, score < total {
+                lost.append(Mistakes.Entry(date: date, topic: topic, score: score, total: total, question: question,
+                                           missing: Mistakes.missing(in: text), model: model))
+            }
             if case let .feedback(score, total, text, _) = item, total > 0 {
                 let missing = text.components(separatedBy: "\n").first { $0.lowercased().contains("missing") || $0.contains("✗") } ?? ""
                 let note = missing.replacingOccurrences(of: #"^[-•*✗\s]+"#, with: "", options: .regularExpression).prefix(80)
                 lines.append("- \(date) · \(subject) · \(topic) · \(score)/\(total) · \(note)")
             }
         }
+        Mistakes.record(lost, subject: subject)
         guard !lines.isEmpty else { return }
         let url = StudyBuddy.logURL
         var log = (try? String(contentsOf: url, encoding: .utf8)) ?? "# Quiz log\n"
@@ -338,6 +348,7 @@ final class StudyBoardModel: ObservableObject {
             material = "Past papers saved for this subject: \(papers.joined(separator: "; ")). Prefer real questions from them: find one with \"\(exe)\" --pdf-find \"<pdf>\" \"<topic>\", read it with \"\(exe)\" --pdf-text \"<pdf>\" \"<pages>\", ask it as printed (with its data) and source=\"<paper, year, question>\", and mark with its markscheme when there is one."
         }
         let paperIndex = indexed.map { "\n# Their past papers, indexed\n" + $0 } ?? ""
+        let mistakes = Mistakes.recent(subject).joined(separator: "\n\n")
         let notes = StudyBuddy.schoolFolder?.appendingPathComponent("Subjects").path
         return """
             You are Joe, an IB Diploma tutor running a practice session on a whiteboard for \(Profile.name.isEmpty ? "a student" : Profile.name). \
@@ -376,6 +387,9 @@ final class StudyBoardModel: ObservableObject {
 
             # Their recent results in this subject
             \(history.isEmpty ? "None yet." : history)
+
+            # Their recent mistakes (from their mistake book: re-test these with a fresh question on the same point, never the same wording; "redo my mistakes" means only these)
+            \(mistakes.isEmpty ? "None yet." : mistakes)
 
             # Syllabus map
             \(map)
@@ -497,7 +511,9 @@ private struct StudyBoardView: View {
                     Spacer()
                     if marks > 0 { Text("[\(marks)]").font(.system(size: 13, weight: .bold).monospacedDigit()).foregroundStyle(.secondary) }
                 }
-                BoardText(text, size: 15.5, spacing: 3)
+                // The marks are in the corner; a "[4]" at the end of the text would say it twice.
+                BoardText(marks > 0 ? text.replacingOccurrences(of: #"\s*\[\d{1,2}\]\s*$"#, with: "", options: .regularExpression) : text,
+                          size: 15.5, spacing: 3)
             }
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -683,7 +699,9 @@ extension StudyBoard {
         board.model.preview(StudyBoardModel.parse("""
             Let's go. <question n="1" marks="4" topic="2.7 Indirect taxes" source="IB-style">**Draw** a diagram to show the effect of a specific tax on a market. [4]</question><ms>hidden</ms>
             """) + [.answer(text: "Supply shifts up by the tax, price rises, quantity falls.", spoken: true)] + StudyBoardModel.parse("""
-            <feedback n="1" score="3" total="4">✓ Supply shifts up by the tax\\n✓ Higher price, lower quantity\\n✗ missing: the price producers receive</feedback><model>S shifts vertically by the tax; consumers pay Pc, producers get Pp.</model>
+            <feedback n="1" score="3" total="4">✓ Supply shifts up by the tax
+            ✓ Higher price, lower quantity
+            ✗ missing: the price producers receive</feedback><model>S shifts vertically by the tax; consumers pay Pc, producers get Pp.</model>
             """), subject: "Economics HL", sketching: sketch)
         // A tax diagram in the three inks: black axes and demand, blue supply, red supply after the tax.
         func line(_ a: CGPoint, _ b: CGPoint, _ color: Color) -> SketchPad.Stroke {

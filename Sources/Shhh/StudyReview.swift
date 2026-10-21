@@ -16,8 +16,14 @@ enum StudyReview {
         let lastScore: Double
         let last: Date
         let due: Date
+        /// A test in this subject coming up, from their calendar ("Econ Unit 3 test, Thu 23 Oct").
+        var test: Test? = nil
 
-        var isDue: Bool { due <= Calendar.current.startOfDay(for: Date()) }
+        /// Due now, or due by a test in the subject: revise it before the test, not after.
+        var isDue: Bool {
+            let today = Calendar.current.startOfDay(for: Date())
+            return due <= today || (test.map { due <= $0.date } ?? false)
+        }
         /// Whole days past due (0 when due today, negative when not due yet).
         var daysOverdue: Int {
             Calendar.current.dateComponents([.day], from: due, to: Calendar.current.startOfDay(for: Date())).day ?? 0
@@ -25,11 +31,41 @@ enum StudyReview {
 
         /// "due today", "3 days overdue", "in 4 days".
         var when: String {
+            if let test, due > Calendar.current.startOfDay(for: Date()) {
+                return "before \(test.title), \(test.date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)))"
+            }
             let days = daysOverdue
             if days == 0 { return "due today" }
             if days > 0 { return days == 1 ? "1 day overdue" : "\(days) days overdue" }
             return -days == 1 ? "tomorrow" : "in \(-days) days"
         }
+    }
+
+    struct Test: Hashable {
+        let pack: String?
+        let subject: String
+        let title: String
+        let date: Date
+    }
+
+    private static var testsCache: (at: Date, tests: [Test])?
+
+    /// Tests, exams and assessments in the next two weeks (ManageBac, Google and Mac calendars), each
+    /// matched to one of their subjects by the subject's name or its syllabus map's aliases.
+    static func tests() -> [Test] {
+        if let cache = testsCache, Date().timeIntervalSince(cache.at) < 600 { return cache.tests }
+        let subjects = Profile.subjects.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let found = CalendarFeed.items(from: Date(), days: 14).compactMap { item -> Test? in
+            guard item.kind == .deadline || item.kind == .event,
+                  item.title.range(of: #"\b(test|exam|exams|quiz|assessment|summative|mock|mocks|paper [1-3])\b"#, options: [.regularExpression, .caseInsensitive]) != nil
+            else { return nil }
+            let pack = StudyBuddy.pack(for: item.title)
+            let named = subjects.first { item.title.range(of: #"\b"# + NSRegularExpression.escapedPattern(for: $0) + #"\b"#, options: [.regularExpression, .caseInsensitive]) != nil }
+            guard let subject = named ?? subjects.first(where: { pack != nil && StudyBuddy.pack(for: $0) == pack }) else { return nil }
+            return Test(pack: StudyBuddy.pack(for: subject), subject: subject, title: item.title, date: Calendar.current.startOfDay(for: item.start))
+        }
+        testsCache = (Date(), found)
+        return found
     }
 
     private static let day: DateFormatter = {
@@ -51,6 +87,10 @@ enum StudyReview {
 
     /// Every topic in the log with when it's next due.
     static func topics(_ results: [StudyBuddy.Result] = StudyBuddy.results()) -> [Topic] {
+        let coming = tests()
+        // Topics show under the subject as it is in their profile ("Economics HL"), even when older
+        // log lines say "Economics".
+        let profile = Profile.subjects.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         let groups = Dictionary(grouping: results.filter { !$0.topic.isEmpty && day.date(from: $0.date) != nil }) {
             (StudyBuddy.pack(for: $0.subject) ?? $0.subject.lowercased()) + "|" + key($0.topic)
         }
@@ -66,8 +106,11 @@ enum StudyReview {
             }
             guard let latest = attempts.last, let lastDay = days.last.flatMap({ day.date(from: $0.key) }),
                   let due = Calendar.current.date(byAdding: .day, value: interval, to: lastDay) else { return nil }
-            return Topic(subject: latest.subject, pack: StudyBuddy.pack(for: latest.subject), topic: latest.topic,
-                         attempts: attempts.count, lastScore: lastScore, last: lastDay, due: due)
+            let pack = StudyBuddy.pack(for: latest.subject)
+            let subject = pack.flatMap { pack in profile.first { StudyBuddy.pack(for: $0) == pack } } ?? latest.subject
+            let test = coming.first { (pack != nil && $0.pack == pack) || $0.subject == subject }
+            return Topic(subject: subject, pack: pack, topic: latest.topic,
+                         attempts: attempts.count, lastScore: lastScore, last: lastDay, due: due, test: test)
         }
     }
 
@@ -80,7 +123,7 @@ enum StudyReview {
         }
     }
 
-    /// What to revise now, most urgent first: the longest overdue, then the lowest marks.
+    /// What to revise now, most urgent first: the soonest test, then the longest overdue, then the lowest marks.
     /// `pack` limits it to one subject's map; `subject` to topics logged under that exact name.
     static func due(pack: String? = nil, subject: String? = nil, from all: [Topic]? = nil) -> [Topic] {
         let subjectPack = subject.flatMap(StudyBuddy.pack(for:))
@@ -89,7 +132,11 @@ enum StudyReview {
             guard let subject else { return true }
             return topic.subject == subject || (subjectPack != nil && topic.pack == subjectPack)
         }
-        .sorted { ($0.daysOverdue, -$0.lastScore) > ($1.daysOverdue, -$1.lastScore) }
+        .sorted { a, b in
+            let testA = a.test?.date ?? .distantFuture, testB = b.test?.date ?? .distantFuture
+            if testA != testB { return testA < testB }
+            return (a.daysOverdue, -a.lastScore) > (b.daysOverdue, -b.lastScore)
+        }
     }
 
     /// The next topic to come up, when nothing is due.

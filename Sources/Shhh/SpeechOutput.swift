@@ -287,7 +287,7 @@ final class SpeechOutput {
             if Self.hasHan(clean) {
                 // Chinese, often with English in it ("数学 AI HL，08:30"): the Chinese parts in the
                 // Mandarin voice with numbers said in Chinese, the English words in Alba's.
-                pending += Self.chineseParts(clean).map { Line(text: $0) }
+                pending += Self.chineseParts(Self.mathsInChinese(clean)).map { Line(text: $0) }
             } else if Self.isOtherLanguage(clean) {
                 pending.append(Line(text: clean, mac: true))
             } else {
@@ -441,6 +441,13 @@ final class SpeechOutput {
             text = text.replacingOccurrences(of: pattern, with: template, options: .regularExpression)
         }
         return text
+    }
+
+    /// A Chinese sentence with maths in it ("求 y = 3x² 的导数"): the maths in words first, so the
+    /// English parts go to Alba as words, not symbols. Without maths it's left as it is, so times,
+    /// numbers and percentages are still said in Chinese.
+    nonisolated static func mathsInChinese(_ text: String) -> String {
+        text.range(of: #"[=^²³√∫×÷−]|\\[A-Za-z]+"#, options: .regularExpression) != nil ? spokenMaths(text) : text
     }
 
     /// Maths, science and units the way a teacher says them, for Alba, who would skip or spell out

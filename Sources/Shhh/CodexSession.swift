@@ -552,11 +552,12 @@ enum CodexAccount {
         """
 
     private static func run(_ executable: URL, _ arguments: [String]) async -> String {
-        await withCheckedContinuation { continuation in
+        let environment = await MainActor.run { CodexSession.environment() }
+        return await withCheckedContinuation { continuation in
             let process = Process()
             process.executableURL = executable
             process.arguments = arguments
-            process.environment = CodexSession.environment()
+            process.environment = environment
             let pipe = Pipe()
             process.standardOutput = pipe
             process.standardError = pipe

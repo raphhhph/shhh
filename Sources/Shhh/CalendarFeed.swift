@@ -267,7 +267,8 @@ extension CalendarFeed {
             case "RECURRENCE-ID": current?["recurrence"] = normalized(raw, zone: zone)
             case "EXDATE":
                 let dates = raw.split(separator: ",").map { normalized(String($0), zone: zone) }
-                current?["exdate"] = ((current?["exdate"].map { [$0] } ?? []) + dates).joined(separator: ",")
+                let earlier = current?["exdate"].map { [$0] } ?? []
+                current?["exdate"] = (earlier + dates).joined(separator: ",")
             default: break
             }
         }

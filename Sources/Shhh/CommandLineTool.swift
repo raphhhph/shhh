@@ -144,7 +144,7 @@ enum CommandLineTool {
             // Shhh --alarm-check "<request>"…: what each would set (testing the phrases).
             for text in args.dropFirst() {
                 switch AlarmRequest.parse(text) {
-                case let .add(alarm)?: print("Set: \(alarm.kind.rawValue) \(alarm.fireAt.formatted(.dateTime.weekday(.abbreviated).hour().minute().second())) “\(alarm.title)” · \(text)")
+                case let .add(alarm)?: print("Would set (nothing saved): \(alarm.kind.rawValue) \(alarm.fireAt.formatted(.dateTime.weekday(.abbreviated).hour().minute().second())) “\(alarm.title)”\(alarm.repeats.map { ", repeating \($0)" } ?? "") · \(text)")
                 case .list?: print("list · \(text)")
                 case let .cancel(words, kind)?: print("cancel \(kind?.rawValue ?? "any") \(words ?? "all") · \(text)")
                 case nil: print("→ Claude · \(text)")
@@ -347,6 +347,13 @@ enum CommandLineTool {
             let challenge = MainActor.assumeIsolated { WakeChallenge.today(seed: seed) }
             print("\(challenge.kind.rawValue) · \(challenge.source)\n\(challenge.prompt)\nanswers: \(challenge.answers)")
             if args.count > 2 { print(challenge.check(args[2]) ? "PASS" : "FAIL") }
+            exit(0)
+        case ("--routines", 1):
+            // Joe --routines: the routines in Routines.md, after the missing defaults are added.
+            Daybook.addDefaultRoutines()
+            print(Daybook.routinesURL?.path ?? "No notes folder set.")
+            for routine in Daybook.routines { print("· " + routine) }
+            print("Wake-up streak: \(UserDefaults.standard.integer(forKey: "wakeStreak"))")
             exit(0)
         case ("--speech-parts", 2):
             // Joe --speech-parts "<text>": which voice says which part.

@@ -587,9 +587,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 speechReady = true
                 speechStatus = "Hold right ⌘ to dictate"
                 // Then the rest, so the keys never wait behind them: the voice and the noise filter.
+                // One model at a time, after SenseVoice's warm-up: several starting on the GPU at once
+                // aborted in Metal (MPSGraphTensorData) a few seconds after the first launch.
                 if first {
-                    speech.prepare()
-                    Task.detached(priority: .utility) { await NoiseFilter.shared.prepare() }
+                    Task {
+                        var waited = 0
+                        while Transcriber.languages == .chinese, !(await transcriber.chineseReady), waited < 180 {
+                            try? await Task.sleep(for: .milliseconds(500))
+                            waited += 1
+                        }
+                        await speech.prepare().value
+                        await Task.detached(priority: .utility) { await NoiseFilter.shared.prepare() }.value
+                    }
                 }
             } catch {
                 guard transcriber === self.transcriber else { return }

@@ -496,6 +496,14 @@ enum Daybook {
     /// How to build today's Daybook: for the morning briefing, or the first request of a day.
     static var buildRules: String {
         let config = timetable?.config
+        // Quiz topics due for spaced-repetition review become one revision task.
+        let due = StudyReview.due()
+        let review = due.isEmpty ? "" : """
+              - Revision: these quiz topics are due for review (spaced repetition from the quiz log): \
+            \(due.prefix(3).map { "\($0.subject) \($0.topic)" }.joined(separator: "; ")). Add one task, "Revise \
+            <topic> (<subject>): say \"quiz me on <topic>\"", to Today's five if there's room, else Backlog.
+
+            """
         return """
             To build today's Daybook, write \(relative(url)) in the same format as the last one in \
             \(relative(history))/ (\(lastArchived.map { relative($0) } ?? "none yet")): frontmatter (summary, owns, \
@@ -514,7 +522,7 @@ enum Daybook {
               - Patterns: read \(relative(patterns)) and use it: prepare them for this weekday's regular meetings. \
             When a meeting or call on today's calendar also happened on this weekday last week, add it there.
               - Focus: one sentence, the one thing that matters most today.
-            \(CalendarFeed.links.isEmpty ? "  - Then, for the dashboard's calendar: " + CalendarFeed.syncInstructions.replacingOccurrences(of: " Reply in one line.", with: "") : "")
+            \(review)\(CalendarFeed.links.isEmpty ? "  - Then, for the dashboard's calendar: " + CalendarFeed.syncInstructions.replacingOccurrences(of: " Reply in one line.", with: "") : "")
             """
     }
 

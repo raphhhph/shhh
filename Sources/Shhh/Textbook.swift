@@ -75,7 +75,7 @@ enum Textbook {
         return String(format: "Indexed %d pages in %.0fs; printed page numbers found on %d.", count, Date().timeIntervalSince(start), found)
     }
 
-    private static func recognize(_ page: PDFPage) -> (text: String, printed: String?) {
+    static func recognize(_ page: PDFPage) -> (text: String, printed: String?) {
         let bounds = page.bounds(for: .mediaBox)
         let width: CGFloat = 1500
         let image = page.thumbnail(of: CGSize(width: width, height: width * bounds.height / bounds.width), for: .mediaBox)

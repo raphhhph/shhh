@@ -225,6 +225,20 @@ enum CommandLineTool {
         case ("--pdf-find", 3):
             print(Textbook.find(pdf: args[1], query: args[2]))
             exit(0)
+        case ("--past-papers", 2):
+            // Joe --past-papers "<subject>": reads that subject's saved papers and prints the tutor's index.
+            guard let pack = StudyBuddy.pack(for: args[1]) else { fail("No syllabus map for \(args[1]). Maps: " + StudyBuddy.packs.joined(separator: ", ")) }
+            let papers = PastPapers.refresh(pack: pack)
+            for file in PastPapers.files(for: pack) { print("found:", file.path) }
+            print("\(papers.count) papers, \(papers.flatMap(\.questions).count) questions")
+            print(PastPapers.promptIndex(pack: pack, focus: [], limit: 200) ?? "(nothing indexed)")
+            exit(0)
+        case ("--review", 1):
+            // Joe --review: the spaced-repetition schedule from the quiz log.
+            for topic in StudyReview.topics().sorted(by: { $0.due < $1.due }) {
+                print("\(topic.when.padding(toLength: 16, withPad: " ", startingAt: 0)) \(Int((topic.lastScore * 100).rounded()))%  \(topic.subject) · \(topic.topic) (\(topic.attempts)×)")
+            }
+            exit(0)
         case ("--pdf-text", 3):
             print(Textbook.text(pdf: args[1], pages: args[2]))
             exit(0)

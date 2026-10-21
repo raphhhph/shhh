@@ -2668,6 +2668,7 @@ private struct SettingsPage: View {
     @State private var openRouterDraft = ""
     @AppStorage("useOpenRouter") private var useOpenRouter = false
     @AppStorage("openRouterModel") private var openRouterModel = "openrouter/auto"
+    @AppStorage("customEndpoint") private var customEndpoint = "https://openrouter.ai/api"
     @AppStorage("strongModelForWork") private var strongForWork = true
     @AppStorage("assistantModel") private var assistantModel = Assistant.Model.opus.rawValue
     @AppStorage("assistantEffort") private var effort = Assistant.Effort.low.rawValue
@@ -2932,11 +2933,15 @@ private struct SettingsPage: View {
                 }
             }
         }
-        section("Other models (OpenRouter)", "square.stack.3d.up") {
-            row("Use OpenRouter", "GPT, DeepSeek, Qwen, Gemini… with an OpenRouter key, often cheaper. Gmail, Calendar and Chrome connectors aren't available in this mode") {
+        section("Other models and custom APIs", "square.stack.3d.up") {
+            row("Use another model", "GPT, DeepSeek, Qwen, Gemini… through OpenRouter, or your own Anthropic-compatible API. Gmail, Calendar and Chrome connectors aren't available in this mode") {
                 switchOn($useOpenRouter)
             }
-            row("OpenRouter key", AIAccount.maskedOpenRouterKey.map { "Saved: \($0)" } ?? "From openrouter.ai → Keys") {
+            row("Endpoint", "OpenRouter, or any Anthropic-compatible base URL (LiteLLM, a gateway, a local server)") {
+                TextField("https://openrouter.ai/api", text: $customEndpoint)
+                    .textFieldStyle(.roundedBorder).frame(width: 260)
+            }
+            row("API key", AIAccount.maskedOpenRouterKey.map { "Saved: \($0)" } ?? "OpenRouter: openrouter.ai → Keys") {
                 HStack(spacing: 8) {
                     SecureField("sk-or-…", text: $openRouterDraft).textFieldStyle(.roundedBorder).frame(width: 220)
                     Button("Save") { AIAccount.save(openRouterDraft, as: "openRouterKey"); openRouterDraft = ""; model.settingsVersion += 1 }

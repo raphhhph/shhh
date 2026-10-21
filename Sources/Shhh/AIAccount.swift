@@ -46,6 +46,13 @@ enum AIAccount {
         set { UserDefaults.standard.set(newValue, forKey: "useOpenRouter") }
     }
 
+    /// Any Anthropic-compatible API: OpenRouter by default, or a gateway such as LiteLLM, a company
+    /// proxy or a local model server. (OpenAI-only APIs go through one of these.)
+    static var endpoint: String {
+        get { UserDefaults.standard.string(forKey: "customEndpoint").flatMap { $0.isEmpty ? nil : $0 } ?? "https://openrouter.ai/api" }
+        set { UserDefaults.standard.set(newValue, forKey: "customEndpoint") }
+    }
+
     static var openRouterModel: String {
         get { UserDefaults.standard.string(forKey: "openRouterModel").flatMap { $0.isEmpty ? nil : $0 } ?? "openrouter/auto" }
         set { UserDefaults.standard.set(newValue, forKey: "openRouterModel") }
@@ -64,7 +71,7 @@ enum AIAccount {
         guard usesOpenRouter, let key = stored("openRouterKey") else { return nil }
         let folder = url.deletingLastPathComponent().appendingPathComponent("OpenRouter Claude", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        return ["ANTHROPIC_BASE_URL": "https://openrouter.ai/api", "ANTHROPIC_AUTH_TOKEN": key,
+        return ["ANTHROPIC_BASE_URL": endpoint, "ANTHROPIC_AUTH_TOKEN": key,
                 "ANTHROPIC_API_KEY": "", "CLAUDE_CONFIG_DIR": folder.path]
     }
 

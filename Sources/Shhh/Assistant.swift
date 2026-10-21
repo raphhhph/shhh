@@ -329,6 +329,13 @@ final class Assistant {
         prepare(onEvent: onEvent) // a fresh session with the stronger model
     }
 
+    /// A walkthrough places each step on a screenshot, which Haiku misreads: Sonnet at least.
+    func useScreenModel() {
+        guard modelOverride == nil, Assistant.model == .haiku else { return }
+        modelOverride = .sonnet
+        prepare(onEvent: onEvent) // a fresh session with that model
+    }
+
     // MARK: Dropped connections
 
     /// The last request, as sent, for one automatic retry when the connection drops (a flaky

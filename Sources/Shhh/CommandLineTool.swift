@@ -290,6 +290,7 @@ enum CommandLineTool {
             // Joe --route "<request>"…: what each request would do (testing the routing).
             for request in args.dropFirst() {
                 var route = MainActor.assumeIsolated { Assistant.needsStrongModel(request) } ? "Claude (Opus)" : "Claude (Haiku)"
+                if MainActor.assumeIsolated({ ScreenCapture.isWalkthrough(request) }), route.hasSuffix("(Haiku)") { route = "walkthrough (Sonnet)" }
                 if AlarmRequest.parse(request) != nil { route = "alarm" }
                 else if Spotify.quick(in: request) != nil { route = "Spotify" }
                 else if PromptPolish.request(in: request) != nil { route = "prompt rewrite (dictation)" }

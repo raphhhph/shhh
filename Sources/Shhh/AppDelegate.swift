@@ -1657,6 +1657,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 task.screenshot = screenshot
                 // Designing slides needs the strongest model: a new conversation about it gets Opus.
                 if !continuing, Assistant.needsStrongModel(text) { task.assistant.useStrongModel() }
+                else if !continuing, ScreenCapture.isWalkthrough(text) { task.assistant.useScreenModel() }
                 if Self.wantsBackground(text) { task.background = true }
                 task.assistant.ask(request, screenshot: image)
                 asked = true

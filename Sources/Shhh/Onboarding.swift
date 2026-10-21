@@ -692,9 +692,9 @@ private struct ConnectStep: View {
 
     var body: some View {
         StepFrame(model: model, title: "Your school, connected", subtitle: "One paste or one click each. Skip any and add it later in Settings.") {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
                 card(icon: "flag.fill", tint: .red, title: "ManageBac deadlines",
-                     detail: "In ManageBac: Calendar → Subscribe (or Export) → copy the link, and paste it here. Google works too: Calendar settings → your calendar → Secret address in iCal format.") {
+                     detail: "ManageBac → Calendar → Subscribe → copy the link. (Google: settings → Secret address in iCal format.)") {
                     HStack(spacing: 10) {
                         TextField("webcal://…managebac.com/… or a Google iCal link", text: $link)
                             .textFieldStyle(.plain).padding(.horizontal, 12).frame(height: 36)
@@ -735,7 +735,8 @@ private struct ConnectStep: View {
                 content()
             }
         }
-        .padding(16)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Tint.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
@@ -988,7 +989,8 @@ private struct DoneStep: View {
             Typed(text: "You’re all set, \(Profile.name).")
             VStack(alignment: .leading, spacing: 10) {
                 tip("command", "Hold right ⌘ to write with your voice")
-                tip("option", "Hold right ⌥ to ask me anything")
+                tip("option", "Hold right ⌥ to ask me anything (double-tap for a long one)")
+                tip("graduationcap", "Say “quiz me on economics” to study on the whiteboard")
                 tip("sparkle", "Click my star in the menu bar for your dashboard")
             }
             Spacer()

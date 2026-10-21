@@ -500,7 +500,9 @@ private struct StudyBoardView: View {
                     Spacer()
                     if marks > 0 { Text("[\(marks)]").font(.system(size: 13, weight: .bold).monospacedDigit()).foregroundStyle(.secondary) }
                 }
-                BoardText(text, size: 15.5, spacing: 3)
+                // The marks are in the corner; a "[4]" at the end of the text would say it twice.
+                BoardText(marks > 0 ? text.replacingOccurrences(of: #"\s*\[\d{1,2}\]\s*$"#, with: "", options: .regularExpression) : text,
+                          size: 15.5, spacing: 3)
             }
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -686,7 +688,9 @@ extension StudyBoard {
         board.model.preview(StudyBoardModel.parse("""
             Let's go. <question n="1" marks="4" topic="2.7 Indirect taxes" source="IB-style">**Draw** a diagram to show the effect of a specific tax on a market. [4]</question><ms>hidden</ms>
             """) + [.answer(text: "Supply shifts up by the tax, price rises, quantity falls.", spoken: true)] + StudyBoardModel.parse("""
-            <feedback n="1" score="3" total="4">✓ Supply shifts up by the tax\\n✓ Higher price, lower quantity\\n✗ missing: the price producers receive</feedback><model>S shifts vertically by the tax; consumers pay Pc, producers get Pp.</model>
+            <feedback n="1" score="3" total="4">✓ Supply shifts up by the tax
+            ✓ Higher price, lower quantity
+            ✗ missing: the price producers receive</feedback><model>S shifts vertically by the tax; consumers pay Pc, producers get Pp.</model>
             """), subject: "Economics HL", sketching: sketch)
         // A tax diagram in the three inks: black axes and demand, blue supply, red supply after the tax.
         func line(_ a: CGPoint, _ b: CGPoint, _ color: Color) -> SketchPad.Stroke {

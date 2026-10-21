@@ -88,6 +88,9 @@ enum StudyReview {
     /// Every topic in the log with when it's next due.
     static func topics(_ results: [StudyBuddy.Result] = StudyBuddy.results()) -> [Topic] {
         let coming = tests()
+        // Topics show under the subject as it is in their profile ("Economics HL"), even when older
+        // log lines say "Economics".
+        let profile = Profile.subjects.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         let groups = Dictionary(grouping: results.filter { !$0.topic.isEmpty && day.date(from: $0.date) != nil }) {
             (StudyBuddy.pack(for: $0.subject) ?? $0.subject.lowercased()) + "|" + key($0.topic)
         }
@@ -104,8 +107,9 @@ enum StudyReview {
             guard let latest = attempts.last, let lastDay = days.last.flatMap({ day.date(from: $0.key) }),
                   let due = Calendar.current.date(byAdding: .day, value: interval, to: lastDay) else { return nil }
             let pack = StudyBuddy.pack(for: latest.subject)
-            let test = coming.first { (pack != nil && $0.pack == pack) || $0.subject == latest.subject }
-            return Topic(subject: latest.subject, pack: pack, topic: latest.topic,
+            let subject = pack.flatMap { pack in profile.first { StudyBuddy.pack(for: $0) == pack } } ?? latest.subject
+            let test = coming.first { (pack != nil && $0.pack == pack) || $0.subject == subject }
+            return Topic(subject: subject, pack: pack, topic: latest.topic,
                          attempts: attempts.count, lastScore: lastScore, last: lastDay, due: due, test: test)
         }
     }

@@ -236,7 +236,7 @@ enum CommandLineTool {
         case ("--review", 1):
             // Joe --review: the spaced-repetition schedule from the quiz log.
             for topic in StudyReview.topics().sorted(by: { $0.due < $1.due }) {
-                print("\(topic.when.padding(toLength: 16, withPad: " ", startingAt: 0)) \(Int((topic.lastScore * 100).rounded()))%  \(topic.subject) · \(topic.topic) (\(topic.attempts)×)")
+                print("\(topic.when.padding(toLength: 16, withPad: " ", startingAt: 0)) \(("\(Int((topic.lastScore * 100).rounded()))%").padding(toLength: 5, withPad: " ", startingAt: 0)) \(topic.subject) · \(topic.topic) (\(topic.attempts)×)")
             }
             exit(0)
         case ("--pdf-text", 3):

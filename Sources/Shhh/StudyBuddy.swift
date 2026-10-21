@@ -72,6 +72,9 @@ enum StudyBuddy {
             ("Psychology", ["psych"]),
             ("English B", ["english b", "eng b"]),
             ("Spanish", ["spanish", "español", "espanol"]),
+            ("Geography", ["geog"]),
+            ("Computer Science", ["computer science", "comp sci", "compsci", "cs hl", "cs sl"]),
+            ("Global Politics", ["global politics", "glopo", "gp hl", "gp sl"]),
         ]
         // An alias counts at the start of a word: "ess" is ESS, but not the end of "business" or "assessment".
         func starts(_ alias: String) -> Bool {

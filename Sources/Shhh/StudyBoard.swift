@@ -74,6 +74,9 @@ final class StudyBoard: NSObject, NSWindowDelegate {
             "Psychology": ["psych"],
             "English B": ["english"],
             "Spanish": ["spanish", "español", "espanol"],
+            "Geography": ["geog"],
+            "Computer Science": ["computer", "coding", "programming", "algorithm", "sql"],
+            "Global Politics": ["politic", "sovereignty", "human rights"],
         ]
         // Their own name for the subject ("quiz me on Geography") wins, with or without a map.
         if let named = subjects.first(where: {

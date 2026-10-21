@@ -773,7 +773,7 @@ private struct ConnectStep: View {
                         }.frame(width: 220)
                     }
                 }
-                card(icon: "music.note", tint: .green, title: "Spotify", detail: "For your liked songs and playlists. Playing songs works without it. Optional.") {
+                card(icon: "music.note", tint: .green, title: "Spotify", detail: "For “play…”, your liked songs and playlists. Optional.") {
                     if spotify {
                         Label("Connected", systemImage: "checkmark.circle.fill").foregroundStyle(.green).font(.system(size: 13))
                     } else {

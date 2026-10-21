@@ -998,7 +998,10 @@ final class Session {
             pause, resume, next, previous, "volume 40", "shuffle on", "what's playing". It finds and starts the \
             music in about a second: never click around the Spotify app. For a mood ("something chill", "music to \
             study to"), first run --spotify "list my playlists" and play the one of theirs that fits best \
-            (play my <name> playlist, shuffled); only if none fits, pick an artist or album yourself.
+            (play my <name> playlist, shuffled); only if none fits, pick an artist or album yourself. If it says it \
+            can't search Spotify on this Mac, find the open.spotify.com link with WebSearch (the song, album, artist or \
+            playlist itself, not a page about it) and run --spotify "play <that link>"; liked songs and playlists then \
+            need them to connect Spotify on the dashboard's Spotify page.
             """
         let exe = Bundle.main.executablePath ?? "Joe"
         let skill = Slides.designSkill

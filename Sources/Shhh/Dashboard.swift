@@ -2567,7 +2567,7 @@ private struct MusicPage: View {
 
     private func play() {
         let text = request.lowercased().hasPrefix("play") || request.lowercased().hasPrefix("shuffle") ? request : "play " + request
-        if let command = Spotify.command(in: text) { model.music(command) }
+        if let command = Spotify.quick(in: text) { model.music(command) } else { model.actions.ask(text) } // can't search here: Joe finds the link
         request = ""
     }
 }

@@ -30,5 +30,12 @@ Read `00-common.md` first.
 3. **Joe Cloud + charging (Dec-Feb)**: CloudSession, server, accounts (Sign in with Apple), minors safeguards, privacy policy; confirm with Anthropic sales; apply to Sign in with ChatGPT; pricing test. Gate: launch for mocks.
 - Deferred: widget drag editor, more alarm challenges, China.
 
+## Cost per student (estimate, 21 Oct overnight; confirm with Beta 2 Usage data)
+- Haiku lookups ~$0.002 each, Sonnet asks ~$0.02, Opus schoolwork/design jobs ~$0.40-0.60 (a tool loop of ~250k input tokens). A typical week is ~$1-2, and Opus jobs dominate. At $8/month, cap Opus jobs at ~2 a week, or raise the floor to $10-12 or sell Opus jobs as a top-up.
+
+## Academic integrity (biggest brand risk)
+- `needsStrongModel` routes "do my formative / write my essay / IA / EE" to Opus so that Joe does the work. Under IB rules, AI-written work submitted as the student's own is malpractice, with penalties up to losing the diploma.
+- Proposed **Integrity mode** (default on, Phase 2, Study + Assistant core): coach rather than write for IA/EE/TOK/summatives; for formatives, explain step by step and give the full answer only after an attempt; an AI-use log that exports a citation (EE reflection space). This is also the pitch to schools. Waiting on Raph's decision.
+
 ## Open decisions (Raph)
-Developer ID now (recommended yes); Joe Cloud on the API (required by terms); beta age policy (Claude path 18+, younger via ChatGPT with parent OK); China deferred; partner applications in phase 3.
+Developer ID now (recommended yes); Joe Cloud on the API (required by terms); beta age policy (Claude path 18+, younger via ChatGPT with parent OK); China deferred; partner applications in phase 3; Integrity mode (recommended yes).

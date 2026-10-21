@@ -25,6 +25,9 @@ final class AssistantTask {
     var notepadTarget = false
     /// Whether the conversation is about the screen, so visual follow-ups get a fresh screenshot.
     var screenConversation = false
+    /// Guiding them step by step ("show me how to submit on ManageBac"): "next" gets the next step,
+    /// worked out from a fresh screenshot.
+    var walkthrough = false
     /// Finished, failed or waiting for an OK while in the background, and not looked at yet.
     var unseen = false
     /// Called once with the answer (or what went wrong) when the request finishes: for requests

@@ -1223,6 +1223,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func screenContext(for text: String, screen: Task<ScreenCapture.Screenshot?, Never>?, followingUp: Bool,
                                task: AssistantTask) async -> (request: String, image: Data?, screenshot: ScreenCapture.Screenshot?) {
         if !followingUp { task.screenConversation = false }
+        if ScreenCapture.isWalkthrough(text) { task.walkthrough = true } else if !followingUp { task.walkthrough = false }
+        // A walkthrough's steps are worked out from the screen as it is now. Other follow-ups in it
+        // ("why does it need that?") go on as usual below.
+        let next = followingUp && ScreenCapture.isNextStep(text)
+        if task.walkthrough, next || ScreenCapture.isWalkthrough(text) {
+            guard let screenshot = await screen?.value else {
+                ScreenCapture.requestAccess()
+                return (text + Self.noScreenshot, nil, nil)
+            }
+            task.screenConversation = true
+            let note = next ? "(Walkthrough: I've done that step. This is my screen now: give me the next step.)"
+                : "(Walk me through it one step at a time, from what's on my screen now.)"
+            return (text + "\n\n" + note, screenshot.jpeg, screenshot)
+        }
         let picture = ScreenCapture.wantsPicture(text)
         let explicit = ScreenCapture.isAbout(text)
         let aboutSelection = ScreenContext.refersToSelection(text)
@@ -1512,7 +1526,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                               options: [.regularExpression, .caseInsensitive]) != nil {
                     pausedMusic = []
                 }
-                if let music = Spotify.command(in: text) {
+                // "Next" in a walkthrough is the next step, not the next song.
+                let nextStep = followingUp && task.walkthrough && ScreenCapture.isNextStep(text)
+                if !nextStep, let music = Spotify.command(in: text) {
                     pausedMusic = [] // they're steering the music themselves now
                     if task.question.isEmpty { end(task) } // the new conversation this press started
                     pointer.hide()
@@ -1607,6 +1623,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 task.screenshot = screenshot
                 // Designing slides needs the strongest model: a new conversation about it gets Opus.
                 if !continuing, Assistant.needsStrongModel(text) { task.assistant.useStrongModel() }
+                else if !continuing, ScreenCapture.isWalkthrough(text) { task.assistant.useScreenModel() }
                 if Self.wantsBackground(text) { task.background = true }
                 task.assistant.ask(request, screenshot: image)
                 asked = true

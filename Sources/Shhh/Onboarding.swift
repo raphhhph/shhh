@@ -2,6 +2,7 @@ import EventKit
 import AppKit
 import AVFoundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The first launch, as a window of its own: Joe says hi at the notch, learns the user's name,
 /// shows what he does in short animations, sets up school, notes, permissions and Claude, and ends
@@ -67,7 +68,7 @@ final class Onboarding: NSObject, NSWindowDelegate {
 @MainActor
 final class OnboardingModel: ObservableObject {
     // The ManageBac link comes before School, so the subjects are already filled in from it.
-    enum Step: Int, CaseIterable { case hello, name, models, tour, connect, school, notes, permissions, claude, tryIt, done }
+    enum Step: Int, CaseIterable { case hello, name, models, tour, connect, school, notes, morning, permissions, claude, tryIt, done }
 
     /// The step a first setup reached, so quitting halfway doesn't mean clicking through it all again.
     static var savedStep: Step {
@@ -133,6 +134,7 @@ private struct OnboardingView: View {
                     case .tour: TourStep(model: model)
                     case .school: SchoolStep(model: model)
                     case .notes: NotesStep(model: model)
+                    case .morning: MorningStep(model: model)
                     case .connect: ConnectStep(model: model)
                     case .models: ModelsStep(model: model)
                     case .permissions: PermissionsStep(model: model)
@@ -823,6 +825,9 @@ private struct ConnectStep: View {
     @State private var found: [String] = []
     @State private var reading = false
     @State private var macCalendar = EKEventStore.authorizationStatus(for: .event) == .fullAccess
+    @State private var dayToday = ""
+    @State private var timetableStatus: String?
+    @State private var importing = false
 
     var body: some View {
         StepFrame(model: model, title: "Your school, connected",
@@ -848,6 +853,19 @@ private struct ConnectStep: View {
                     } else if !links.isEmpty {
                         Text("\(links.count) calendar link\(links.count == 1 ? "" : "s") added").font(.system(size: 12.5)).foregroundStyle(.green)
                     }
+                }
+                // Lessons aren't in the ManageBac link: a picture of the timetable gives Joe today's classes,
+                // Now and Next, and the Daybook's lessons.
+                card(icon: "tablecells", tint: .purple, title: "Your timetable",
+                     detail: "A photo, screenshot or PDF of your class timetable. I'll read it once; it takes a minute or two.") {
+                    HStack(spacing: 10) {
+                        Primary(title: importing ? "Reading…" : "Choose a file", enabled: !importing) { chooseTimetable() }.frame(width: 160)
+                        TextField("Rotating timetable? Today's day, e.g. Day 3", text: $dayToday)
+                            .textFieldStyle(.plain).padding(.horizontal, 12).frame(height: 36)
+                            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+                        if importing { ProgressView().controlSize(.small) }
+                    }
+                    if let timetableStatus { Text(timetableStatus).font(.system(size: 12.5)).foregroundStyle(Tint.soft) }
                 }
                 if links.isEmpty {
                     card(icon: "calendar", tint: .blue, title: "Or your Mac's Calendar", detail: "If your school calendar is already in the Calendar app, I can read it from there.") {
@@ -897,6 +915,20 @@ private struct ConnectStep: View {
             if Profile.subjects.isEmpty, !subjects.isEmpty { Profile.subjects = subjects.joined(separator: ", ") }
             linkStatus = nil
             withAnimation { found = summary() }
+        }
+    }
+
+    private func chooseTimetable() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image, .pdf]
+        panel.message = "Choose a photo, screenshot or PDF of your timetable"
+        guard panel.runModal() == .OK, let file = panel.url else { return }
+        importing = true
+        timetableStatus = "Reading your timetable…"
+        let day = dayToday.trimmingCharacters(in: .whitespaces)
+        Task {
+            timetableStatus = await Daybook.importTimetable(from: file, dayToday: day.isEmpty ? nil : day)
+            importing = false
         }
     }
 
@@ -961,6 +993,65 @@ private struct NotesStep: View {
         }
         Assistant.vaultURL = folder
         Daybook.addDefaultRoutines()
+    }
+}
+
+/// Their wake-up time, so the wake-up alarm (with its challenge) and the morning briefing work from
+/// the first morning instead of waiting to be discovered. Skippable; an existing wake-up alarm is kept.
+private struct MorningStep: View {
+    @ObservedObject var model: OnboardingModel
+    @State private var time = Calendar.current.date(bySettingHour: 7, minute: 0, second: 0, of: Date()) ?? Date()
+    @State private var schoolDays = true
+    @State private var wanted = true
+    private let existing = AlarmStore.load().first { $0.repeats != nil && $0.title.lowercased().contains("wake") }
+
+    var body: some View {
+        StepFrame(model: model, title: "Your mornings",
+                  subtitle: "I'll wake you up, check you're really awake with a quick question, then tell you what your day looks like.",
+                  continueTitle: existing == nil && wanted ? "Set my alarm" : "Continue") {
+            VStack(alignment: .leading, spacing: 14) {
+                if let existing {
+                    Label("You already have a wake-up alarm: \(existing.when), \(existing.repeats ?? "")", systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 14)).foregroundStyle(.green)
+                } else {
+                    HStack(spacing: 18) {
+                        Image(systemName: "alarm.fill").font(.system(size: 22)).foregroundStyle(Tint.accent)
+                            .frame(width: 48, height: 48).background(Tint.accent.opacity(0.14), in: Circle())
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Wake me up at").font(.system(size: 15, weight: .semibold))
+                            DatePicker("", selection: $time, displayedComponents: .hourAndMinute)
+                                .labelsHidden().datePickerStyle(.field).frame(width: 110)
+                        }
+                        Spacer()
+                        Picker("", selection: $schoolDays) {
+                            Text("School days").tag(true)
+                            Text("Every day").tag(false)
+                        }
+                        .pickerStyle(.segmented).labelsHidden().frame(width: 220)
+                    }
+                    .padding(18)
+                    .background(Tint.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .opacity(wanted ? 1 : 0.4)
+                    .disabled(!wanted)
+                    Toggle("I don't want a wake-up alarm", isOn: Binding(get: { !wanted }, set: { wanted = !$0 }))
+                        .font(.system(size: 13.5)).tint(Tint.accent)
+                }
+            }
+        }
+        .onDisappear(perform: save)
+    }
+
+    /// On the way forward only: going back doesn't set anything.
+    private func save() {
+        guard existing == nil, wanted, model.step.rawValue > OnboardingModel.Step.morning.rawValue else { return }
+        let calendar = Calendar.current
+        let parts = calendar.dateComponents([.hour, .minute], from: time)
+        let today = calendar.date(bySettingHour: parts.hour ?? 7, minute: parts.minute ?? 0, second: 0, of: Date()) ?? time
+        var alarm = Alarm(fireAt: today, title: "Wake up", kind: .alarm, repeats: schoolDays ? "weekdays" : "daily")
+        // The first ring has to fall on one of its days: set up on a Friday evening, a weekday alarm
+        // waits for Monday instead of ringing on Saturday once.
+        alarm.fireAt = alarm.next(after: Date()) ?? today
+        AlarmStore.add(alarm)
     }
 }
 
@@ -1064,11 +1155,15 @@ private struct ClaudeStep: View {
                                 .font(.system(size: 12.5)).foregroundStyle(Tint.soft).fixedSize(horizontal: false, vertical: true)
                         }
                         Spacer()
-                        Button("Open claude.ai") { NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/connectors")!) }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 13.5, weight: .semibold))
-                            .padding(.horizontal, 18).frame(height: 34)
-                            .background(Color.white.opacity(0.12), in: Capsule())
+                        if ClaudeConnectors.has("gmail") {
+                            Label("Gmail connected", systemImage: "checkmark.circle.fill").font(.system(size: 13)).foregroundStyle(.green)
+                        } else {
+                            Button("Open claude.ai") { NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/connectors")!) }
+                                .buttonStyle(.plain)
+                                .font(.system(size: 13.5, weight: .semibold))
+                                .padding(.horizontal, 18).frame(height: 34)
+                                .background(Color.white.opacity(0.12), in: Capsule())
+                        }
                     }
                     .padding(.horizontal, 18).padding(.vertical, 14)
                     .background(Tint.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))

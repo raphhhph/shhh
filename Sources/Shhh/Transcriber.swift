@@ -122,8 +122,11 @@ actor Transcriber {
         }
         // Padded with silence to a whole number of 5-second blocks: on the GPU each new length of
         // audio is prepared once (about a second), so a handful of lengths keeps it fast.
+        // At least half a second of it after the last word: speech that runs right up to the end
+        // lost its last word ("…to ManageBac tonight" came out "…to manage back To").
         let block = 16_000 * 5
-        let blocked = samples + [Float](repeating: 0, count: (block - samples.count % block) % block)
+        let tailed = samples + [Float](repeating: 0, count: 8_000)
+        let blocked = tailed + [Float](repeating: 0, count: (block - tailed.count % block) % block)
         if let chinese, samples.count < 16_000 * 100,
            let heard = try? await chinese.transcribeDetailed(audio: blocked) {
             let text = heard.text.trimmingCharacters(in: .whitespacesAndNewlines)

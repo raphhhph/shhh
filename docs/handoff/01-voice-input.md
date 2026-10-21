@@ -15,7 +15,7 @@ Everything from a key press to text: hotkeys, double-tap lock, "Hey Joe" hands-f
 
 ## How it works (decisions)
 - Speech models run on the **GPU** (`.cpuAndGPU`), not the Neural Engine: after each new build macOS recompiled ANE models for minutes and the keys were dead. Parakeet on the GPU costs ~1.3 GB, so with **English + Chinese** on, **SenseVoice hears everything** once loaded and **Parakeet is unloaded** (SenseVoice was about as accurate on English in tests). Parakeet only covers the first ~10 s after launch. English-only users keep Parakeet.
-- SenseVoice input is padded to **5-second blocks** (the GPU prepares each new length once, ~1 s). Audio over 100 s goes in 90 s pieces.
+- SenseVoice input gets **0.5 s of silence after the speech**, then is padded to **5-second blocks**. Without the half second, speech that ran to the very end lost its last word: "tonight" became "To" in the nightly test (21 Oct). The blocks are there because the GPU prepares each new length once (~1 s). Audio over 100 s goes in 90 s pieces.
 - While Chinese is still loading, a request waits for it (up to 25 s) rather than Parakeet turning Chinese into made-up English. The transcription timeout is 40 s + length.
 - A speech timeout reloads the model **in the background**; the keys keep working (`reloadSpeechModel`).
 - Double-tap (tap then press within 0.45 s) locks recording on until the next tap, max 5 min; shortcuts typed meanwhile are ignored.

@@ -229,7 +229,18 @@ final class SpeechOutput {
     /// Gets the chosen model ready (downloading it the first time), or lets go of the others.
     func prepare() {
         let engine = Self.engine
-        Task { await neural.prepare(engine) }
+        Task {
+            await neural.prepare(engine)
+            guard engine != .off else { return }
+            // The lines Joe says while Claude works, made now, so even the first one plays at once.
+            for line in ["One sec."] where clips[line] == nil {
+                var made: [Float] = []
+                var rate = 0
+                guard (try? await neural.speak(line, onAudio: { made += $0.samples; rate = $0.sampleRate })) != nil,
+                      !made.isEmpty else { continue }
+                clips[line] = NeuralVoices.Audio(samples: made, sampleRate: rate)
+            }
+        }
     }
 
     /// Lets go of the voices after ten quiet minutes (they take about 800 MB); the next sentence

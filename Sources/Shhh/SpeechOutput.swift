@@ -227,9 +227,10 @@ final class SpeechOutput {
     }
 
     /// Gets the chosen model ready (downloading it the first time), or lets go of the others.
-    func prepare() {
+    @discardableResult
+    func prepare() -> Task<Void, Never> {
         let engine = Self.engine
-        Task {
+        return Task {
             await neural.prepare(engine)
             guard engine != .off else { return }
             // The lines Joe says while Claude works, made now, so even the first one plays at once.

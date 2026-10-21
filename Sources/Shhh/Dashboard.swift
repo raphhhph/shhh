@@ -2027,6 +2027,14 @@ private struct StudyPage: View {
                 }
             }
             .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+            let mistakes = Mistakes.count(subject)
+            if mistakes > 0 {
+                HStack(spacing: 12) {
+                    Button("Mistake book (\(mistakes))") { Mistakes.open(subject) }
+                    Button("Redo my mistakes") { model.actions.ask("Quiz me on \(subject): redo my mistakes, a fresh question on each point I got wrong.") }
+                }
+                .buttonStyle(.plain).font(.system(size: 12, weight: .medium)).foregroundStyle(color)
+            }
             Spacer(minLength: 0)
             HStack(spacing: 8) {
                 Button { model.actions.ask("Quiz me on \(subject): five questions, mixed topics, focusing on my weak spots.") } label: {

@@ -84,6 +84,14 @@ enum AIAccount {
         set { UserDefaults.standard.set(newValue ? "chatgpt" : "claude", forKey: "aiProvider") }
     }
 
+    /// Never chosen, and only Codex is on this Mac: ChatGPT, so a student who set up Codex
+    /// elsewhere has nothing to switch.
+    static func chooseProviderIfUnset() {
+        guard UserDefaults.standard.string(forKey: "aiProvider") == nil,
+              Assistant.executable == nil, CodexSession.executable != nil else { return }
+        usesChatGPT = true
+    }
+
     /// A Codex model ID, or nil for the plan's default (which follows OpenAI's newest).
     static var chatGPTModel: String? {
         UserDefaults.standard.string(forKey: "chatGPTModel").flatMap {

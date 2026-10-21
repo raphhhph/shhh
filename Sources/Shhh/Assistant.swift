@@ -339,7 +339,7 @@ final class Assistant {
     private var retried = false
 
     private static func isDropped(_ message: String) -> Bool {
-        message.range(of: #"ECONNRESET|connection (dropped|error|reset|refused)|socket hang up|ETIMEDOUT|EPIPE|fetch failed|network|overloaded|\b(502|503|504|529)\b"#,
+        message.range(of: #"ECONNRESET|connection (dropped|error|reset|refused)|socket hang up|ETIMEDOUT|EPIPE|fetch failed|network|overloaded|stream disconnected|\b(502|503|504|529)\b"#,
                       options: [.regularExpression, .caseInsensitive]) != nil
     }
 

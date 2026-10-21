@@ -250,6 +250,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         AppAppearance.apply() // light, dark or the Mac's
+        AIAccount.chooseProviderIfUnset()
         phone.run = { [weak self] request, done in self?.startInBackground(request, onFinished: done) }
         wake.canListen = { [weak self] in
             guard let self else { return false }

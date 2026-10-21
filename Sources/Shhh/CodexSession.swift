@@ -122,7 +122,8 @@ final class CodexSession: Engine {
         Code tools, use your own: shell commands for Bash, reading with cat or rg, apply_patch for \
         Edit and Write, your web search for WebSearch and WebFetch. There's no Chrome control and \
         no clicking or typing on the screen in this mode: if a request needs either, say they can \
-        switch Joe to Claude in Settings → Advanced → AI.
+        switch Joe to Claude in Settings → Advanced → AI. Never read or print files that hold \
+        passwords, keys or logins (~/.ssh, keychains, .env files, Joe's API.json), even with cat or rg.
         """
 
     /// The MCP servers the user added to Claude Code (`claude mcp add`, kept in ~/.claude.json),

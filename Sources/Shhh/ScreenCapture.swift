@@ -107,6 +107,18 @@ enum ScreenCapture {
         return patterns.contains { request.range(of: $0, options: [.regularExpression, .caseInsensitive]) != nil }
     }
 
+    /// "Walk me through submitting on ManageBac", "show me how to share this doc", "step by step".
+    static func isWalkthrough(_ request: String) -> Bool {
+        request.range(of: #"\b(walk|guide|take|talk) me through\b|\bshow me how\b|\bstep[- ]by[- ]step\b|\bteach me (how )?to (use|do|submit|upload|set|make|find)\b"#,
+                      options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// In a walkthrough: they did the step and want the next ("next", "done", "what now", "I'm there").
+    static func isNextStep(_ request: String) -> Bool {
+        request.count < 50 && request.range(of: #"^\W*((ok(ay)?|alright|right|cool|and)\W+)*(next( step| one)?|done|did it|i did (it|that)|i'?ve done (it|that)|what now|now what|then what|what next|what'?s next|i'?m there|continue|go on|keep going)\b"#,
+                                            options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
     /// Whether a request is about something the user is pointing at with the mouse: "find his
     /// LinkedIn", "what does this word mean", "who's that person".
     static func pointsAtSomething(_ request: String) -> Bool {

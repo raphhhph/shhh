@@ -17,8 +17,9 @@ Joe acting on other apps and services.
 - Sending, deleting, submitting, inviting pause for the user's OK; Joe never reads secrets.
 - Spotify button never disabled; a second click reopens sign-in; port conflicts named.
 - Spotify for other users (21 Oct 2026): since Feb 2026 a development-mode Spotify app allows only 5 allow-listed users and needs a Premium owner; extended quota is for businesses only. So: "play X" without search (no app secret and no sign-in on that Mac) goes to Claude, which finds the open.spotify.com link with WebSearch and runs `--spotify "play <link>"` (`Spotify.quick`, `.playLink`). Liked songs and playlists stay for allow-listed testers (Spotify developer dashboard, User Management). A sign-in from an account not on the list gets a 403 on /me: Joe says so and keeps no token.
+- Guided walkthroughs (21 Oct 2026): "show me how…", "walk me through…", "step by step" set `AssistantTask.walkthrough`. Claude gives one "Step N" per reply with one [POINT], never clicks; "next", "done", "what now" (`ScreenCapture.isNextStep`) send a fresh screenshot for the next step, and in a walkthrough "next" is never Spotify's next track.
 
 ## Known issues / to-do
 - Spotify: test keyless play on a Mac with no Spotify.json (time from request to music); allow-list up to 5 testers.
-- Plip-style guided walkthroughs ("show me how to submit on ManageBac" with pointers step by step).
+- Guided walkthroughs: try "show me how to submit on ManageBac" then "next" by hand; a step card with Next/Stop at the notch would beat saying "next".
 - Undo for desktop tidy-ups everywhere; confirm before risky actions consistently.

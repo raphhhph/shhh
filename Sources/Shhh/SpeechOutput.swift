@@ -303,7 +303,15 @@ final class SpeechOutput {
         guard worker == nil, !pending.isEmpty else { return }
         worker = Task { [weak self] in
             while let self, !Task.isCancelled, !self.pending.isEmpty {
-                let line = self.pending.removeFirst()
+                var line = self.pending.removeFirst()
+                // Sentences already waiting are said together, in one breath: the rhythm and
+                // intonation carry across them, with no gap. Only what's already here, so the first
+                // sentence of a reply never waits for the next.
+                while !line.mac, self.clips[line.text] == nil, !Self.isChinese(line.text), let next = self.pending.first,
+                      !next.mac, !Self.isChinese(next.text), line.text.count + next.text.count < 160 {
+                    line = Line(text: line.text + " " + next.text)
+                    self.pending.removeFirst()
+                }
                 let sentence = line.text
                 let started = Date()
                 self.lastSpoke = started
@@ -417,6 +425,7 @@ final class SpeechOutput {
         let replacements: [(String, String)] = [
             (#"\[([^\]]+)\]\([^)]*\)"#, "$1"),         // [title](url) → title
             (#"https?://\S+"#, ""),                    // bare links
+            (#"[\p{Extended_Pictographic}\x{FE0F}\x{200D}]"#, ""), // emoji
             (#"(\*\*|__|`|\*)"#, ""),                  // bold, code, italics
             (#"(?m)^\s*([-•*]|\d+\.)\s+"#, ""),        // list markers
             // Abbreviations said in full; their dots would also end a sentence too early.
@@ -445,6 +454,13 @@ final class SpeechOutput {
         func sub(_ pattern: String, _ template: String) {
             text = text.replacingOccurrences(of: pattern, with: template, options: .regularExpression)
         }
+        // Clock times as said: "08:30" → "8:30", "9:00 AM" → "9 AM", "9:00" → "9 o'clock".
+        sub(#"(?<![0-9:])0([0-9]):([0-9]{2})"#, "$1:$2")
+        sub(#"(?<![0-9:])([0-9]{1,2}):00\s?[Aa]\.?[Mm]\b\.?(?=\S)"#, "$1 AM")
+        sub(#"(?<![0-9:])([0-9]{1,2}):00\s?[Pp]\.?[Mm]\b\.?(?=\S)"#, "$1 PM")
+        sub(#"(?<![0-9:])([0-9]{1,2}):00\s?[Aa]\.?[Mm]\b"#, "$1 AM")
+        sub(#"(?<![0-9:])([0-9]{1,2}):00\s?[Pp]\.?[Mm]\b"#, "$1 PM")
+        sub(#"(?<![0-9:])([0-9]|1[0-2]):00(?![0-9:])"#, "$1 o'clock")
         // Money, then LaTeX ($x^2$, \(…\), \frac{a}{b}) into plain symbols.
         sub(#"\$([0-9][0-9,]*(\.[0-9]+)?)"#, "$1 dollars")
         sub(#"\\[()\[\]]|\$"#, " ")

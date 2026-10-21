@@ -41,7 +41,7 @@ enum Vocabulary {
 
     /// The transcript with the user's words spelled their way.
     static func apply(_ text: String) -> String {
-        var text = withoutStutters(text)
+        let text = withoutStutters(text)
         let file = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         var terms: [String] = []
         var swaps: [(String, String)] = []
@@ -63,6 +63,7 @@ enum Vocabulary {
             let written = Set(terms.map { $0.lowercased() })
             terms += builtInTerms.filter { !written.contains($0.lowercased()) }
         }
+        var text = text
         for (heard, written) in swaps {
             let pattern = #"(?<![\w])"# + NSRegularExpression.escapedPattern(for: heard) + #"(?![\w])"#
             text = text.replacingOccurrences(of: pattern, with: NSRegularExpression.escapedTemplate(for: written),
@@ -113,7 +114,7 @@ enum Vocabulary {
     /// isn't a word itself, and is one without the repeat, loses the repeat. "banana" stays: it's a word.
     static func withoutStutters(_ text: String) -> String {
         var text = text
-        for match in text.matches(of: #/\b\p{L}*(\p{L}{2,4})\1\b/#).reversed() {
+        for match in text.matches(of: #/(?<!\p{L})\p{L}*(\p{L}{2,4})\1(?!\p{L})/#).reversed() {
             let word = String(text[match.range])
             let repeated = match.output.1.count
             let fixed = String(word.dropLast(repeated))

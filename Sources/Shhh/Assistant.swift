@@ -606,6 +606,8 @@ final class Session {
             handleControl(message)
         case "assistant", "user":
             noteCreations(message)
+        case "system":
+            ClaudeConnectors.note(message) // which claude.ai connectors are on, for onboarding
         case "result":
             resultsSeen += 1
             UsageLog.record(message, model: modelName, request: lastSent, total: &costSoFar)

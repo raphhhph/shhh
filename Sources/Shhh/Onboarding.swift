@@ -1151,11 +1151,15 @@ private struct ClaudeStep: View {
                                 .font(.system(size: 12.5)).foregroundStyle(Tint.soft).fixedSize(horizontal: false, vertical: true)
                         }
                         Spacer()
-                        Button("Open claude.ai") { NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/connectors")!) }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 13.5, weight: .semibold))
-                            .padding(.horizontal, 18).frame(height: 34)
-                            .background(Color.white.opacity(0.12), in: Capsule())
+                        if ClaudeConnectors.has("gmail") {
+                            Label("Gmail connected", systemImage: "checkmark.circle.fill").font(.system(size: 13)).foregroundStyle(.green)
+                        } else {
+                            Button("Open claude.ai") { NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/connectors")!) }
+                                .buttonStyle(.plain)
+                                .font(.system(size: 13.5, weight: .semibold))
+                                .padding(.horizontal, 18).frame(height: 34)
+                                .background(Color.white.opacity(0.12), in: Capsule())
+                        }
                     }
                     .padding(.horizontal, 18).padding(.vertical, 14)
                     .background(Tint.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))

@@ -34,7 +34,9 @@ enum ReminderMirror {
                 let parts = value.split(separator: "|")
                 if let reminder = store.calendarItem(withIdentifier: String(parts[0])) as? EKReminder {
                     let due = Date(timeIntervalSince1970: Double(parts.last ?? "") ?? 0)
-                    if due <= Date().addingTimeInterval(60) {
+                    // Ticking off a repeating reminder only moves it to its next day, so a cancelled
+                    // daily alarm kept ringing on the iPhone: those are removed instead.
+                    if due <= Date().addingTimeInterval(60), !reminder.hasRecurrenceRules {
                         reminder.isCompleted = true // it rang
                         try? store.save(reminder, commit: true)
                     } else {

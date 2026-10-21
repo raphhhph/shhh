@@ -34,6 +34,9 @@ enum Vocabulary {
         ("myp", "MYP"), ("tok", "TOK"), ("t o k", "TOK"), ("cas", "CAS"), ("ias", "IAs"), ("ia", "IA"),
         ("ee", "EE"), ("hl", "HL"), ("sl", "SL"), ("atl", "ATL"), ("atls", "ATLs"), ("ess", "ESS"),
         ("math aa", "Math AA"), ("math ai", "Math AI"), ("maths aa", "Maths AA"), ("maths ai", "Maths AI"),
+        // Spelled out letter by letter, the way students say them.
+        ("h l", "HL"), ("s l", "SL"), ("e e", "EE"), ("i a", "IA"), ("m y p", "MYP"), ("d p 1", "DP1"), ("d p 2", "DP2"),
+        ("math a a", "Math AA"), ("math a i", "Math AI"), ("maths a a", "Maths AA"), ("maths a i", "Maths AI"),
     ]
 
     /// The transcript with the user's words spelled their way.

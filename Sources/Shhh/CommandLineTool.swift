@@ -5,6 +5,8 @@ import AppKit
 /// Terminal test modes, to check each part of the pipeline without the app:
 ///
 ///     Shhh --transcribe <audio-file>   transcribe a file with the on-device model
+///     Shhh --dictate "<heard>"         the text dictation would type for what the model heard
+///     Shhh --dictation-test [voice]    IB sentences spoken by the Mac, scored before and after Joe's fixes
 ///     Shhh --clean "<text>"            run the AI cleanup pass (one line per input line)
 ///     Shhh --style <style> "<text>"    apply a writing style: veryFormal, casual, veryCasual
 ///     Shhh --microphones               list microphones and show what Automatic picks
@@ -14,6 +16,8 @@ enum CommandLineTool {
     private static let usage = """
     Usage:
       Joe --transcribe <audio-file>
+      Joe --dictate "<what the model heard>"
+      Joe --dictation-test [say voice]
       Joe --clean "<text>"
       Joe --style <veryFormal|casual|veryCasual> "<text>"
       Joe --microphones
@@ -51,6 +55,11 @@ enum CommandLineTool {
             }
         case ("--transcribe", 2...):
             run { try await transcribe(files: Array(args.dropFirst())) }
+        case ("--dictate", 2):
+            MainActor.assumeIsolated { print(dictated(args[1])) }
+            exit(0)
+        case ("--dictation-test", 1...2):
+            run { try await dictationTest(voice: args.count > 1 ? args[1] : nil) }
         case ("--clean", 2):
             run { try await clean(args[1]) }
         case ("--record", 2):
@@ -384,6 +393,18 @@ enum CommandLineTool {
     }
 
     private static func transcribe(files: [String]) async throws {
+        let transcriber = try await loadedTranscriber()
+        for file in files { // several: the later ones show the warm speed
+            let start = Date()
+            let text = try await transcriber.transcribe(fileURL: URL(fileURLWithPath: file))
+            print(String(format: "[%.2fs] %@", Date().timeIntervalSince(start), text))
+            let typed = await dictated(text)
+            if typed != text { print("  dictated: \(typed)") }
+        }
+    }
+
+    /// The speech model as the app has it, Chinese included when that's on.
+    private static func loadedTranscriber() async throws -> Transcriber {
         let transcriber = Transcriber()
         let loading = Date()
         try await transcriber.load { _ in }
@@ -391,11 +412,80 @@ enum CommandLineTool {
             for _ in 0..<1200 where !(await transcriber.chineseReady) { try await Task.sleep(for: .milliseconds(100)) }
             print(String(format: "(Chinese ready %.1fs after loading began)", Date().timeIntervalSince(loading)))
         }
-        for file in files { // several: the later ones show the warm speed
+        return transcriber
+    }
+
+    /// What dictation types for a transcript, as `finishRecording` does it (without the optional AI
+    /// cleanup): the dictionary, the writing style, then spoken layout and "scratch that".
+    @MainActor
+    private static func dictated(_ heard: String) -> String {
+        let style = WritingStyle(rawValue: UserDefaults.standard.string(forKey: "writingStyle") ?? "") ?? .casual
+        return SpokenCommands.apply(style.apply(Vocabulary.apply(heard)), capitalize: style != .veryCasual)
+    }
+
+    /// Things IB students dictate, as they say them (for `say`) and as they should come out.
+    private static let dictationSentences: [(spoken: String, expected: String)] = [
+        ("Check manage back for my T O K essay deadline.", "Check ManageBac for my TOK essay deadline."),
+        ("I need to log my kass hours before the end of D P 1.", "I need to log my CAS hours before the end of DP1."),
+        ("My extended essay, the E E, is on Chinese history.", "My extended essay, the EE, is on Chinese history."),
+        ("Upload my history internal assessment to manage back tonight.", "Upload my history internal assessment to ManageBac tonight."),
+        ("My economics I A is due on Friday. New paragraph. I still need a diagram.", "My economics IA is due on Friday.\n\nI still need a diagram."),
+        ("Notes for the test. New bullet supply and demand. New bullet market failure.", "Notes for the test.\n- Supply and demand.\n- Market failure."),
+        ("The essay is about Keynes. Scratch that. The essay is about Hayek.", "The essay is about Hayek."),
+        ("Is biology H L harder than biology S L?", "Is biology HL harder than biology SL?"),
+        ("Remind me to revise math A A before the mock exams.", "Remind me to revise Math AA before the mock exams."),
+        ("Ask my M Y P coordinator about the personal project.", "Ask my MYP coordinator about the personal project."),
+    ]
+
+    /// Each sentence spoken by the Mac's voice, transcribed, run through dictation, and scored: word
+    /// error rate before and after Joe's fixes, and whether the line breaks came out right. A machine
+    /// voice is cleaner than a student in a classroom, so this is for comparing changes, not a promise.
+    private static func dictationTest(voice: String?) async throws {
+        let transcriber = try await loadedTranscriber()
+        var wordsTotal = 0, rawErrors = 0, fixedErrors = 0, layoutRight = 0
+        for (index, sentence) in dictationSentences.enumerated() {
+            let file = FileManager.default.temporaryDirectory.appendingPathComponent("joe-dictation-test-\(index).wav")
+            defer { try? FileManager.default.removeItem(at: file) }
+            let say = Process()
+            say.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+            say.arguments = ["-o", file.path, "--data-format=LEI16@16000"] + (voice.map { ["-v", $0] } ?? []) + [sentence.spoken]
+            try say.run()
+            say.waitUntilExit()
             let start = Date()
-            let text = try await transcriber.transcribe(fileURL: URL(fileURLWithPath: file))
-            print(String(format: "[%.2fs] %@", Date().timeIntervalSince(start), text))
+            let heard = try await transcriber.transcribe(fileURL: file)
+            let seconds = Date().timeIntervalSince(start)
+            let typed = await dictated(heard)
+            let expected = words(sentence.expected)
+            let raw = wordErrors(words(heard), expected), fixed = wordErrors(words(typed), expected)
+            let layout = typed.components(separatedBy: "\n").count == sentence.expected.components(separatedBy: "\n").count
+            wordsTotal += expected.count; rawErrors += raw; fixedErrors += fixed; layoutRight += layout ? 1 : 0
+            print(String(format: "%2d. [%.2fs] errors %d → %d%@", index + 1, seconds, raw, fixed, layout ? "" : "  (line breaks wrong)"))
+            print("    heard: \(heard)")
+            if typed != heard { print("    typed: \(typed.replacingOccurrences(of: "\n", with: " ⏎ "))") }
         }
+        let rate = { (errors: Int) in 100 * Double(errors) / Double(max(wordsTotal, 1)) }
+        print(String(format: "Word error rate: %.1f%% heard, %.1f%% after Joe's fixes. Line breaks right: %d of %d. Languages: %@.",
+                     rate(rawErrors), rate(fixedErrors), layoutRight, dictationSentences.count, Transcriber.languages.rawValue))
+    }
+
+    /// Lower-case words, punctuation and line breaks left out.
+    private static func words(_ text: String) -> [String] {
+        text.lowercased().split { !($0.isLetter || $0.isNumber) }.map(String.init)
+    }
+
+    /// Words added, dropped or swapped to turn one into the other (edit distance over words).
+    private static func wordErrors(_ heard: [String], _ expected: [String]) -> Int {
+        guard !heard.isEmpty else { return expected.count }
+        guard !expected.isEmpty else { return heard.count }
+        var previous = Array(0...expected.count)
+        for i in 1...heard.count {
+            var current = [i] + Array(repeating: 0, count: expected.count)
+            for j in 1...expected.count {
+                current[j] = min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (heard[i - 1] == expected[j - 1] ? 0 : 1))
+            }
+            previous = current
+        }
+        return previous[expected.count]
     }
 
     private static func clean(_ input: String) async throws {

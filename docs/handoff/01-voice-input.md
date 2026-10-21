@@ -26,6 +26,11 @@ Everything from a key press to text: hotkeys, double-tap lock, "Hey Joe" hands-f
 - **Spoken layout in dictation** (`SpokenCommands.swift`): "new line", "new paragraph", "new bullet" (or "next …") become a line break, a blank line, or "- ". Punctuation before the words stays and punctuation after them goes. The next letter is capitalised unless the style is Very casual. Only for dictation and the notepad, not for asks or "make it a prompt". There's no setting: it's always on, like the IB words. A sentence that really says "a new line of …" gets broken, which is accepted for now. "Scratch that" / "delete that" takes back the sentence before it, within the same recording (it can't reach text typed earlier).
 - Live words go through the dictionary too, so the caption already reads "ManageBac", like the final text.
 
+## Measuring dictation
+- `Joe --dictation-test [say voice]`: ten IB sentences spoken by `say`, transcribed, put through dictation, and scored as the word error rate before and after Joe's fixes, plus whether the line breaks came out right. Temp audio is deleted. Run it before and after any change to speech, the dictionary or the spoken commands.
+- `Joe --dictate "<heard>"`: what dictation would type for a transcript. `--transcribe` now also prints the dictated text when it differs from what was heard.
+- Built-in swaps also cover letters spelled out one by one ("h l", "e e", "m y p", "math a a").
+
 ## Audit (21 Oct 2026) and plan
 Goal: a student talks and gets the right words with nothing to set up.
 - Done: built-in IB words; live words spelled like the final text; the Dictionary page says IB words are built in; spoken "new line / new paragraph / new bullet" and "scratch that" in dictation (for essays and notes).

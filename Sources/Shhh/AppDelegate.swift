@@ -274,6 +274,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hotkey.onRelease = { [weak self] _ in self?.finishRecording() }
         hotkey.onCancel = { [weak self] _ in self?.cancelRecording() }
         answerPanel.onClose = { [weak self] in self?.closeCard() }
+        answerPanel.onFollowUp = { [weak self] in self?.followUpTyped($0) }
         answerPanel.onStopSpeaking = { [weak self] in
             self?.speech.stop()
             self?.answerPanel.setSpeaking(false)
@@ -491,6 +492,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if Assistant.needsStrongModel(text) { task.assistant.useStrongModel() }
         if Self.wantsBackground(text) { task.background = true }
         task.assistant.ask(text, screenshot: screenshot)
+    }
+
+    /// A follow-up tapped on the card (Simpler, Example, Quiz me): the same conversation carries on,
+    /// as when you hold right ⌥ while it's open. A new conversation if that one can't.
+    private func followUpTyped(_ text: String) {
+        guard let task = focused, task.canFollowUp else { askTyped(text); return }
+        task.beginTurn(text)
+        answerPanel.beginTurn(question: text)
+        task.assistant.ask(text, screenshot: nil)
+        acknowledgeIfSlow(task)
     }
 
     /// "… in the background", "… while I do something else".

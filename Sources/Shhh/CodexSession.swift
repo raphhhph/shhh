@@ -5,8 +5,8 @@ import AppKit
 /// Code: streams the reply, keeps the conversation open for follow-ups, and sends every action
 /// Codex wants approved through Joe's `ToolPolicy` and approval card.
 ///
-/// Codex has no Chrome control, and the user's Claude connectors aren't in Codex's settings, so
-/// those aren't available in this mode. Commands Codex knows are read-only (ls, cat, grep…) run
+/// Codex has no Chrome control, and connectors added on claude.ai (Gmail, Calendar…) belong to the
+/// Claude account, so those aren't available in this mode; ones added to Claude Code come along. Commands Codex knows are read-only (ls, cat, grep…) run
 /// without asking it, so they never reach Joe either.
 @MainActor
 final class CodexSession: Engine {
@@ -49,6 +49,10 @@ final class CodexSession: Engine {
     // Actions waiting for the user's OK, shown one at a time.
     private var pending: [(id: Any, tool: String, action: ToolPolicy.Action, input: [String: Any])] = []
     private var allowedForTask: Set<String> = []
+    /// Connector calls under way, oldest first: Codex asks about one by its server's name only.
+    private var connectorCalls: [(item: String, server: String, tool: String, input: [String: Any])] = []
+    /// Approval requests that are MCP elicitations, which take a different answer.
+    private var elicitations: Set<String> = []
 
     var isRunning: Bool { !stopped && process.isRunning }
 
@@ -121,8 +125,42 @@ final class CodexSession: Engine {
         switch Joe to Claude in Settings → Advanced → AI.
         """
 
+    /// The MCP servers the user added to Claude Code (`claude mcp add`, kept in ~/.claude.json),
+    /// for Codex too, so their notes and other connectors work in ChatGPT mode. Every tool call
+    /// asks, so Joe's rules decide as they do for Claude. Connectors added on claude.ai (Gmail,
+    /// Calendar…) live in the Claude account and can't come along.
+    nonisolated static func claudeConnectors() -> [String: Any] {
+        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude.json")
+        guard let data = try? Data(contentsOf: url),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        var servers = json["mcpServers"] as? [String: [String: Any]] ?? [:]
+        // Ones added for the vault folder only, where Joe runs.
+        if let vault = Assistant.vaultURL?.path,
+           let local = ((json["projects"] as? [String: Any])?[vault] as? [String: Any])?["mcpServers"] as? [String: [String: Any]] {
+            servers.merge(local) { $1 }
+        }
+        var codex: [String: Any] = [:]
+        for (name, server) in servers {
+            var entry: [String: Any] = ["default_tools_approval_mode": "prompt"]
+            if let command = server["command"] as? String {
+                entry["command"] = command
+                if let args = server["args"] as? [String] { entry["args"] = args }
+                if let env = server["env"] as? [String: String] { entry["env"] = env }
+            } else if let address = server["url"] as? String, (server["type"] as? String) != "sse" {
+                entry["url"] = address
+                if let headers = server["headers"] as? [String: String] { entry["http_headers"] = headers }
+            } else {
+                continue // SSE: Codex doesn't speak it
+            }
+            // Codex takes letters, digits, - and _ only; Claude's tool names use the same name.
+            guard name.range(of: "^[A-Za-z0-9_-]+$", options: .regularExpression) != nil else { continue }
+            codex[name] = entry
+        }
+        return codex
+    }
+
     /// The user's settings, without API keys that would bill per request instead of the plan.
-    static func environment() -> [String: String] {
+    nonisolated static func environment() -> [String: String] {
         var environment = ProcessInfo.processInfo.environment.filter { key, _ in
             !["OPENAI_API_KEY", "CODEX_API_KEY", "CLAUDECODE"].contains(key) && !key.hasPrefix("CLAUDE_CODE_")
         }
@@ -238,7 +276,7 @@ final class CodexSession: Engine {
                 "sandbox": "danger-full-access",
                 "developerInstructions": instructions,
                 "ephemeral": true,
-                "config": ["web_search": "live"],
+                "config": ["web_search": "live", "mcp_servers": Self.claudeConnectors()],
             ]
             if let model = AIAccount.chatGPTModel { params["model"] = model }
             request("thread/start", params)
@@ -311,8 +349,11 @@ final class CodexSession: Engine {
             if let id = item["id"] as? String { fileChanges[id] = paths }
             onEvent(.status(Session.describe(tool: "Edit", input: paths.first.map { ["file_path": $0] } ?? [:])))
         case "mcpToolCall":
-            let tool = "mcp__\(item["server"] as? String ?? "")__\(item["tool"] as? String ?? "")"
-            onEvent(.status(Session.describe(tool: tool, input: item["arguments"] as? [String: Any] ?? [:])))
+            let server = item["server"] as? String ?? ""
+            let tool = "mcp__\(server)__\(item["tool"] as? String ?? "")"
+            let input = item["arguments"] as? [String: Any] ?? [:]
+            if let id = item["id"] as? String { connectorCalls.append((id, server, tool, input)) }
+            onEvent(.status(Session.describe(tool: tool, input: input)))
         case "webSearch":
             onEvent(.status(Session.describe(tool: "WebSearch", input: (item["query"] as? String).map { ["query": $0] } ?? [:])))
         default:
@@ -330,7 +371,9 @@ final class CodexSession: Engine {
             }
         case "fileChange" where item["status"] as? String == "completed":
             lastAction = Session.actionLabel("Edit")
-        case "mcpToolCall" where item["error"] == nil || item["error"] is NSNull:
+        case "mcpToolCall":
+            connectorCalls.removeAll { $0.item == item["id"] as? String }
+            guard item["error"] == nil || item["error"] is NSNull else { return }
             let tool = "mcp__\(item["server"] as? String ?? "")__\(item["tool"] as? String ?? "")"
             if let label = Session.actionLabel(tool) { lastAction = label }
         default:
@@ -411,8 +454,9 @@ final class CodexSession: Engine {
 
     // MARK: - Permissions
 
-    /// Codex asks before running a command or changing files. Anything else it asks the client
-    /// (a connector's question, more permissions) is declined: Joe has no card for it yet.
+    /// Codex asks before running a command, changing files or using a connector (the copied
+    /// Claude ones ask every time, so Joe's rules decide). Anything else it asks the client (a
+    /// connector's own form, more permissions) is declined: Joe has no card for it yet.
     private func serverRequest(_ method: String, id: Any, _ params: [String: Any]) {
         let tool: String
         var input: [String: Any]
@@ -429,6 +473,14 @@ final class CodexSession: Engine {
             tool = "Edit"
             input = ["file_path": pick?.path ?? "", "old_string": "", "paths": paths]
             if paths.isEmpty { return queue(id, tool, ToolPolicy.Action(key: "Edit:?", verdict: .ask, title: "Change files"), input) }
+        case "mcpServer/elicitation/request":
+            elicitations.insert("\(id)")
+            // The tool call it's about: the latest one under way on that server.
+            guard let call = connectorCalls.last(where: { $0.server == params["serverName"] as? String }) else {
+                return reply(id, accept: false)
+            }
+            tool = call.tool
+            input = call.input
         default:
             write(["id": id, "error": ["code": -32601, "message": "Not supported by Joe"]])
             return
@@ -499,6 +551,10 @@ final class CodexSession: Engine {
     }
 
     private func reply(_ id: Any, accept: Bool) {
+        if elicitations.remove("\(id)") != nil {
+            write(["id": id, "result": ["action": accept ? "accept" : "decline"]])
+            return
+        }
         write(["id": id, "result": ["decision": accept ? "accept" : "decline"]])
     }
 
@@ -550,6 +606,34 @@ enum CodexAccount {
         mv "$dir/codex-aarch64-apple-darwin" "$HOME/.local/bin/codex"
         chmod +x "$HOME/.local/bin/codex"
         """
+
+    /// A quick answer with no tools, for Joe's small helpers (titling notes, "make it a prompt") in
+    /// ChatGPT mode: `codex exec`, read-only, thinking little. Nil if it fails or takes too long.
+    /// Blocks: call it off the main thread.
+    static func quickAnswer(_ prompt: String, timeout: TimeInterval) -> String? {
+        guard let codex = CodexSession.executable else { return nil }
+        let reply = FileManager.default.temporaryDirectory.appendingPathComponent("joe-codex-\(UUID().uuidString).txt")
+        defer { try? FileManager.default.removeItem(at: reply) }
+        let process = Process()
+        process.executableURL = codex
+        process.arguments = ["exec", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config",
+                             "--sandbox", "read-only", "-c", "model_reasoning_effort=\"low\"", "-o", reply.path, "-"]
+        process.environment = CodexSession.environment()
+        process.currentDirectoryURL = FileManager.default.temporaryDirectory
+        let input = Pipe()
+        process.standardInput = input
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return nil }
+        let timer = DispatchWorkItem { if process.isRunning { process.terminate() } }
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timer)
+        input.fileHandleForWriting.write(Data(prompt.utf8))
+        try? input.fileHandleForWriting.close()
+        process.waitUntilExit()
+        timer.cancel()
+        let text = (try? String(contentsOf: reply, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return process.terminationStatus == 0 && !text.isEmpty ? text : nil
+    }
 
     private static func run(_ executable: URL, _ arguments: [String]) async -> String {
         await withCheckedContinuation { continuation in

@@ -2921,7 +2921,7 @@ private struct SettingsPage: View {
 
     @ViewBuilder private var advanced: some View {
         section("AI", "sparkles") {
-            row("Joe runs on", aiProvider == "chatgpt" ? "Your ChatGPT plan, through OpenAI's Codex. No Chrome control or Claude connectors in this mode"
+            row("Joe runs on", aiProvider == "chatgpt" ? "Your ChatGPT plan, through OpenAI's Codex. No Chrome control, and claude.ai connectors (Gmail, Calendar) don't come along"
                 : "Your Claude plan, through Claude Code", last: aiProvider != "chatgpt") {
                 Choice(options: [("claude", "Claude"), ("chatgpt", "ChatGPT")], selection: $aiProvider)
             }

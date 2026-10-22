@@ -134,7 +134,7 @@ private struct PillView: View {
             let full = notchWidth + 2 * RecordingPanel.ear
             let radius: CGFloat = model.open ? 13 : 10
             ZStack {
-                UnevenRoundedRectangle(bottomLeadingRadius: radius, bottomTrailingRadius: radius, style: .continuous)
+                NotchShape(top: NotchShape.shoulder, bottom: radius)
                     .fill(Color.black)
                     .frame(width: model.open ? full : notchWidth)
                 HStack(spacing: 0) {
@@ -162,7 +162,7 @@ private struct PillView: View {
             }
             .frame(width: full)
             .frame(maxHeight: .infinity)
-            .animation(model.open ? .timingCurve(0.16, 1, 0.3, 1, duration: 0.46) : .timingCurve(0.5, 0, 0.75, 0, duration: 0.3),
+            .animation(model.open ? NotchShape.opening : NotchShape.closing,
                        value: model.open)
         } else {
             ZStack {

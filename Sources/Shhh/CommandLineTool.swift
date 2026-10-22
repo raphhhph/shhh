@@ -19,6 +19,8 @@ enum CommandLineTool {
       Joe --microphones
       Joe --record <seconds>
       Joe --ask "<request>" ["<follow-up>" …]
+      Joe --latency                (where the time went in the last requests)
+      Joe --bench-claude           (Claude Code's first word: started for the request, and ahead)
     """
 
     /// Runs a test mode and exits if one was requested; returns otherwise.
@@ -381,6 +383,19 @@ enum CommandLineTool {
             MainActor.assumeIsolated { showApproval(args[1], saveTo: args.count > 2 ? args[2] : nil) }
             NSApplication.shared.setActivationPolicy(.accessory)
             NSApplication.shared.run()
+        case ("--latency", 1):
+            // Joe --latency: the median time of each step of the last 20 requests (Latency.jsonl).
+            print(Latency.summary())
+            exit(0)
+        case ("--bench-claude", 1):
+            // Joe --bench-claude: two tiny requests on the chosen model, to time Claude Code itself.
+            run { try await benchClaude() }
+        case ("--bench-claude", 2...3):
+            // Joe --bench-claude <seconds ahead> ["<request>"]: one request to a Claude Code started that
+            // long before, with the time of each thing it sends, to find where a slow reply waits.
+            guard let head = Double(args[1]) else { fail("Usage: Joe --bench-claude [<seconds ahead> [\"<request>\"]]") }
+            let request = args.count > 2 ? args[2] : "Reply with just the word: ok"
+            run { try await benchClaude(head: head, request: request) }
         case ("--ask", 2...):
             MainActor.assumeIsolated { ask(Array(args.dropFirst())) }
             NSApplication.shared.setActivationPolicy(.accessory)
@@ -404,6 +419,88 @@ enum CommandLineTool {
             let text = try await transcriber.transcribe(fileURL: URL(fileURLWithPath: file))
             print(String(format: "[%.2fs] %@", Date().timeIntervalSince(start), text))
         }
+    }
+
+    /// How long Claude Code takes to say its first word: once started together with the request (as
+    /// before the spare session), once started a few seconds ahead (the spare). Joe's own settings,
+    /// connectors and Chrome included, so it's what a request really waits for.
+    @MainActor
+    private static func benchClaude() async throws {
+        guard let executable = Assistant.executable else { fail("Claude Code isn't installed.") }
+        print("Model: \(Assistant.model.name), effort \(Assistant.sessionEffort.name)")
+        final class Timing { var session: Session?; var sent = Date(); var firstWord: Date?; var failure: String?; var resumed = false }
+        for (label, head) in [("started with the request", 0.0), ("started 8 s ahead", 8.0)] {
+            let timing = Timing()
+            await withCheckedContinuation { (finished: CheckedContinuation<Void, Never>) in
+                timing.session = Session(executable: executable) { event in
+                    switch event {
+                    case .answer: if timing.firstWord == nil { timing.firstWord = Date() }
+                    case .failed(let message): timing.failure = message; fallthrough
+                    case .turnFinished: if !timing.resumed { timing.resumed = true; finished.resume() }
+                    default: break
+                    }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + head) {
+                    MainActor.assumeIsolated {
+                        timing.sent = Date()
+                        timing.session?.send("Reply with just the word: ok", screenshot: nil)
+                    }
+                }
+            }
+            timing.session?.stop()
+            if let failure = timing.failure { print("\(label): failed: \(failure)"); continue }
+            let word = timing.firstWord.map { String(format: "%.2f s", $0.timeIntervalSince(timing.sent)) } ?? "none"
+            print(String(format: "%@: first word %@ after sending, done %.2f s after sending", label, word,
+                         Date().timeIntervalSince(timing.sent)))
+        }
+    }
+
+    /// One request, with a timeline: when Claude Code sent each kind of line (its setup for the turn,
+    /// the reply's start, text, tool calls, the result), and the connectors it had at the start.
+    @MainActor
+    private static func benchClaude(head: Double, request: String) async throws {
+        guard let executable = Assistant.executable else { fail("Claude Code isn't installed.") }
+        print("Model: \(Assistant.model.name), effort \(Assistant.sessionEffort.name); request sent \(head) s after start")
+        final class Timeline { var session: Session?; var sent: Date?; var seen: [String] = []; var resumed = false }
+        let timeline = Timeline()
+        await withCheckedContinuation { (finished: CheckedContinuation<Void, Never>) in
+            let session = Session(executable: executable) { event in
+                switch event {
+                case .turnFinished, .failed: if !timeline.resumed { timeline.resumed = true; finished.resume() }
+                default: break
+                }
+            }
+            timeline.session = session
+            session.onMessage = { message in
+                let type = message["type"] as? String ?? "?"
+                var kind = type
+                if let subtype = message["subtype"] as? String { kind += "/" + subtype }
+                if let event = message["event"] as? [String: Any], let eventType = event["type"] as? String {
+                    kind += "/" + eventType
+                    if let block = event["content_block"] as? [String: Any], let blockType = block["type"] as? String {
+                        kind += ":" + blockType + ((block["name"] as? String).map { " " + $0 } ?? "")
+                    }
+                }
+                if type == "system", message["subtype"] as? String == "init" {
+                    let servers = (message["mcp_servers"] as? [[String: Any]] ?? [])
+                        .map { "\($0["name"] as? String ?? "?") (\($0["status"] as? String ?? "?"))" }
+                    print("Connectors at the start of the turn: " + (servers.isEmpty ? "none" : servers.joined(separator: ", ")))
+                    print("Tools: \((message["tools"] as? [Any])?.count ?? 0)")
+                }
+                guard !timeline.seen.contains(kind) else { return }
+                timeline.seen.append(kind)
+                let at = timeline.sent.map { String(format: "%6.2f s", Date().timeIntervalSince($0)) } ?? "before sending"
+                print("  \(at)  \(kind)")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + head) {
+                MainActor.assumeIsolated {
+                    timeline.sent = Date()
+                    print("  (sent)")
+                    timeline.session?.send(request, screenshot: nil)
+                }
+            }
+        }
+        timeline.session?.stop()
     }
 
     private static func clean(_ input: String) async throws {

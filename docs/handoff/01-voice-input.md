@@ -18,6 +18,7 @@ Everything from a key press to text: hotkeys, double-tap lock, "Hey Joe" hands-f
 - SenseVoice input is padded to **5-second blocks** (the GPU prepares each new length once, ~1 s). Audio over 100 s goes in 90 s pieces.
 - While Chinese is still loading, a request waits for it (up to 25 s) rather than Parakeet turning Chinese into made-up English. The transcription timeout is 40 s + length.
 - A speech timeout reloads the model **in the background**; the keys keep working (`reloadSpeechModel`).
+- Letting go: only the iPhone's microphone (which delivers audio late, then catches up) is waited for until the audio covers the whole hold. Others that started late (AirPods) get 0.08 s more at most: what they missed at the start never arrives.
 - Double-tap (tap then press within 0.45 s) locks recording on until the next tap, max 5 min; shortcuts typed meanwhile are ignored.
 - Live words: every 0.9 s the recording so far is transcribed (one at a time) and shown; the final text still comes from the whole recording.
 - Spoken alarm commands, study, pen and Spotify are handled on the Mac without Claude (fast, free).

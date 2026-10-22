@@ -47,10 +47,15 @@ final class AudioRecorder {
     /// Some microphones deliver audio late: the iPhone's (Continuity) starts about 3 s behind but
     /// then sends everything. Keep listening until the audio covers how long the key was held,
     /// unless the microphone has stopped for good.
+    /// Any other microphone that started late (AirPods take up to a second to switch to their headset
+    /// mode) won't send what it missed: waiting for it only kept recording after the key was let go,
+    /// and the request waited that long. Those get just the last buffers still on their way.
     func stop(_ recording: Recording, covering duration: TimeInterval, timeout: TimeInterval = 4) async -> [Float] {
         let session = recording.session
-        let deadline = Date().addingTimeInterval(timeout)
-        while session.capturedSeconds < duration - 0.25, !session.hasFailed, Date() < deadline {
+        let catchesUp = recording.input.kind == .iPhone
+        let target = catchesUp ? duration - 0.25 : min(duration - 0.25, session.capturedSeconds + 0.08)
+        let deadline = Date().addingTimeInterval(catchesUp ? timeout : 0.3)
+        while session.capturedSeconds < target, !session.hasFailed, Date() < deadline {
             try? await Task.sleep(for: .milliseconds(50))
         }
         let samples = session.samples
@@ -63,6 +68,8 @@ final class AudioRecorder {
     /// taking them all.
     func pendingSeconds(_ recording: Recording) -> Double { recording.session.capturedSeconds }
     func tail(_ recording: Recording, seconds: Double) -> [Float] { recording.session.tail(Int(seconds * 16_000)) }
+    /// What it has heard from sample `start` on (the noise filter reads the recording as it's made).
+    func samples(_ recording: Recording, from start: Int) -> [Float] { recording.session.samples(from: start) }
     func take(_ recording: Recording) -> [Float] { recording.session.take() }
     func hasFailed(_ recording: Recording) -> Bool { recording.session.hasFailed }
 
@@ -115,6 +122,11 @@ private final class RecordingSession: @unchecked Sendable {
     func tail(_ count: Int) -> [Float] {
         lock.lock(); defer { lock.unlock() }
         return Array(buffer.suffix(count))
+    }
+
+    func samples(from start: Int) -> [Float] {
+        lock.lock(); defer { lock.unlock() }
+        return start < buffer.count ? Array(buffer[start...]) : []
     }
 
     /// For long recordings: everything captured so far, cleared from the buffer so it doesn't grow

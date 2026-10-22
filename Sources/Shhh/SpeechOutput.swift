@@ -450,6 +450,7 @@ private final class VoicePlayer {
               let format = AVAudioFormat(standardFormatWithSampleRate: Double(sampleRate), channels: 1),
               let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count))
         else { return }
+        Latency.mark("firstAudio")
         buffer.frameLength = AVAudioFrameCount(samples.count)
         samples.withUnsafeBufferPointer { buffer.floatChannelData![0].update(from: $0.baseAddress!, count: samples.count) }
         if self.format != format {

@@ -243,10 +243,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ModelDownloads.apply() // Hugging Face or the China mirror, before any model loads
-        // Crashed while loading a model last time (a broken download): its files go, it downloads again.
+        // Stopped while a model was downloading or loading last time: an unfinished download carries
+        // on, a broken one starts over (ModelGuard decides).
         if let broken = ModelGuard.recoverFromCrash() {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
-                MainActor.assumeIsolated { self?.toast.show("\(broken.title): the download was broken, so it's downloading again", symbol: "arrow.down.circle", tint: .orange) }
+                MainActor.assumeIsolated { self?.toast.show("\(broken.title) didn't finish last time, so it's downloading again", symbol: "arrow.down.circle", tint: .orange) }
             }
         }
         AppAppearance.apply() // light, dark or the Mac's

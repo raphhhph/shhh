@@ -2966,7 +2966,9 @@ private struct SettingsRow<Content: View>: View {
 /// it, drag it down (or tap its minus) to take it off; drag one up from the tray (or tap it) to add it.
 private struct WidgetEditor: View {
     @Binding var widgets: [NotchOverview.Widget]
-    @Environment(\.dismiss) private var dismiss
+    /// Folds the editor away again (it opens in place in Settings, not as a sheet: the sheet never
+    /// appeared from inside the settings list).
+    var done: () -> Void = {}
     /// The tile being dragged, so the others make room for it as it passes.
     @State private var dragging: NotchOverview.Widget?
     @State private var overTray = false
@@ -2976,11 +2978,8 @@ private struct WidgetEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Notch overview").font(.system(size: 20, weight: .bold, design: Look.titleDesign))
-                Text("Drag to arrange. Up to \(NotchOverview.maxWidgets) fit side by side.")
-                    .font(.system(size: 13)).foregroundStyle(.secondary)
-            }
+            Text("Drag to arrange. Up to \(NotchOverview.maxWidgets) fit side by side.")
+                .font(.system(size: 13)).foregroundStyle(.secondary)
 
             notch
 
@@ -3025,12 +3024,11 @@ private struct WidgetEditor: View {
                 Button("Reset") { withAnimation(.snappy) { widgets = [.clock, .nextClass, .dueSoon, .tasks, .music] } }
                     .buttonStyle(PillButton())
                 Spacer()
-                Button("Done") { dismiss() }.buttonStyle(PillButton(prominent: true)).keyboardShortcut(.defaultAction)
+                Button("Done") { done() }.buttonStyle(PillButton(prominent: true)).keyboardShortcut(.defaultAction)
             }
         }
-        .padding(24)
-        .frame(width: 640)
-        .background(Look.page)
+        .padding(.vertical, 16)
+        .frame(maxWidth: 640, alignment: .leading)
         .tint(Look.accent)
     }
 
@@ -3286,12 +3284,15 @@ private struct SettingsPage: View {
         section("Notch", "rectangle.topthird.inset.filled") {
             row("Overview on hover", "Rest the pointer on the notch: time, next class, what's due, your tasks, music") { switchOn($overviewOn) }
             row("Overview widgets", overviewWidgets.map { NotchOverview.Widget(rawValue: $0)?.title ?? $0 }.joined(separator: " · ")) {
-                Button("Edit…") { editingWidgets = true }.buttonStyle(PillButton())
-                    .sheet(isPresented: $editingWidgets) {
-                        WidgetEditor(widgets: Binding(
-                            get: { overviewWidgets.compactMap(NotchOverview.Widget.init) },
-                            set: { overviewWidgets = $0.map(\.rawValue); NotchOverview.widgets = $0 }))
-                    }
+                Button(editingWidgets ? "Done" : "Edit…") { withAnimation(.snappy) { editingWidgets.toggle() } }
+                    .buttonStyle(PillButton(prominent: editingWidgets))
+            }
+            if editingWidgets {
+                WidgetEditor(widgets: Binding(
+                    get: { overviewWidgets.compactMap(NotchOverview.Widget.init) },
+                    set: { overviewWidgets = $0.map(\.rawValue); NotchOverview.widgets = $0 }),
+                             done: { withAnimation(.snappy) { editingWidgets = false } })
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
             row("Answers at the notch", "Answers drop down from the notch", last: true) { switchOn($notch) { model.actions.setNotch($0) } }
         }

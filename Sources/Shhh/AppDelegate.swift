@@ -311,6 +311,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         overview.canShow = { [weak self] in
             guard let self else { return false }
             return self.state == .idle && !self.answerPanel.isVisible && !self.alarms.isRinging && !self.pen.isOpen
+                && !self.shelf.isExpanded // its list is open at the notch
         }
         overview.start()
         // ManageBac and Google calendar links: read at launch and every half hour.
@@ -1162,8 +1163,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshResting()
     }
 
-    /// The side notch shows up once something is carrying on in the background, and then lists every
-    /// task, the one on the card too, by its subject (or the request, until there is one).
+    /// The notch band shows what Joe is doing once something carries on in the background or an
+    /// alarm is set, and its list has every task, the one on the card too, by its subject (or the
+    /// request, until there is one), and the alarms.
     private func refreshShelf() {
         // Alarms and timers to come: the next time, or a timer's countdown.
         let style = TaskShelf.alarmStyle

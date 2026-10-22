@@ -3,13 +3,13 @@
 Read `00-common.md` first.
 
 ## Scope
-Everything Joe draws over other apps: the resting notch band, the recording pill, the answer card, the side-notch task shelf, the hover overview, toasts, the greeting, live words, the screen pen, the screen pointer.
+Everything Joe draws over other apps: the resting notch band, the recording pill, the answer card, what Joe is doing in the notch band (the task shelf), the hover overview, toasts, the greeting, live words, the screen pen, the screen pointer.
 
 ## Files
 - `Notch.swift`: `Notch` (geometry, `screenUnderMouse`), `NotchPanel`, `NotchSpace` (pins panels to every Space via a private CGS API), `RestingNotch` (the black band with the sparkle, `ignoresMouseEvents`), `NotchGreeting`.
 - `NotchOverview.swift`: hover overview (NotchNook-style). Polls the pointer every 0.15 s; opens after 0.35 s on the notch while Joe is idle; widgets clock, next class (tomorrow's first in the evening; with that subject's next deadline, matched on the class's first word), due soon (tap one: Joe helps start it), today's five (tap to tick off in the Daybook), Joe's tasks, next alarm, now playing, Ask Joe (three one-tap questions; asking hides the overview so the card can drop), focus timer (25 or 50 min, a real `.timer` alarm, counts down) (each has a `symbol` for the editor); order/selection saved in `notchWidgets`, edited with the drag editor in Settings. Data from `DashboardModel`.
 - `AnswerPanel.swift`: the card (status steps, plan checklist, approval cards, reply). Once a reply is done: Copy, Save to notes (`NoteSaver.saveAnswer`, into the vault's Notes), and follow-up chips Simpler, Example, Quiz me that carry on the same conversation (`AppDelegate.followUpTyped`). `MarkdownText` renders headings, lists, numbered lists, checklists, quotes, code, tables, rules.
-- `RecordingPanel.swift` (pill), `LiveCaption.swift`, `TaskShelf.swift` (background tasks capsule), `Toast.swift`, `ScreenPen.swift` (draw over the screen; "Ask Joe about this" sends a screenshot), `ScreenPointer.swift` (point tags on screen from Claude's replies).
+- `RecordingPanel.swift` (pill), `LiveCaption.swift`, `TaskShelf.swift` (what Joe is doing, in the notch band itself since Oct 2026: background tasks and alarms show either side of the notch, `TaskShelf.ear(for:)` sets how wide; click the band and the list drops out of the notch; no more capsule beside it or dragging), `Toast.swift`, `ScreenPen.swift` (draw over the screen; "Ask Joe about this" sends a screenshot), `ScreenPointer.swift` (point tags on screen from Claude's replies).
 
 ## Decisions
 - One look and one motion for everything hung from the notch (resting band, listening pill, answer island, greeting, overview): `NotchShape` (rounded bottom, plus small concave shoulders where it meets the screen's top edge, like the iPhone) and the `NotchShape.opening` / `.closing` / `.growing` springs. Contents fade, scale and unblur in just after the shape opens and go first when it closes. The overview grows out of the notch (`OverviewModel.isOpen`) and shrinks back before its panel goes.

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds Joe.dmg for people to download and install (build/Joe.dmg).
 #
-#   ./scripts/release.sh             unsigned test build: friends open it with right-click → Open
+#   ./scripts/release.sh             unsigned test build: friends follow the "First open guide" in the DMG
 #   JOE_IDENTITY="Developer ID Application: Your Name (TEAMID)" ./scripts/release.sh
 #                                    signed with Developer ID and the hardened runtime, notarised by
 #                                    Apple and stapled: opens with no warnings on any Mac
@@ -26,13 +26,51 @@ if [ -n "$IDENTITY" ]; then
   codesign --verify --deep --strict "$APP"
 fi
 
-# The disk image: Joe and a shortcut to Applications to drag it onto.
+# The disk image: a window with Joe, an arrow onto Applications and a first-open guide.
+# Background: Resources/DMG/background*.png (redraw with scripts/make-dmg-background.py).
 STAGE=$(mktemp -d)
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
-rm -f "$DMG"
-hdiutil create -volname "Joe" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+cp "Resources/DMG/First open guide.html" "$STAGE/"
+mkdir "$STAGE/.background"
+tiffutil -cathidpicheck Resources/DMG/background.png Resources/DMG/background@2x.png \
+  -out "$STAGE/.background/background.tiff" >/dev/null
+rm -f "$DMG" build/Joe-rw.dmg
+hdiutil create -volname "Joe" -srcfolder "$STAGE" -ov -format UDRW build/Joe-rw.dmg >/dev/null
 rm -rf "$STAGE"
+
+# Lay out the Finder window (Terminal needs permission to control Finder the first time).
+hdiutil detach "/Volumes/Joe" -quiet 2>/dev/null || true
+MOUNT=$(hdiutil attach build/Joe-rw.dmg -readwrite -noverify -noautoopen | awk -F'\t' '/\/Volumes\//{print $NF}')
+osascript <<APPLESCRIPT || echo "Note: couldn't style the window (allow Terminal to control Finder); the DMG still works."
+tell application "Finder"
+  tell disk "Joe"
+    open
+    set current view of container window to icon view
+    set toolbar visible of container window to false
+    set statusbar visible of container window to false
+    set bounds of container window to {200, 120, 860, 540}
+    set opts to the icon view options of container window
+    set arrangement of opts to not arranged
+    set icon size of opts to 96
+    set text size of opts to 13
+    set background picture of opts to file ".background:background.tiff"
+    set position of item "Joe.app" of container window to {170, 190}
+    set position of item "Applications" of container window to {490, 190}
+    set position of item "First open guide.html" of container window to {330, 350}
+    close
+    open
+    update without registering applications
+    delay 1
+    close
+  end tell
+end tell
+APPLESCRIPT
+cp Resources/AppIcon.icns "$MOUNT/.VolumeIcon.icns" && { SetFile -a C "$MOUNT" 2>/dev/null || true; }
+sync
+hdiutil detach "$MOUNT" -quiet
+hdiutil convert build/Joe-rw.dmg -format UDZO -imagekey zlib-level=9 -o "$DMG" >/dev/null
+rm -f build/Joe-rw.dmg
 
 if [ -n "$IDENTITY" ]; then
   codesign --force --timestamp --sign "$IDENTITY" "$DMG"
@@ -40,5 +78,5 @@ if [ -n "$IDENTITY" ]; then
   xcrun stapler staple "$DMG"
   echo "Signed, notarised and stapled: $DMG"
 else
-  echo "Unsigned test build: $DMG (friends: right-click Joe → Open the first time)."
+  echo "Unsigned test build: $DMG (first open: Privacy & Security → Open Anyway, see the guide in the DMG)."
 fi

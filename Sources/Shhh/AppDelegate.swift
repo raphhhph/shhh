@@ -166,6 +166,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// the study whiteboard, not the notch. Saying "whiteboard" always opens it.
     private func openStudy(_ request: String) -> Bool {
         guard let mode = Self.studyMode(request) else { return false }
+        // "Open the whiteboard" with a quiz going on it: back to that quiz, not a new one.
+        if studyBoard.model.isActive, request.range(of: #"^\W*((hey |ok )?joe,?\s+)?((can you|could you|please)\s+)*((open|show|bring|pull|go|switch)( up| back| to)*\s+)?(the |my )?white ?board( mode)?( again| back( up)?)?( please)?\W*$"#,
+                                                    options: [.regularExpression, .caseInsensitive]) != nil {
+            studyBoard.show()
+            return true
+        }
         // The subject: said now, or in the conversation on the card ("let's start a quiz on econ",
         // then "open the whiteboard"), or the one studied last.
         let context = [request, focused?.question ?? ""] + tasks.suffix(3).map(\.question)

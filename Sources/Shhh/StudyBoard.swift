@@ -178,6 +178,7 @@ final class StudyBoardModel: ObservableObject {
         live = []
         draft = ""
         startedAt = Date()
+        DiagramClock.drawn = []
         if mode == .cards { shuffleDeck(); return }
         let assistant = Assistant()
         assistant.tutorPrompt = Self.tutorPrompt(subject: subject, mode: mode)
@@ -244,13 +245,17 @@ final class StudyBoardModel: ObservableObject {
     }
 
     /// Their answer (typed or said), or "hint", "skip", "end".
-    func submit(_ text: String, spoken: Bool = false, image: Data? = nil) {
+    func submit(_ text: String, spoken: Bool = false, image: Data? = nil, onYourDiagram: Bool = false) {
         if mode == .cards { said = text; flipped = true; return }
         var text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || image != nil, assistant != nil, !isBusy else { return }
         items.append(.answer(text: text, spoken: spoken, image: image))
         draft = ""
-        if image != nil { text = (text.isEmpty ? "" : text + "\n\n") + "[My diagram is attached: mark it as part of my answer.]" }
+        if image != nil {
+            text = (text.isEmpty ? "" : text + "\n\n") + (onYourDiagram
+                ? "[I drew on your diagram: my strokes are in black, red or blue over yours. Mark what I added as part of my answer.]"
+                : "[My diagram is attached: mark it as part of my answer.]")
+        }
         send(text, image: image)
     }
 
@@ -569,6 +574,9 @@ private struct StudyBoardView: View {
     @State private var started = false
     @State private var strokes: [SketchPad.Stroke] = []
     @State private var ink = Color.black // the pad is white whatever the theme
+    /// Joe's diagram under the sketch pad, to draw the shift or the labels on.
+    @State private var base: BoardDiagram?
+    @State private var padSize = CGSize(width: 600, height: 220)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -595,8 +603,8 @@ private struct StudyBoardView: View {
                         empty
                     }
                     // By position: two rows can be alike ("Nice." twice), and SwiftUI needs unique ids.
-                    ForEach(Array((model.items + model.live).enumerated()), id: \.offset) { _, item in
-                        row(item)
+                    ForEach(Array((model.items + model.live).enumerated()), id: \.offset) { index, item in
+                        row(item, at: index)
                     }
                     if model.isBusy {
                         HStack(spacing: 8) {
@@ -707,7 +715,7 @@ private struct StudyBoardView: View {
     }
 
     @ViewBuilder
-    private func row(_ item: StudyBoardModel.Item) -> some View {
+    private func row(_ item: StudyBoardModel.Item, at index: Int) -> some View {
         switch item {
         case let .question(n, marks, topic, source, text):
             VStack(alignment: .leading, spacing: 10) {
@@ -795,7 +803,9 @@ private struct StudyBoardView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         case let .diagram(diagram):
-            BoardDiagramView(diagram: diagram)
+            BoardDiagramView(diagram: diagram, key: "\(index)", onDrawOn: model.isActive && !model.isBusy ? {
+                withAnimation(.easeOut(duration: 0.15)) { base = diagram; strokes = []; sketching = true }
+            } : nil)
         case let .lesson(title, text):
             VStack(alignment: .leading, spacing: 8) {
                 Label(title.isEmpty ? "Lesson" : title, systemImage: "book.closed.fill")
@@ -812,8 +822,13 @@ private struct StudyBoardView: View {
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
             if sketching {
-                SketchPad(strokes: $strokes, ink: $ink)
-                    .frame(height: 220)
+                // The picture sent to Joe is the pad at its size on screen, so the strokes stay on his curves.
+                GeometryReader { geometry in
+                    SketchPad(strokes: $strokes, ink: $ink, base: base)
+                        .onAppear { padSize = geometry.size }
+                        .onChange(of: geometry.size) { _, size in padSize = size }
+                }
+                    .frame(height: base == nil ? 220 : 300)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.15)))
             }
@@ -842,6 +857,7 @@ private struct StudyBoardView: View {
                             .onTapGesture { ink = color }
                     }
                     Button("Clear") { strokes = [] }
+                    if base != nil { Button("Blank page") { base = nil; strokes = [] } }
                 }
                 if model.mode == .explain {
                     Button("Quiz me on this") { model.quizOnThis() }.disabled(model.items.isEmpty)
@@ -852,8 +868,9 @@ private struct StudyBoardView: View {
                 }
                 Spacer()
                 Button {
-                    model.submit(model.draft, image: strokes.isEmpty ? nil : SketchPad.jpeg(strokes))
+                    model.submit(model.draft, image: strokes.isEmpty ? nil : SketchPad.jpeg(strokes, base: base, size: padSize), onYourDiagram: base != nil && !strokes.isEmpty)
                     strokes = []
+                    base = nil
                 } label: { Label(model.mode == .explain ? "Ask" : "Submit", systemImage: "arrow.up") }
                     .keyboardShortcut(.return, modifiers: .command)
                     .buttonStyle(.borderedProminent)
@@ -887,11 +904,18 @@ struct SketchPad: View {
 
     @Binding var strokes: [Stroke]
     @Binding var ink: Color
+    /// Joe's diagram to draw on, under the strokes.
+    var base: BoardDiagram?
     @State private var drawing = false
 
     var body: some View {
-        Canvas { context, size in Self.draw(strokes, in: &context, size: size) }
+        ZStack {
+            if let base { DiagramDrawing(diagram: base, animated: false) }
+            Canvas { context, size in Self.draw(strokes, in: &context, size: size) }
+        }
             .background(Color.white)
+            .environment(\.colorScheme, .light)
+            .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { value in
                     if drawing, !strokes.isEmpty {
@@ -903,7 +927,7 @@ struct SketchPad: View {
                 }
                 .onEnded { _ in drawing = false })
             .overlay(alignment: .topLeading) {
-                if strokes.isEmpty {
+                if strokes.isEmpty && base == nil {
                     Text("Draw here: axes, curves, labels, arrows").font(.system(size: 12)).foregroundStyle(.gray).padding(10)
                 }
             }
@@ -920,11 +944,16 @@ struct SketchPad: View {
     }
 
     /// The drawing as a JPEG, on white, for Claude to look at.
-    @MainActor static func jpeg(_ strokes: [Stroke]) -> Data? {
+    /// On Joe's diagram, the picture is the pad at its size, so the strokes land where they were drawn.
+    @MainActor static func jpeg(_ strokes: [Stroke], base: BoardDiagram? = nil, size: CGSize? = nil) -> Data? {
         let points = strokes.flatMap(\.points)
-        let width = max(400, (points.map(\.x).max() ?? 400) + 20), height = max(260, (points.map(\.y).max() ?? 260) + 20)
-        let renderer = ImageRenderer(content: Canvas { context, size in draw(strokes, in: &context, size: size) }
-            .frame(width: width, height: height).background(Color.white))
+        var width = max(400, (points.map(\.x).max() ?? 400) + 20), height = max(260, (points.map(\.y).max() ?? 260) + 20)
+        if base != nil, let size { width = size.width; height = size.height }
+        let renderer = ImageRenderer(content: ZStack {
+            if let base { DiagramDrawing(diagram: base, animated: false) }
+            Canvas { context, size in draw(strokes, in: &context, size: size) }
+        }
+            .frame(width: width, height: height).background(Color.white).environment(\.colorScheme, .light))
         renderer.scale = 2
         guard let image = renderer.nsImage, let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
         return bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.8])

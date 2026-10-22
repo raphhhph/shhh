@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Draws the DMG window background (Resources/DMG/background.png and @2x).
 # Needs Pillow: python3 -m pip install pillow. Layout must match release.sh:
-# 660x420 window, Joe icon at (170,190), Applications at (490,190).
+# 660x480 window, Joe icon at (170,190), Applications at (490,190).
 from PIL import Image, ImageDraw, ImageFont
 import os, sys
 
@@ -16,7 +16,7 @@ def font(size):
     return ImageFont.load_default()
 
 def draw(s):
-    W, H = 660 * s, 420 * s
+    W, H = 660 * s, 480 * s
     img = Image.new("RGB", (W, H))
     d = ImageDraw.Draw(img)
     for y in range(H):  # soft vertical gradient
@@ -31,8 +31,8 @@ def draw(s):
     y = 190 * s
     d.line([(250 * s, y), (400 * s, y)], fill=(120, 110, 230), width=6 * s)
     d.polygon([(410 * s, y), (390 * s, y - 14 * s), (390 * s, y + 14 * s)], fill=(120, 110, 230))
-    center("Then open Joe from Applications. First time only:", 262, 13, (70, 70, 85))
-    center("if macOS says it can't check Joe, open the \"First open\" guide below.", 282, 13, (70, 70, 85))
+    center("Then open Joe from Applications. First time only:", 300, 13, (70, 70, 85))
+    center("if macOS says it can't check Joe, open the \"First open\" guide below.", 320, 13, (70, 70, 85))
     return img
 
 os.makedirs(OUT, exist_ok=True)

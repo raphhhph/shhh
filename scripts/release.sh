@@ -49,7 +49,7 @@ tell application "Finder"
     set current view of container window to icon view
     set toolbar visible of container window to false
     set statusbar visible of container window to false
-    set bounds of container window to {200, 120, 860, 540}
+    set bounds of container window to {200, 120, 860, 600}
     set opts to the icon view options of container window
     set arrangement of opts to not arranged
     set icon size of opts to 96
@@ -57,7 +57,7 @@ tell application "Finder"
     set background picture of opts to file ".background:background.tiff"
     set position of item "Joe.app" of container window to {170, 190}
     set position of item "Applications" of container window to {490, 190}
-    set position of item "First open guide.html" of container window to {330, 350}
+    set position of item "First open guide.html" of container window to {330, 410}
     close
     open
     update without registering applications

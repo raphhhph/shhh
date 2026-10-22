@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreML
 import FluidAudio
+import OSLog
 
 /// On-device speech-to-text with NVIDIA Parakeet: English-only (v2) by default, or the
 /// multilingual one (Redux, ~180 MB: English, French and 23 other European languages). The multilingual
@@ -119,7 +120,26 @@ actor Transcriber {
     /// Whether Chinese is ready too (it loads after English).
     var chineseReady: Bool { chinese != nil }
 
+    /// The words in a recording. Nothing heard in audio that has sound in it gets a second try,
+    /// louder: the noise filter can leave quiet speech so faint that the model hears none ("I didn't
+    /// catch any words", 22 Oct). It's raised to a normal level and tried once more.
     func transcribe(_ samples: [Float]) async throws -> String {
+        let text = try await recognise(samples)
+        guard text.isEmpty, samples.count >= 16_000 / 2 else { return text }
+        let peak = samples.reduce(0) { max($0, abs($1)) }
+        guard peak > 0.02, peak < 0.3 else { // silence, or loud enough already
+            Self.log.info("Nothing heard: \(samples.count) samples, peak \(peak)")
+            return text
+        }
+        let gain = 0.5 / peak
+        let again = try await recognise(samples.map { $0 * gain })
+        Self.log.info("Nothing heard at peak \(peak); raised \(gain)x: \(again.isEmpty ? "still nothing" : "heard words", privacy: .public)")
+        return again
+    }
+
+    private static let log = Logger(subsystem: "io.github.tibophlp.shhh", category: "speech")
+
+    private func recognise(_ samples: [Float]) async throws -> String {
         // Chinese still loading (just after launch): wait for it rather than have Parakeet turn
         // Chinese into made-up English.
         for _ in 0..<250 where Self.languages == .chinese && chinese == nil && loadingChinese {

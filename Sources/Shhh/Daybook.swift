@@ -54,11 +54,19 @@ enum Daybook {
             .map { $0.dropFirst(5).trimmingCharacters(in: .whitespaces) }
     }
 
-    static var isCurrent: Bool { date == day(Date()) }
+    /// Today's or, before 04:00, still yesterday's: a student up past midnight is still in
+    /// yesterday's day, so its Daybook stays until the morning instead of a new one at 00:30.
+    static var isCurrent: Bool { date == day(Date()) || date == bookDay }
+
+    /// The day the Daybook belongs to now: yesterday until 04:00.
+    private static var bookDay: String { day(Date().addingTimeInterval(-4 * 3600)) }
+
+    /// Between midnight and 04:00, when no new Daybook is started.
+    static var isLateNight: Bool { Calendar.current.component(.hour, from: Date()) < 4 }
 
     /// A Daybook from an earlier day goes to History, so today's starts fresh.
     static func archiveIfOld() {
-        guard let url, let history, let date, date < day(Date()) else { return }
+        guard let url, let history, let date, date < bookDay else { return }
         let manager = FileManager.default
         try? manager.createDirectory(at: history, withIntermediateDirectories: true)
         var target = history.appendingPathComponent("\(date).md")
@@ -120,8 +128,7 @@ enum Daybook {
 
     /// "Day 9 · Cycle B: P1 08:30 Economics HL (D304), …" for a school day, or nil.
     private static func classes(on date: Date, in timetable: Timetable) -> String? {
-        let iso = day(date)
-        guard let entry = timetable.days.first(where: { $0.first?.text == iso }), entry.count >= 3 else { return nil }
+        guard let entry = schoolDay(on: date, in: timetable) else { return nil }
         let rotation = entry[1].text, cycle = entry[2].text
         let grid = timetable.grids[rotation + cycle] ?? []
         let periods = timetable.rows.compactMap { row -> String? in
@@ -135,7 +142,13 @@ enum Daybook {
             default: return nil
             }
         }
-        return "Day \(rotation) · Cycle \(cycle): " + periods.joined(separator: ", ")
+        return (dayLabel(rotation, cycle).map { "\($0): " } ?? "") + periods.joined(separator: ", ")
+    }
+
+    /// "Day 9 · Cycle B", "Day 3" for a rotation without cycles, nil for a weekly timetable.
+    private static func dayLabel(_ rotation: String, _ cycle: String) -> String? {
+        guard Int(rotation) != nil else { return nil }
+        return cycle.isEmpty ? "Day \(rotation)" : "Day \(rotation) · Cycle \(cycle)"
     }
 
     /// One thing on today's timeline: a class, a calendar event or an alarm.
@@ -157,7 +170,7 @@ enum Daybook {
             return Calendar.current.date(bySettingHour: parts[0], minute: parts[1], second: 0, of: date)
         }
         var slots: [Slot] = []
-        if let timetable, let entry = timetable.days.first(where: { $0.first?.text == day(date) }), entry.count >= 3 {
+        if let timetable, let entry = schoolDay(on: date, in: timetable) {
             let grid = timetable.grids[entry[1].text + entry[2].text] ?? []
             for row in timetable.rows {
                 guard let start = at(row.start) else { continue }
@@ -186,10 +199,27 @@ enum Daybook {
         return slots.sorted { $0.start < $1.start }
     }
 
+    /// Every class in the timetable ("Economics HL", "Chinese B"), for naming a deadline's subject.
+    static var classNames: [String] {
+        guard let timetable else { return [] }
+        let names = timetable.grids.values.joined().filter { $0 != "—" }
+            .compactMap { $0.components(separatedBy: " · ").first?.trimmingCharacters(in: .whitespaces) }
+        return Array(Set(names.filter { !$0.isEmpty && $0.lowercased() != "advisory" })).sorted()
+    }
+
+    /// A day's timetable entry (date, rotation day, cycle), or nil when there's no school: not in
+    /// the timetable, or a holiday on their school calendar (see `CalendarFeed.holidays`).
+    private static func schoolDay(on date: Date, in timetable: Timetable) -> [Timetable.Value]? {
+        let iso = day(date)
+        guard !CalendarFeed.holidays.contains(iso),
+              let entry = timetable.days.first(where: { $0.first?.text == iso }), entry.count >= 3 else { return nil }
+        return entry
+    }
+
     /// Whether there's school on a day (in the saved timetable).
     static func isSchoolDay(_ date: Date) -> Bool {
         guard let timetable else { return !Calendar.current.isDateInWeekend(date) }
-        return timetable.days.contains { $0.first?.text == day(date) }
+        return schoolDay(on: date, in: timetable) != nil
     }
 
     /// Tomorrow's classes, for the night shutdown and "what do I have tomorrow".
@@ -211,6 +241,281 @@ enum Daybook {
         }
         return "No school today or in the next three weeks."
     }
+
+    // MARK: - Built here, each morning
+
+    /// Marks the parts of a locally built Daybook that are still Claude's to fill.
+    static let pendingMark = "_Joe is still checking this._"
+
+    /// Builds today's Daybook without Claude when there's none yet, and says whether it did.
+    @discardableResult
+    static func buildLocally(_ now: Date = Date()) -> Bool {
+        guard let url, !isCurrent, !isLateNight, let text = localText(now) else { return false }
+        archiveIfOld()
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        return (try? text.write(to: url, atomically: true, encoding: .utf8)) != nil
+    }
+
+    /// Today's Daybook from what Joe already has: classes from the timetable; today's events and
+    /// the next three weeks' deadlines from the calendar links and the Mac's Calendar; Today's
+    /// five, Backlog and Inbox carried over from the last day, with what's due today or tomorrow
+    /// added. It takes a moment, where Claude took a minute and a lot of tokens every morning.
+    /// What needs their mail or judgement (Needs you, acting on Inbox) is left to Claude, marked
+    /// with `pendingMark` (see `finishRules`); so are the calendar parts when Joe can't read one.
+    static func localText(_ now: Date = Date()) -> String? {
+        guard root != nil else { return nil }
+        let calendar = Calendar.current
+        let start = calendar.startOfDay(for: now)
+        let tomorrowEnd = calendar.date(byAdding: .day, value: 2, to: start) ?? now
+        let ownCalendar = CalendarFeed.readsCalendarItself
+        let items = CalendarFeed.items(from: start, days: 21)
+        let deadlines = items.filter { $0.kind == .deadline }
+        let events = items.filter { $0.kind == .event && calendar.isDate($0.start, inSameDayAs: now) }
+
+        // The last day's note: still today's if it hasn't been archived yet.
+        let lastURL = (date.map { $0 < day(now) } ?? false) ? url : lastArchived
+        let last = lastURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+        let carried = section("Today's five", of: last).filter { $0.hasPrefix("- [ ]") }.map(carriedAgain)
+        let backlog = section("Backlog", of: last).filter { $0.hasPrefix("- ") && !$0.lowercased().hasPrefix("- [x]") }
+        let inbox = section("Inbox", of: last).filter { $0.hasPrefix("- ") }
+
+        // Due today or tomorrow, unless it's already a task: those come first.
+        let urgent = deadlines.filter { $0.start < tomorrowEnd }
+            .filter { item in !carried.contains { CalendarFeed.sameThing($0, item.title) } }
+            .map { "- [ ] \($0.title) — due \(when($0, now))" + ($0.subject.map { " · \($0)" } ?? "") }
+        let tasks = urgent + carried
+        let five = Array(tasks.prefix(5)), overflow = Array(tasks.dropFirst(5))
+
+        let focus: String
+        if let first = five.first {
+            let task = first.dropFirst(6).components(separatedBy: " — ")[0].components(separatedBy: " · carried")[0]
+            focus = "Get \(task) done."
+        } else if let next = deadlines.first {
+            focus = "Nothing urgent: get ahead on \(next.title), due \(when(next, now))."
+        } else {
+            focus = "A clear day: nothing due in the next three weeks."
+        }
+
+        let rest: [String] = ownCalendar ? (events.isEmpty ? ["Nothing else on the calendar."] : events.map { event -> String in
+            let place = event.detail.isEmpty ? "" : " · \(event.detail)"
+            if event.allDay { return "- All day: \(event.title)\(place)" }
+            let time = hhmm(event.start) + (event.end.map { "–" + hhmm($0) } ?? "")
+            return "- \(time) \(event.title)\(place)"
+        }) : [pendingMark]
+        let due: [String] = ownCalendar || !deadlines.isEmpty ? (deadlines.isEmpty ? ["Nothing due in the next three weeks."] : deadlines.map { item -> String in
+            "- \(when(item, now)) — \(item.title)" + (item.subject.map { " · \($0)" } ?? "")
+        }) : [pendingMark]
+
+        let title = now.formatted(.dateTime.weekday(.wide).day().month(.wide))
+        let owns = last.components(separatedBy: "\n").prefix(12).first { $0.hasPrefix("owns:") }
+            ?? "owns: today's focus, tasks, classes, deadlines and inbox"
+        var lines = [
+            "---",
+            "summary: \"Their day on \(title): focus, five tasks, classes, deadlines, what needs a reply.\"",
+            owns,
+            "date: \(day(now))",
+            "updated: \(day(now)) \(hhmm(now))",
+            "---",
+            "# Daybook — \(title)",
+            "",
+            "**Focus:** \(focus)",
+            "",
+            "## Today's five",
+        ]
+        lines += five.isEmpty ? ["Nothing carried over and nothing due today or tomorrow."] : five
+        let busy = events.filter { !$0.allDay }.map { ($0.start, $0.end ?? $0.start.addingTimeInterval(3600)) }
+        let plan = studyPlan(deadlines, now, busy: busy)
+        if !plan.isEmpty { lines += ["", "## Plan"] + plan }
+        lines += ["", "## Classes", classTable(on: now), "", "## Rest of today"] + rest
+        lines += ["", "## Deadlines"] + due
+        lines += ["", "## Needs you", pendingMark]
+        lines += ["", "## Backlog"] + (overflow + backlog).prefix(30)
+        lines += ["", "## Inbox"] + inbox
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// Deadlines that just appeared on the calendar, into today's Daybook: under Deadlines, and as
+    /// a task (in Today's five when it's due today or tomorrow and there's room, else Backlog).
+    /// Nothing happens before today's Daybook exists: its build picks them up.
+    static func addNewDeadlines(_ items: [CalendarFeed.Item], now: Date = Date()) {
+        guard let url, isCurrent, var text = try? String(contentsOf: url, encoding: .utf8) else { return }
+        let calendar = Calendar.current
+        let soon = calendar.date(byAdding: .day, value: 2, to: calendar.startOfDay(for: now)) ?? now
+        var lines = text.components(separatedBy: "\n")
+        for item in items where !text.contains(item.title) {
+            let subject = item.subject.map { " · \($0)" } ?? ""
+            insert("- \(when(item, now)) — \(item.title)\(subject)", under: "Deadlines", in: &lines)
+            let task = "- [ ] \(item.title) — due \(when(item, now))\(subject) · new"
+            let five = section("Today's five", of: lines.joined(separator: "\n")).filter { $0.hasPrefix("- [") }.count
+            insert(task, under: item.start < soon && five < 5 ? "Today's five" : "Backlog", in: &lines)
+            text = lines.joined(separator: "\n")
+        }
+        try? text.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    /// Adds a line at the end of a `## ` section, replacing a "Nothing …" line there.
+    private static func insert(_ line: String, under heading: String, in lines: inout [String]) {
+        guard let start = lines.firstIndex(where: { $0.hasPrefix("## ") && $0.lowercased().contains(heading.lowercased()) }) else { return }
+        var end = lines[(start + 1)...].firstIndex { $0.hasPrefix("## ") } ?? lines.endIndex
+        if let filler = lines[(start + 1)..<end].firstIndex(where: { $0.hasPrefix("Nothing") }) {
+            lines.remove(at: filler)
+            end -= 1
+        }
+        // After the section's last line, before the blank line that ends it.
+        var at = end
+        while at > start + 1, lines[at - 1].trimmingCharacters(in: .whitespaces).isEmpty { at -= 1 }
+        lines.insert(line, at: at)
+    }
+
+    /// When to work on what's due: today's free periods, after school and the evening, each given
+    /// to the most pressing deadline of the next two weeks (tests and summatives first on the same
+    /// day), so the student sees a plan, not just a list. Suggestions, written at the morning build.
+    private static func studyPlan(_ deadlines: [CalendarFeed.Item], _ now: Date, busy: [(Date, Date)] = []) -> [String] {
+        let calendar = Calendar.current
+        guard let fortnight = calendar.date(byAdding: .day, value: 14, to: now) else { return [] }
+        let weighty = #"\b(test|exam|summative|paper|ia|assessment|essay|quiz)\b"#
+        let work = deadlines.filter { $0.start > now && $0.start < fortnight }.sorted { a, b in
+            let dayA = calendar.startOfDay(for: a.start), dayB = calendar.startOfDay(for: b.start)
+            if dayA != dayB { return dayA < dayB }
+            return (a.title.range(of: weighty, options: [.regularExpression, .caseInsensitive]) != nil)
+                && (b.title.range(of: weighty, options: [.regularExpression, .caseInsensitive]) == nil)
+        }
+        guard !work.isEmpty else { return [] }
+        func at(_ hour: Int, _ minute: Int = 0) -> Date? { calendar.date(bySettingHour: hour, minute: minute, second: 0, of: now) }
+        var blocks: [(label: String, start: Date, end: Date)] = []
+        let lessons = timeline(now).filter { $0.kind == .lesson }
+        if let timetable, let entry = schoolDay(on: now, in: timetable) {
+            let grid = timetable.grids[entry[1].text + entry[2].text] ?? []
+            for row in timetable.rows where row.kind == "class" {
+                guard let index = row.idx, index < grid.count, grid[index] == "—",
+                      let start = time(row.start, on: now), let end = time(row.end, on: now) else { continue }
+                blocks.append(("free P\(row.p ?? "?")", start, end))
+            }
+            if let last = lessons.map({ $0.end ?? $0.start }).max() {
+                let start = last.addingTimeInterval(30 * 60)
+                blocks.append(("after school", start, start.addingTimeInterval(90 * 60)))
+            }
+        } else if let start = at(10), let end = at(12) {
+            blocks.append(("morning", start, end))
+        }
+        if let start = at(19, 30), let end = at(21) { blocks.append(("evening", start, end)) }
+        // Two blocks for the most pressing one, then one each.
+        let order = [work[0]] + work
+        // Around what's already on: a block that meets an event starts when it ends (gym 15:45–16:45
+        // moves after-school work to 16:45), and goes if less than half an hour is left.
+        blocks = blocks.compactMap { block in
+            var block = block
+            for (start, end) in busy.sorted(by: { $0.0 < $1.0 }) where start < block.end && end > block.start {
+                if start > block.start, start.timeIntervalSince(block.start) >= 30 * 60 { block.end = start } else { block.start = end }
+            }
+            return block.end.timeIntervalSince(block.start) >= 30 * 60 ? block : nil
+        }
+        return blocks.filter { $0.end > now }.enumerated().compactMap { index, block in
+            guard index < order.count, order[index].start > block.end else { return nil }
+            let item = order[index]
+            return "- \(hhmm(block.start))–\(hhmm(block.end)) (\(block.label)): \(item.title)"
+                + (item.subject.map { " · \($0)" } ?? "") + " — due \(when(item, now))"
+        }
+    }
+
+    /// "08:30" on a day.
+    private static func time(_ text: String, on date: Date) -> Date? {
+        let parts = text.split(separator: ":").compactMap { Int($0) }
+        guard parts.count == 2 else { return nil }
+        return Calendar.current.date(bySettingHour: parts[0], minute: parts[1], second: 0, of: date)
+    }
+
+    /// What's left for Claude in a locally built Daybook, or nil when it's all done.
+    static var finishRules: String? {
+        guard let url, let text = try? String(contentsOf: url, encoding: .utf8), text.contains(pendingMark) else { return nil }
+        let config = timetable?.config
+        let calendarToo = section("Deadlines", of: text).contains(pendingMark) || section("Rest of today", of: text).contains(pendingMark)
+        let manageBac = config?.managebacCalendarId ?? "ManageBac"
+        let sync = CalendarFeed.syncInstructions.replacingOccurrences(of: " Reply in one line.", with: "")
+        let calendarRules = !calendarToo ? "" : """
+              - Rest of today: today's Google Calendar events that aren't classes (classes carry #class), as \
+            "- 15:00–16:00 Title". Deadlines: the ManageBac calendar (\(manageBac)) for the next three weeks, as \
+            "- <day> — Title · Subject". Then, for the dashboard's calendar: \(sync)
+            """
+        return """
+            Today's Daybook (\(relative(url))) was built from their timetable and calendar. Fill in only the parts \
+            that say "\(pendingMark)", before you answer anything about their day, and leave the rest as it is:
+              - Needs you: at most three emails or invites from the last day that really need their reply (Gmail \
+            inbox, not promotions or social; \(config?.swisLabelId.map { "school mail has label \($0)" } ?? "school mail first")), each with who, \
+            what to do and an [Open](link); then "_N others, all noise._". If you can't reach their mail, write "Mail isn't connected."
+            \(calendarRules)
+              - Inbox: act on its items, then leave it empty. Patterns: read \(relative(patterns)) and add this \
+            weekday's regular meetings to Rest of today. On a posting day add ## Post today.
+              - Change Focus only if something in Needs you matters more.
+            """
+    }
+
+    /// The lines under a `## ` heading (matched loosely), up to the next one.
+    private static func section(_ name: String, of text: String) -> [String] {
+        var inside = false
+        var found: [String] = []
+        for line in text.components(separatedBy: "\n") {
+            if line.hasPrefix("## ") { inside = line.lowercased().contains(name.lowercased()); continue }
+            if inside, !line.trimmingCharacters(in: .whitespaces).isEmpty { found.append(line) }
+        }
+        return found
+    }
+
+    /// A task carried to another day: "carried N×" goes up by one, and from three days it asks for a decision.
+    private static func carriedAgain(_ line: String) -> String {
+        var text = line.replacingOccurrences(of: " · new", with: "")
+        var times = 1
+        if let range = text.range(of: #"carried (\d+)×"#, options: .regularExpression) {
+            times = (Int(text[range].filter(\.isNumber)) ?? 0) + 1
+            text.replaceSubrange(range, with: "carried \(times)×")
+        } else {
+            text += " · carried 1×"
+        }
+        if times >= 3, !text.contains("decide:") { text += " — decide: do it today, hand off or drop" }
+        return text
+    }
+
+    /// "today 15:00", "tomorrow", "Fri 24 Oct 23:59", for a deadline.
+    private static func when(_ item: CalendarFeed.Item, _ now: Date) -> String {
+        let calendar = Calendar.current
+        let time = item.allDay ? "" : " " + hhmm(item.start)
+        if calendar.isDate(item.start, inSameDayAs: now) { return "today" + time }
+        if let next = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(item.start, inSameDayAs: next) { return "tomorrow" + time }
+        return item.start.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)) + time
+    }
+
+    /// "07:05", whatever the Mac's clock style, as the timeline reads it.
+    private static func hhmm(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
+    }
+
+    /// The Classes table: Period, Time, Class, Room.
+    private static func classTable(on date: Date) -> String {
+        guard let timetable, let entry = schoolDay(on: date, in: timetable) else {
+            return "No school today."
+        }
+        let grid = timetable.grids[entry[1].text + entry[2].text] ?? []
+        var rows = (dayLabel(entry[1].text, entry[2].text).map { [$0, ""] } ?? []) + ["| Period | Time | Class | Room |", "|---|---|---|---|"]
+        for row in timetable.rows {
+            switch row.kind {
+            case "class":
+                guard let index = row.idx, index < grid.count else { continue }
+                let parts = grid[index].components(separatedBy: " · ")
+                let name = grid[index] == "—" ? "Free" : parts[0]
+                rows.append("| P\(row.p ?? "?") | \(row.start)–\(row.end) | \(name) | \(parts.count > 1 ? parts[1] : "") |")
+            case "advisory":
+                rows.append("| Advisory | \(row.start)–\(row.end) | Advisory | |")
+            default: continue
+            }
+        }
+        return rows.joined(separator: "\n")
+    }
+
+    /// Forgets the timetable read, so a new one is read at once.
+    static func timetableChanged() { cachedTimetable = nil }
 
     // MARK: - Instructions for the assistant
 
@@ -235,7 +540,7 @@ enum Daybook {
               - Patterns: read \(relative(patterns)) and use it: prepare them for this weekday's regular meetings. \
             When a meeting or call on today's calendar also happened on this weekday last week, add it there.
               - Focus: one sentence, the one thing that matters most today.
-              - Then, for the dashboard's calendar: \(CalendarFeed.syncInstructions.replacingOccurrences(of: " Reply in one line.", with: ""))
+            \(CalendarFeed.links.isEmpty ? "  - Then, for the dashboard's calendar: " + CalendarFeed.syncInstructions.replacingOccurrences(of: " Reply in one line.", with: "") : "")
             """
     }
 
@@ -271,8 +576,11 @@ enum Daybook {
                 --workspace "<name>" (its workspaces: \(Workspace.names.joined(separator: ", "))).
                 """
         }
-        if !isCurrent {
+        if !isCurrent { buildLocally() }
+        if !isCurrent, !isLateNight {
             text += "\nThere's no Daybook for today yet: build it before you answer anything about their day.\n" + buildRules
+        } else if let finish = finishRules {
+            text += "\n" + finish
         }
         return text
     }
@@ -328,6 +636,119 @@ enum Daybook {
             .compactMap { try? String(contentsOf: $0, encoding: .utf8) }
             .flatMap { $0.components(separatedBy: "\n").filter { $0.hasPrefix("- ") } }
         return Array(lines.suffix(limit))
+    }
+}
+
+// MARK: - Timetable from a photo or PDF
+
+extension Daybook {
+    /// Reads a timetable from a photo, screenshot or PDF and saves it as timetable.json, so a new
+    /// student has classes, Now/Next and the Daybook's Classes from the first day. Claude (Sonnet,
+    /// with only the Read tool) reads the file; the dates are worked out here. A weekly timetable
+    /// repeats Monday to Friday; a rotation ("Day 1" to "Day 8") moves on one day per weekday, from
+    /// `dayToday` ("Day 3", or "3") or else Day 1 today. School holidays aren't known, so they
+    /// show as school days. An earlier timetable goes to the Trash. Returns a line to show: what
+    /// was saved, or what went wrong.
+    @MainActor
+    static func importTimetable(from file: URL, dayToday: String? = nil) async -> String {
+        guard let target = timetableURL else { return "Choose your notes folder first: the timetable is saved there." }
+        guard let executable = Assistant.executable else { return "Joe needs Claude set up to read a timetable." }
+        let prompt = """
+            Read the file \(file.lastPathComponent) in this folder with the Read tool. It's a student's school timetable.
+            Reply with JSON only, no other text:
+            {"periods": [{"label": "1", "start": "08:30", "end": "09:20"}, …],
+             "days": [{"day": "Monday", "classes": ["Economics HL · D304", "—", …]}, …]}
+            - periods: the timetable's lessons in order, with 24-hour times. Leave out breaks and lunch. Advisory, \
+            homeroom or tutor time is a period labelled "Advisory".
+            - days: each column or day as printed ("Monday", or "Day 1" for a rotation), in order. classes has one \
+            entry per period, in the same order: the class name as printed with its level (HL/SL) when shown, then \
+            " · " and the room when shown, or "—" for a free period. Spell out short names only when the timetable \
+            itself does.
+            If it isn't a timetable, reply {"error": "<what it is>"}.
+            """
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = ["-p", "--model", Assistant.Model.sonnet.rawValue, "--tools", "Read", "--allowedTools", "Read",
+                             "--strict-mcp-config", "--setting-sources", "user", "--disable-slash-commands",
+                             "--no-session-persistence", "--output-format", "text"]
+        process.environment = Assistant.environment()
+        process.currentDirectoryURL = file.deletingLastPathComponent()
+        let input = Pipe(), output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        let reply: String? = await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                guard (try? process.run()) != nil else { return continuation.resume(returning: nil) }
+                let timeout = DispatchWorkItem { process.terminate() }
+                DispatchQueue.global().asyncAfter(deadline: .now() + 180, execute: timeout)
+                input.fileHandleForWriting.write(Data(prompt.utf8))
+                try? input.fileHandleForWriting.close()
+                let data = output.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                timeout.cancel()
+                continuation.resume(returning: String(data: data, encoding: .utf8))
+            }
+        }
+        guard let reply, let open = reply.firstIndex(of: "{"), let close = reply.lastIndex(of: "}"),
+              let json = try? JSONSerialization.jsonObject(with: Data(reply[open...close].utf8)) as? [String: Any] else {
+            return "Joe couldn't read that timetable. Try a clearer photo or the PDF."
+        }
+        if let error = json["error"] as? String { return "That doesn't look like a timetable (\(error))." }
+        let periods = (json["periods"] as? [[String: String]] ?? []).filter { $0["start"] != nil && $0["end"] != nil }
+        let days = (json["days"] as? [[String: Any]] ?? []).compactMap { entry -> (label: String, classes: [String])? in
+            guard let label = entry["day"] as? String, let classes = entry["classes"] as? [String], !classes.isEmpty else { return nil }
+            return (label, classes)
+        }
+        guard !periods.isEmpty, !days.isEmpty else { return "Joe couldn't find the periods and days in that timetable." }
+        guard let saved = timetableJSON(periods: periods, days: days, dayToday: dayToday) else {
+            return "Joe couldn't work out the days of that timetable."
+        }
+        let manager = FileManager.default
+        try? manager.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if manager.fileExists(atPath: target.path) { try? manager.trashItem(at: target, resultingItemURL: nil) }
+        guard (try? saved.write(to: target)) != nil else { return "Joe couldn't save the timetable." }
+        timetableChanged()
+        let classes = Set(days.flatMap(\.classes).filter { $0 != "—" }.map { $0.components(separatedBy: " · ")[0] })
+        return "Saved your timetable: \(days.count) days, \(periods.count) periods, \(classes.count) classes."
+    }
+
+    /// timetable.json in the shape `Timetable` reads: dates for the next half year, each with its
+    /// timetable day; a grid of classes per day; the periods as rows.
+    static func timetableJSON(periods: [[String: String]], days: [(label: String, classes: [String])], dayToday: String?,
+                              from now: Date = Date()) -> Data? {
+        let weekdays = ["sun": 1, "mon": 2, "tue": 3, "wed": 4, "thu": 5, "fri": 6, "sat": 7]
+        func weekday(_ label: String) -> Int? { weekdays[String(label.lowercased().trimmingCharacters(in: .whitespaces).prefix(3))] }
+        let weekly = days.allSatisfy { weekday($0.label) != nil }
+        // Grid keys are rotation + cycle; the cycle is left empty here.
+        let keys = days.enumerated().map { weekly ? String($0.element.label.prefix(3)) : String($0.offset + 1) }
+        var grids: [String: [String]] = [:]
+        for (key, day) in zip(keys, days) { grids[key] = day.classes }
+        let rows: [[String: Any]] = periods.enumerated().map { index, period -> [String: Any] in
+            let label = period["label"] ?? String(index + 1)
+            if label.lowercased().range(of: #"advisory|homeroom|tutor"#, options: .regularExpression) != nil {
+                return ["kind": "advisory", "start": period["start"] ?? "", "end": period["end"] ?? ""]
+            }
+            return ["kind": "class", "start": period["start"] ?? "", "end": period["end"] ?? "", "idx": index,
+                    "p": label.replacingOccurrences(of: #"^(P|Period)\s*"#, with: "", options: [.regularExpression, .caseInsensitive])]
+        }
+        let calendar = Calendar.current
+        var position = 0
+        if !weekly, let dayToday, let number = Int(dayToday.filter(\.isNumber)), number >= 1 { position = (number - 1) % days.count }
+        var dated: [[String]] = []
+        for offset in 0..<183 {
+            guard let date = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: now)) else { continue }
+            let number = calendar.component(.weekday, from: date)
+            if weekly {
+                if let index = days.firstIndex(where: { weekday($0.label) == number }) { dated.append([date.formatted(.localDay), keys[index], ""]) }
+            } else if (2...6).contains(number) {
+                dated.append([date.formatted(.localDay), keys[position], ""])
+                position = (position + 1) % days.count
+            }
+        }
+        guard !dated.isEmpty else { return nil }
+        let timetable: [String: Any] = ["days": dated, "grids": grids, "rows": rows, "config": [String: String]()]
+        return try? JSONSerialization.data(withJSONObject: timetable, options: [.prettyPrinted, .sortedKeys])
     }
 }
 

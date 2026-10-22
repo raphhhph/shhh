@@ -66,7 +66,22 @@ final class StudyBoard: NSObject, NSWindowDelegate {
             "English A Language and Literature": ["english", "lang and lit", "lang & lit"],
             "Chinese B": ["chinese", "mandarin", "中文"],
             "Theory of Knowledge": ["tok", "theory of knowledge"],
+            "Mathematics AA": ["math", "maths", "calculus", "statistic", "probability", "integra", "derivative", "vector"],
+            "Physics": ["physic", "kinematic", "momentum", "circuit"],
+            "Chemistry": ["chem", "organic", "titration", "enthalpy"],
+            "Biology": ["bio", "cell", "enzyme", "genetic"],
+            "History": ["histor", "cold war", "authoritarian"],
+            "Psychology": ["psych"],
+            "English B": ["english"],
+            "Spanish": ["spanish", "español", "espanol"],
+            "Geography": ["geog"],
+            "Computer Science": ["computer", "coding", "programming", "algorithm", "sql"],
+            "Global Politics": ["politic", "sovereignty", "human rights"],
         ]
+        // Their own name for the subject ("quiz me on Geography") wins, with or without a map.
+        if let named = subjects.first(where: {
+            lower.range(of: #"\b"# + NSRegularExpression.escapedPattern(for: $0.lowercased()) + #"\b"#, options: .regularExpression) != nil
+        }) { return named }
         for subject in subjects {
             guard let pack = StudyBuddy.pack(for: subject), let words = keys[pack] else { continue }
             if words.contains(where: { lower.contains($0) }) { return subject }
@@ -79,13 +94,17 @@ final class StudyBoard: NSObject, NSWindowDelegate {
 
 @MainActor
 final class StudyBoardModel: ObservableObject {
-    enum Mode: String { case quiz, exam }
+    enum Mode: String { case quiz, exam, cards }
 
     enum Item: Identifiable, Equatable {
         case question(n: Int, marks: Int, topic: String, source: String, text: String)
         case answer(text: String, spoken: Bool, image: Data? = nil)
         case feedback(score: Int, total: Int, text: String, model: String)
         case summary(score: Int, total: Int, text: String)
+        /// A short lesson before the questions ("teach me…", or a topic they keep losing marks on).
+        case lesson(title: String, text: String)
+        /// Definitions to learn word for word, after the summary: saved to their flashcards.
+        case cards([Flashcards.Card])
         case note(String)
 
         var id: String {
@@ -94,6 +113,8 @@ final class StudyBoardModel: ObservableObject {
             case let .answer(text, _, image): "a\(text.hashValue)\(image?.count ?? 0)"
             case let .feedback(score, total, text, _): "f\(score)/\(total)\(text.prefix(20))"
             case let .summary(_, _, text): "s\(text.prefix(20))"
+            case let .lesson(title, text): "l\(title)\(text.prefix(20))"
+            case let .cards(cards): "c\(cards.count)\(cards.first?.term ?? "")"
             case let .note(text): "n\(text.hashValue)"
             }
         }
@@ -110,6 +131,13 @@ final class StudyBoardModel: ObservableObject {
     @Published var readAloud = UserDefaults.standard.object(forKey: "studyReadAloud") as? Bool ?? true {
         didSet { UserDefaults.standard.set(readAloud, forKey: "studyReadAloud") }
     }
+
+    // Reviewing their flashcards: the cards still to go (the next one first), and how it's going.
+    @Published private(set) var deck: [Flashcards.Card] = []
+    @Published private(set) var deckSize = 0
+    @Published private(set) var known = 0
+    @Published private(set) var again: Set<String> = []
+    @Published var flipped = false
 
     var speak: (String) -> Void = { _ in }
     var stopSpeaking: () -> Void = {}
@@ -137,14 +165,52 @@ final class StudyBoardModel: ObservableObject {
         live = []
         draft = ""
         startedAt = Date()
+        if mode == .cards { shuffleDeck(); return }
         let assistant = Assistant()
         assistant.tutorPrompt = Self.tutorPrompt(subject: subject, mode: mode)
+        // New or changed past papers are read in the background, for the next session's index.
+        PastPapers.refreshInBackground(pack: StudyBuddy.pack(for: subject))
         self.assistant = assistant
         assistant.prepare { [weak self] event in self?.handle(event) }
         let opening = request ?? (mode == .exam
             ? "Give me one full exam-style question."
             : "Start the quiz: five questions, focusing on my weak spots if you know them.")
         send(opening)
+    }
+
+    // MARK: Flashcards
+
+    /// The subject's cards, shuffled, with the ones they missed last time first.
+    private func shuffleDeck() {
+        let cards = Flashcards.cards(subject)
+        let missed = Set(Flashcards.missed(subject))
+        deck = cards.filter { missed.contains($0.id) }.shuffled() + cards.filter { !missed.contains($0.id) }.shuffled()
+        deckSize = deck.count
+        known = 0
+        again = []
+        flipped = false
+    }
+
+    func reviewCards() {
+        start(subject: subject, request: nil, mode: .cards)
+    }
+
+    /// "Got it", or "Again": the card comes back at the end of the deck.
+    func mark(gotIt: Bool) {
+        guard !deck.isEmpty else { return }
+        let card = deck.removeFirst()
+        flipped = false
+        if gotIt { known += 1 } else { deck.append(card); again.insert(card.id) }
+        if deck.isEmpty { Flashcards.setMissed(Array(again), subject: subject) }
+    }
+
+    /// A quiz on the cards they needed another go at (or the whole deck).
+    func quizOnCards() {
+        let all = Flashcards.cards(subject)
+        let missed = all.filter { again.contains($0.id) }
+        let terms = (missed.isEmpty ? all : missed).prefix(8).map(\.term)
+        let request = terms.isEmpty ? nil : "Quiz me on these definitions: define questions first, then applying them. \(terms.joined(separator: "; "))."
+        start(subject: subject, request: request, mode: .quiz)
     }
 
     func end() {
@@ -212,14 +278,22 @@ final class StudyBoardModel: ObservableObject {
         let date = Date().formatted(.iso8601.year().month().day())
         var lines: [String] = []
         var topic = items.reversed().compactMap { if case let .question(_, _, topic, _, _) = $0 { return topic } else { return nil } }.first ?? ""
+        var question = items.reversed().compactMap { if case let .question(_, _, _, _, text) = $0 { return text } else { return nil } }.first ?? ""
+        var lost: [Mistakes.Entry] = []
         for item in parsed {
-            if case let .question(_, _, next, _, _) = item { topic = next }
+            if case let .question(_, _, next, _, text) = item { topic = next; question = text }
+            if case let .feedback(score, total, text, model) = item, total > 0, score < total {
+                lost.append(Mistakes.Entry(date: date, topic: topic, score: score, total: total, question: question,
+                                           missing: Mistakes.missing(in: text), model: model))
+            }
             if case let .feedback(score, total, text, _) = item, total > 0 {
                 let missing = text.components(separatedBy: "\n").first { $0.lowercased().contains("missing") || $0.contains("✗") } ?? ""
                 let note = missing.replacingOccurrences(of: #"^[-•*✗\s]+"#, with: "", options: .regularExpression).prefix(80)
                 lines.append("- \(date) · \(subject) · \(topic) · \(score)/\(total) · \(note)")
             }
         }
+        Mistakes.record(lost, subject: subject)
+        for case let .cards(cards) in parsed { Flashcards.save(cards, subject: subject) }
         guard !lines.isEmpty else { return }
         let url = StudyBuddy.logURL
         var log = (try? String(contentsOf: url, encoding: .utf8)) ?? "# Quiz log\n"
@@ -234,9 +308,13 @@ final class StudyBoardModel: ObservableObject {
         var parts: [String] = []
         for item in parsed {
             switch item {
-            case let .note(text): parts.append(text)
+            case let .note(text): parts.append(BoardMath.speakable(text))
+            case let .lesson(title, text):
+                // The title and the first sentence; the rest is for reading.
+                let first = text.components(separatedBy: CharacterSet(charactersIn: ".!?\n")).first ?? ""
+                parts.append(BoardMath.speakable(title + ". " + first + "."))
             case let .question(_, marks, _, _, text):
-                parts.append(text.replacingOccurrences(of: #"\|.*\|"#, with: "", options: .regularExpression) + " For \(marks) mark\(marks == 1 ? "" : "s").")
+                parts.append(BoardMath.speakable(text).replacingOccurrences(of: #"\|.*\|"#, with: "", options: .regularExpression) + " For \(marks) mark\(marks == 1 ? "" : "s").")
             default: break
             }
         }
@@ -255,7 +333,7 @@ final class StudyBoardModel: ObservableObject {
             if let (score, total, body) = pendingFeedback { items.append(.feedback(score: score, total: total, text: body, model: model)) }
             pendingFeedback = nil
         }
-        while let open = rest.range(of: #"<(question|feedback|model|summary|ms)\b[^>]*>"#, options: .regularExpression) {
+        while let open = rest.range(of: #"<(question|feedback|model|summary|lesson|cards|ms)\b[^>]*>"#, options: .regularExpression) {
             let before = rest[..<open.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
             if !before.isEmpty { flushFeedback(); items.append(.note(before)) }
             let tag = String(rest[open])
@@ -277,6 +355,13 @@ final class StudyBoardModel: ObservableObject {
             case "feedback":
                 flushFeedback()
                 pendingFeedback = (Int(attribute("score")) ?? 0, Int(attribute("total")) ?? 0, body)
+            case "lesson":
+                flushFeedback()
+                items.append(.lesson(title: attribute("title"), text: body))
+            case "cards":
+                flushFeedback()
+                let cards = body.components(separatedBy: "\n").compactMap(Flashcards.parse)
+                if !cards.isEmpty { items.append(.cards(cards)) }
             case "model":
                 if pendingFeedback != nil { flushFeedback(model: body) } else { items.append(.feedback(score: 0, total: 0, text: "", model: body)) }
             default:
@@ -299,22 +384,43 @@ final class StudyBoardModel: ObservableObject {
 
     static func tutorPrompt(subject: String, mode: Mode) -> String {
         // MYP students are marked on criteria A–D, out of 8, not on DP marks.
-        let myp = Profile.programme.uppercased().contains("MYP")
+        let myp = Profile.isMYP
         let pack = myp ? "MYP" : StudyBuddy.pack(for: subject)
         let map = pack.flatMap { try? String(contentsOf: StudyBuddy.syllabus.appendingPathComponent($0 + ".md"), encoding: .utf8) } ?? ""
         let terms = (try? String(contentsOf: StudyBuddy.syllabus.appendingPathComponent("Command terms.md"), encoding: .utf8)) ?? ""
-        let history = StudyBuddy.results().filter { StudyBuddy.pack(for: $0.subject) == pack }.suffix(25)
+        // Their results in this subject: by its map, or by name when it has none (and for MYP, whose map is the framework).
+        let subjectPack = StudyBuddy.pack(for: subject)
+        let history = StudyBuddy.results().filter { subjectPack == nil ? $0.subject == subject : StudyBuddy.pack(for: $0.subject) == subjectPack }.suffix(25)
             .map { "- \($0.topic): \($0.score)/\($0.total) \($0.note)" }.joined(separator: "\n")
+        let due = StudyReview.lines(StudyReview.due(subject: subject), limit: 10)
         let exe = Bundle.main.executablePath ?? "Joe"
-        let papers = Self.pastPapers(for: pack)
+        let papers = myp ? [] : Self.pastPapers(for: subjectPack)
+        // Weak and due topics first, so a real question on what they need comes up.
+        let weak = Dictionary(grouping: StudyBuddy.results().filter { StudyBuddy.pack(for: $0.subject) == subjectPack }, by: \.topic)
+            .filter { Double($0.value.reduce(0) { $0 + $1.score }) / Double(max(1, $0.value.reduce(0) { $0 + $1.total })) < 0.6 }.keys
+        let focus: [String] = StudyReview.due(subject: subject).map(\.topic) + Array(weak)
+        let indexed: String? = myp ? nil : subjectPack.flatMap { PastPapers.promptIndex(pack: $0, focus: focus) }
+        let material: String
+        if indexed != nil {
+            material = "Their saved past papers are indexed below, question by question (topic, marks, pages). Prefer a real question on the topic they want (or a due or weak one): read its pages with \"\(exe)\" --pdf-text \"<file>\" \"<pages>\", ask it as printed (with its data, parts and marks; LaTeX for maths) and source=\"<paper title> Q<n>\". When it has markscheme pages, read them in the same step and put the real mark points in <ms>; mark with those."
+        } else if papers.isEmpty {
+            material = "No past papers are saved for this subject yet; write questions in the exact style of the real papers described below."
+        } else {
+            material = "Past papers saved for this subject: \(papers.joined(separator: "; ")). Prefer real questions from them: find one with \"\(exe)\" --pdf-find \"<pdf>\" \"<topic>\", read it with \"\(exe)\" --pdf-text \"<pdf>\" \"<pages>\", ask it as printed (with its data) and source=\"<paper, year, question>\", and mark with its markscheme when there is one."
+        }
+        let paperIndex = indexed.map { "\n# Their past papers, indexed\n" + $0 } ?? ""
+        let mistakes = Mistakes.recent(subject).joined(separator: "\n\n")
+        let coverage = StudyReview.coverage(subject: subject)
+        let untouched = myp || coverage.untouched.isEmpty ? "" : "\n\n# Never practised yet (\(coverage.done) of \(coverage.total) subtopics done; when nothing is due and they name no topic, mix these in; \"something new\" means these)\n" + coverage.untouched.prefix(20).map { "- " + $0 }.joined(separator: "\n")
         let notes = StudyBuddy.schoolFolder?.appendingPathComponent("Subjects").path
         return """
-            You are Joe, an IB Diploma tutor running a practice session on a whiteboard for \(Profile.name.isEmpty ? "a student" : Profile.name). \
+            You are Joe, an IB \(Profile.isMYP ? "MYP" : "Diploma") tutor running a practice session on a whiteboard for \(Profile.name.isEmpty ? "a student" : Profile.name). \
             \(Profile.description) Subject: \(subject).
 
             # How to write (the whiteboard reads these tags)
             - A question: <question n="1" marks="4" topic="2.8 Externalities" source="IB-style">the question in Markdown</question>. \
-            Data as Markdown tables; maths in plain text (x², √, ≤, fractions as a/b). One question at a time. Never put the answer in it.
+            Data as Markdown tables; maths in LaTeX, inline as \\( \\frac{dy}{dx} = 3x^2 \\) and on its own line as \\[ \\int_0^1 x^2\\,dx \\] (the whiteboard \
+            typesets it; plain numbers and money like $5 stay plain text). Same in feedback and model answers. One question at a time. Never put the answer in it.
             - Right after each question, its markscheme, hidden from them: <ms>each mark point as the IB would write it (M1, A1, \
             or one point per mark; for markband questions, what each band needs), and acceptable alternatives</ms>. Mark their answer \
             strictly against it, so the same answer always gets the same mark.
@@ -323,30 +429,45 @@ final class StudyBoardModel: ObservableObject {
             then <model>the answer a markscheme would credit, concise</model>, then the next <question>.
             - Outside the tags, at most one short sentence, said aloud ("Nice, three out of four."). No other chatter.
             - At the end: <summary score="x" total="y">strengths, the weakest topic, the one thing to revise next</summary>.
+            - Right after the summary, flashcards of what they must know word for word: <cards>one per line, term :: the definition as the \
+            markscheme words it</cards>. One for every define question in the session, plus the key terms they got wrong or left out; at most 12, \
+            none when there were none. They're saved to their deck for review. When they ask you to make flashcards on a topic, give the <cards> \
+            tag straight away (8 to 15 cards, from the syllabus map and their notes) and no questions.
+            - To teach before testing: <lesson title="2.9 Public goods">a short lesson in Markdown: the key definitions word for word, the idea in \
+            3 to 6 bullets, the diagram described (axes, curves, the shift), one worked example or real-world case, and the mistakes that lose \
+            marks (theirs first, from their mistake book)</lesson>, then the first question on it. Give a lesson when they ask to be taught or to \
+            "explain" a topic, and before the first question on a topic they scored under 40% on twice or more. At most about 180 words.
 
-            \(myp ? "# MYP\nThey're in the MYP (\(Profile.programme)). Name the criterion each question targets, and mark on that criterion's band and level out of 8 (score=\"6\" total=\"8\"), using the descriptors below. No DP papers.\n" : "")
+            \(myp ? MYP.prompt(subject: subject) : "")
             # The session
             \(mode == .exam
                 ? "Exam mode: one full question in the style of a real paper for this subject (with parts (a), (b)…, a stimulus or data where the paper has one, marks per part). Mark it part by part; long parts with markbands. Then the summary."
-                : "Quiz mode: five questions, easier to harder, IB command terms and marks in brackets, a mix of definitions, application to a short context, calculations where the subject has them, and one exam-style question. Cover the topic they ask for, or their weakest topics from the results below. After the fifth, the summary.")
+                : "Quiz mode: five questions, easier to harder, IB command terms and marks in brackets, a mix of definitions, application to a short context, calculations where the subject has them, and one exam-style question. Cover the topic they ask for; otherwise the topics due for review below first (they're about to forget them), then their weakest topics from the results. After the fifth, the summary.")
             - "hint": a hint, not the answer. "skip": the model answer and 0 marks (a feedback tag with score 0), then go on. "end": the summary now. \
             Any other question from them: answer it briefly, then carry on.
             - Mark strictly but fairly, like an IB examiner: the command term sets the depth, partial marks are fine, follow-through for \
             a slip carried correctly. Diagrams: they describe them in words; mark the description.
             \(pack == "Chinese B" ? "- Chinese B: questions in simplified Chinese; corrections as 原句 → 改正; explanations in English.\n" : "")
             # Material
-            - Real past-paper questions beat invented ones. \(papers.isEmpty ? "No past papers are saved for this subject yet; write questions in the exact style of the real papers described below." : "Past papers saved for this subject: \(papers.joined(separator: "; ")). Prefer real questions from them: find one with \"\(exe)\" --pdf-find \"<pdf>\" \"<topic>\", read it with \"\(exe)\" --pdf-text \"<pdf>\" \"<pages>\", ask it as printed (with its data) and source=\"<paper, year, question>\", and mark with its markscheme when there is one.")
+            - Real past-paper questions beat invented ones. \(material)
             \(notes.map { "- Their class notes are in \($0), for when they ask for questions \"from my notes\"." } ?? "")
             - Speed matters: they're waiting. Ask the first question straight away, with no tools, unless you're taking it from a past paper. Never use tools to mark.
 
+            # Due for review (spaced repetition: a topic comes back sooner when they scored low)
+            \(due.isEmpty ? "Nothing due." : due)
+
             # Their recent results in this subject
             \(history.isEmpty ? "None yet." : history)
+
+            # Their recent mistakes (from their mistake book: re-test these with a fresh question on the same point, never the same wording; "redo my mistakes" means only these)
+            \(mistakes.isEmpty ? "None yet." : mistakes)\(untouched)
 
             # Syllabus map
             \(map)
 
             # Command terms and marking
             \(terms)
+            \(paperIndex)
             """
     }
 
@@ -384,33 +505,11 @@ private struct StudyBoardView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            ScrollViewReader { scroll in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 14) {
-                        if model.items.isEmpty && model.live.isEmpty && !model.isBusy {
-                            empty
-                        }
-                        ForEach(model.items + model.live) { item in
-                            row(item)
-                        }
-                        if model.isBusy {
-                            HStack(spacing: 8) {
-                                ProgressView().controlSize(.small)
-                                Text(model.status ?? "Thinking…").font(.system(size: 12.5)).foregroundStyle(.secondary)
-                            }
-                            .padding(.leading, 4)
-                        }
-                        Color.clear.frame(height: 1).id("end")
-                    }
-                    .padding(24)
-                    .frame(maxWidth: 820)
-                    .frame(maxWidth: .infinity)
-                }
-                .onChange(of: model.items.count) { withAnimation { scroll.scrollTo("end", anchor: .bottom) } }
-                .onChange(of: model.live) { scroll.scrollTo("end", anchor: .bottom) }
+            if model.mode == .cards {
+                deckView
+            } else {
+                session
             }
-            Divider()
-            composer
         }
         .frame(minWidth: 620, minHeight: 520)
         .background(Color(nsColor: .textBackgroundColor))
@@ -418,12 +517,97 @@ private struct StudyBoardView: View {
         .tint(accent)
     }
 
+    @ViewBuilder
+    private var session: some View {
+        ScrollViewReader { scroll in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    if model.items.isEmpty && model.live.isEmpty && !model.isBusy {
+                        empty
+                    }
+                    ForEach(model.items + model.live) { item in
+                        row(item)
+                    }
+                    if model.isBusy {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text(model.status ?? "Thinking…").font(.system(size: 12.5)).foregroundStyle(.secondary)
+                        }
+                        .padding(.leading, 4)
+                    }
+                    Color.clear.frame(height: 1).id("end")
+                }
+                .padding(24)
+                .frame(maxWidth: 820)
+                .frame(maxWidth: .infinity)
+            }
+            .onChange(of: model.items.count) { withAnimation { scroll.scrollTo("end", anchor: .bottom) } }
+            .onChange(of: model.live) { scroll.scrollTo("end", anchor: .bottom) }
+        }
+        Divider()
+        composer
+    }
+
+    // MARK: Flashcards
+
+    private var deckView: some View {
+        VStack(spacing: 18) {
+            Spacer(minLength: 0)
+            if let card = model.deck.first {
+                Text("\(model.known) of \(model.deckSize) known").font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary)
+                VStack(spacing: 14) {
+                    Text(card.term).font(.system(size: 24, weight: .bold)).multilineTextAlignment(.center)
+                    if model.flipped {
+                        Divider()
+                        BoardText(card.definition, size: 16, spacing: 3)
+                    } else {
+                        Text("Say the definition to yourself, then turn the card").font(.system(size: 12.5)).foregroundStyle(.tertiary)
+                    }
+                }
+                .padding(28)
+                .frame(maxWidth: 560, minHeight: 240)
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(accent.opacity(0.35)))
+                .contentShape(Rectangle())
+                .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { model.flipped.toggle() } }
+                HStack(spacing: 12) {
+                    if model.flipped {
+                        Button("Again") { model.mark(gotIt: false) }.keyboardShortcut("1", modifiers: [])
+                        Button("Got it") { model.mark(gotIt: true) }.keyboardShortcut("2", modifiers: []).buttonStyle(.borderedProminent)
+                    } else {
+                        Button("Turn over") { withAnimation(.easeOut(duration: 0.15)) { model.flipped = true } }
+                            .keyboardShortcut(.space, modifiers: [])
+                    }
+                }
+                .buttonStyle(.bordered).controlSize(.large)
+            } else if model.deckSize == 0 {
+                Text("No \(model.subject) flashcards yet").font(.system(size: 16, weight: .bold))
+                Text("Joe makes them after each quiz, from the definitions it asked you.").font(.system(size: 13)).foregroundStyle(.secondary)
+                Button("Quiz me on \(model.subject)") { model.quizOnCards() }.buttonStyle(.borderedProminent).controlSize(.large)
+            } else {
+                Image(systemName: "checkmark.circle.fill").font(.system(size: 34)).foregroundStyle(.green)
+                Text("Deck done").font(.system(size: 18, weight: .bold))
+                Text(model.again.isEmpty ? "All \(model.deckSize) known first time."
+                     : "\(model.deckSize) cards, \(model.again.count) needed another go. Those come first next time.")
+                    .font(.system(size: 13)).foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    Button("Go again") { model.reviewCards() }
+                    Button(model.again.isEmpty ? "Quiz me on these" : "Quiz me on the hard ones") { model.quizOnCards() }.buttonStyle(.borderedProminent)
+                }
+                .buttonStyle(.bordered).controlSize(.large)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private var header: some View {
         HStack(spacing: 12) {
             Image(systemName: "graduationcap.fill").foregroundStyle(accent).font(.system(size: 16))
             VStack(alignment: .leading, spacing: 1) {
                 Text(model.subject.isEmpty ? "Study" : model.subject).font(.system(size: 16, weight: .bold))
-                Text(model.mode == .exam ? "Exam question" : "Quiz · five questions").font(.system(size: 11.5)).foregroundStyle(.secondary)
+                Text(model.mode == .cards ? "Flashcards" : model.mode == .exam ? "Exam question" : "Quiz · five questions").font(.system(size: 11.5)).foregroundStyle(.secondary)
             }
             Spacer()
             let (score, total) = model.score
@@ -461,8 +645,9 @@ private struct StudyBoardView: View {
                     Spacer()
                     if marks > 0 { Text("[\(marks)]").font(.system(size: 13, weight: .bold).monospacedDigit()).foregroundStyle(.secondary) }
                 }
-                Text(Self.markdown(text)).font(.system(size: 15.5)).lineSpacing(3).textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                // The marks are in the corner; a "[4]" at the end of the text would say it twice.
+                BoardText(marks > 0 ? text.replacingOccurrences(of: #"\s*\[\d{1,2}\]\s*$"#, with: "", options: .regularExpression) : text,
+                          size: 15.5, spacing: 3)
             }
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -493,13 +678,12 @@ private struct StudyBoardView: View {
                     }
                 }
                 if !text.isEmpty {
-                    Text(Self.markdown(text)).font(.system(size: 13.5)).lineSpacing(2).fixedSize(horizontal: false, vertical: true)
+                    BoardText(text, size: 13.5)
                 }
                 if !modelAnswer.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("MODEL ANSWER").font(.system(size: 10.5, weight: .bold)).foregroundStyle(.secondary)
-                        Text(Self.markdown(modelAnswer)).font(.system(size: 13.5)).lineSpacing(2).textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
+                        BoardText(modelAnswer, size: 13.5)
                     }
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -512,13 +696,41 @@ private struct StudyBoardView: View {
         case let .summary(score, total, text):
             VStack(alignment: .leading, spacing: 8) {
                 Text(total > 0 ? "Session: \(score)/\(total)" : "Session summary").font(.system(size: 16, weight: .bold))
-                Text(Self.markdown(text)).font(.system(size: 13.5)).fixedSize(horizontal: false, vertical: true)
+                BoardText(text, size: 13.5, spacing: 0)
             }
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         case let .note(text):
-            Text(Self.markdown(text)).font(.system(size: 13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            BoardText(text, size: 13, spacing: 0, secondary: true)
+        case let .cards(cards):
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label("\(cards.count) flashcard\(cards.count == 1 ? "" : "s") saved", systemImage: "rectangle.on.rectangle.angled")
+                        .font(.system(size: 13, weight: .bold)).foregroundStyle(accent)
+                    Spacer()
+                    Button("Review them") { model.reviewCards() }.buttonStyle(.bordered).disabled(model.isBusy)
+                }
+                ForEach(cards) { card in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(card.term).font(.system(size: 13, weight: .semibold))
+                        Text(card.definition).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        case let .lesson(title, text):
+            VStack(alignment: .leading, spacing: 8) {
+                Label(title.isEmpty ? "Lesson" : title, systemImage: "book.closed.fill")
+                    .font(.system(size: 13, weight: .bold)).foregroundStyle(accent)
+                BoardText(text, size: 14, spacing: 3)
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(alignment: .leading) { Rectangle().fill(accent).frame(width: 3).padding(.vertical, 14) }
         }
     }
 
@@ -585,10 +797,6 @@ private struct StudyBoardView: View {
         return ratio >= 0.7 ? .green : ratio >= 0.45 ? .orange : .red
     }
 
-    /// Markdown for bold, italics and lists; tables and the rest shown as written.
-    private static func markdown(_ text: String) -> AttributedString {
-        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
-    }
 }
 
 // MARK: - Sketch pad
@@ -653,7 +861,9 @@ extension StudyBoard {
         board.model.preview(StudyBoardModel.parse("""
             Let's go. <question n="1" marks="4" topic="2.7 Indirect taxes" source="IB-style">**Draw** a diagram to show the effect of a specific tax on a market. [4]</question><ms>hidden</ms>
             """) + [.answer(text: "Supply shifts up by the tax, price rises, quantity falls.", spoken: true)] + StudyBoardModel.parse("""
-            <feedback n="1" score="3" total="4">✓ Supply shifts up by the tax\\n✓ Higher price, lower quantity\\n✗ missing: the price producers receive</feedback><model>S shifts vertically by the tax; consumers pay Pc, producers get Pp.</model>
+            <feedback n="1" score="3" total="4">✓ Supply shifts up by the tax
+            ✓ Higher price, lower quantity
+            ✗ missing: the price producers receive</feedback><model>S shifts vertically by the tax; consumers pay Pc, producers get Pp.</model>
             """), subject: "Economics HL", sketching: sketch)
         // A tax diagram in the three inks: black axes and demand, blue supply, red supply after the tax.
         func line(_ a: CGPoint, _ b: CGPoint, _ color: Color) -> SketchPad.Stroke {

@@ -159,6 +159,7 @@ enum StudyBuddy {
             shift, the area) and mark that.
             - After five questions, or when they stop: their score, the weakest topic and the one thing to \
             revise next.
+            \(Profile.isMYP ? "- MYP: they're in the MYP, so no DP marks or papers. Read MYP.md, name the criterion (A–D) each question targets, mark on its level out of 8 with the band's descriptor, and use total=\"8\" in the mark tag. Set questions in a real-world context with a global context named.\n" : "")\
             - Maths: numbers that work on a GDC, method and accuracy marks. Chinese B: questions in Chinese, \
             corrections shown as 原句 → 改正, explanations in English.
             """

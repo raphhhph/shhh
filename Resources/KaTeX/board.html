@@ -1,0 +1,113 @@
+<!doctype html>
+<!-- Joe's study whiteboard: one card's text, with maths typeset by KaTeX (katex.min.js, beside this
+     page). BoardMath.swift loads it once per card and calls render({text, size, secondary}); the
+     page reports its height back so the card fits it. -->
+<html><head><meta charset="utf-8">
+<link rel="stylesheet" href="katex.min.css">
+<script src="katex.min.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+  body { font: 15px/1.45 -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif; color: rgba(0, 0, 0, 0.86); -webkit-user-select: text; cursor: text; }
+  body.secondary { color: rgba(0, 0, 0, 0.5); }
+  @media (prefers-color-scheme: dark) {
+    body { color: rgba(255, 255, 255, 0.9); }
+    body.secondary { color: rgba(255, 255, 255, 0.55); }
+    td, th { border-color: rgba(255, 255, 255, 0.18) !important; }
+    code { background: rgba(255, 255, 255, 0.08) !important; }
+  }
+  #c > :first-child { margin-top: 0; }
+  #c > :last-child { margin-bottom: 0; }
+  p { margin: 0 0 0.55em; }
+  ul, ol { margin: 0.15em 0 0.55em; padding-left: 1.35em; }
+  li { margin: 0.1em 0; }
+  table { border-collapse: collapse; margin: 0.35em 0 0.6em; font-size: 0.92em; }
+  td, th { border: 1px solid rgba(0, 0, 0, 0.14); padding: 3px 9px; text-align: left; }
+  th { font-weight: 600; }
+  code { font: 0.9em ui-monospace, Menlo, monospace; background: rgba(0, 0, 0, 0.05); padding: 0 3px; border-radius: 3px; }
+  .katex { font-size: 1.08em; }
+  .katex-display { margin: 0.35em 0 0.55em; text-align: left; overflow-x: auto; overflow-y: hidden; }
+  .katex-display > .katex { text-align: left; }
+</style></head>
+<body><div id="c"></div>
+<script>
+const c = document.getElementById('c');
+const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const tex = (src, display) => {
+  try { return katex.renderToString(src, { displayMode: display, throwOnError: false, strict: 'ignore' }); }
+  catch (e) { return esc(src); }
+};
+const inline = s => s
+  .replace(/`([^`]+)`/g, '<code>$1</code>')
+  .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+  .replace(/__([^_]+)__/g, '<b>$1</b>')
+  .replace(/(^|[^*\w])\*([^*\s][^*]*?)\*(?!\w)/g, '$1<i>$2</i>')
+  .replace(/(^|[^_\w])_([^_\s][^_]*?)_(?!\w)/g, '$1<i>$2</i>');
+
+// Light Markdown: paragraphs, line breaks, lists, tables, bold, italics, code.
+function markdown(text) {
+  const lines = esc(text).split('\n');
+  const out = [];
+  let para = [];
+  const flush = () => { if (para.length) { out.push('<p>' + para.map(inline).join('<br>') + '</p>'); para = []; } };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*\|.*\|\s*$/.test(line)) {
+      flush();
+      const rows = [];
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) { rows.push(lines[i]); i++; }
+      i--;
+      const cells = r => r.trim().replace(/^\||\|$/g, '').split('|').map(x => inline(x.trim()));
+      const body = rows.filter(r => !/^\s*\|?[\s:|-]+\|?\s*$/.test(r));
+      const head = rows.length > 1 && /^\s*\|?[\s:|-]+\|?\s*$/.test(rows[1]);
+      out.push('<table>' + body.map((r, n) => {
+        const tag = head && n === 0 ? 'th' : 'td';
+        return '<tr>' + cells(r).map(x => `<${tag}>${x}</${tag}>`).join('') + '</tr>';
+      }).join('') + '</table>');
+    } else if (/^\s*([-*•✓✗])\s+/.test(line) || /^\s*\d+[.)]\s+/.test(line)) {
+      flush();
+      const ordered = /^\s*\d+[.)]\s+/.test(line);
+      const pattern = ordered ? /^\s*\d+[.)]\s+/ : /^\s*[-*•]\s+/;
+      const items = [];
+      while (i < lines.length && (ordered ? /^\s*\d+[.)]\s+/ : /^\s*([-*•✓✗])\s+/).test(lines[i])) { items.push(lines[i].replace(pattern, '')); i++; }
+      i--;
+      const tag = ordered ? 'ol' : 'ul';
+      const plain = !ordered && items.every(x => /^\s*[✓✗]/.test(x));
+      out.push(`<${tag}${plain ? ' style="list-style:none;padding-left:0"' : ''}>` + items.map(x => '<li>' + inline(x) + '</li>').join('') + `</${tag}>`);
+    } else if (/^\s*#{1,6}\s+/.test(line)) {
+      flush();
+      out.push('<p><b>' + inline(line.replace(/^\s*#{1,6}\s+/, '')) + '</b></p>');
+    } else if (!line.trim()) {
+      flush();
+    } else {
+      para.push(line);
+    }
+  }
+  flush();
+  return out.join('');
+}
+
+// Maths first, swapped for placeholders, so the Markdown never touches it. A single $…$ only
+// counts as maths when it hugs its content and isn't followed by a digit, so "$5 and $10" stays money.
+function render(p) {
+  document.body.style.fontSize = p.size + 'px';
+  document.body.className = p.secondary ? 'secondary' : '';
+  const math = [];
+  const keep = (src, display) => { math.push(tex(src, display)); return '\u0001' + (math.length - 1) + '\u0002'; };
+  const text = p.text
+    .replace(/\$\$([\s\S]+?)\$\$/g, (_, m) => keep(m, true))
+    .replace(/\\\[([\s\S]+?)\\\]/g, (_, m) => keep(m, true))
+    .replace(/\\\(([\s\S]+?)\\\)/g, (_, m) => keep(m, false))
+    .replace(/(^|[^\\$])\$(?=\S)([^$\n]+?)(?<=\S)\$(?!\d)/g, (_, before, m) => before + keep(m, false));
+  c.innerHTML = markdown(text).replace(/\u0001(\d+)\u0002/g, (_, n) => math[+n]);
+  report();
+}
+
+let last = -1;
+function report() {
+  const height = Math.ceil(c.getBoundingClientRect().height);
+  if (height !== last) { last = height; window.webkit.messageHandlers.height.postMessage(height); }
+}
+new ResizeObserver(report).observe(c);
+document.fonts.ready.then(report);
+</script>
+</body></html>

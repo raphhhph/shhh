@@ -226,6 +226,52 @@ final class SpeechOutput {
         oneOff = nil
     }
 
+    /// Says a short line in the gaps of a reply ("Opening Gmail."), without touching the reply
+    /// being spoken: it joins the queue after whatever is already there.
+    func announce(_ line: String) {
+        guard current != .off else { return }
+        say(line)
+    }
+
+    /// What Claude's status says, as Joe would say it while working, or nil for the steps not worth
+    /// saying ("Working…", every click): "Searching: IB ESS paper 2" → "Searching for IB ESS paper 2.".
+    nonisolated static func spokenStatus(_ status: String) -> String? {
+        var line = status.replacingOccurrences(of: "…", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let quiet = ["Working", "Getting tools ready", "Reading the page", "Using Chrome", "Running a command"]
+        guard !line.isEmpty, !quiet.contains(line), !hasHan(line) || isChinese(line) else { return nil }
+        if line.hasPrefix("Searching: ") {
+            line = "Searching for " + line.dropFirst("Searching: ".count).split(separator: " ").prefix(6).joined(separator: " ")
+        }
+        if line == "Searching your notes" { line = "Checking your notes" }
+        // Steps Claude writes as orders ("Click the Compose button", "Start the study routine") are
+        // said as what Joe is doing; anything else that isn't "…ing" isn't said.
+        let doing = ["click": "Clicking", "type": "Typing", "open": "Opening", "fill": "Filling in", "navigate": "Going to",
+                     "go": "Going to", "search": "Searching", "send": "Sending", "write": "Writing", "check": "Checking",
+                     "read": "Reading", "find": "Finding", "start": "Starting", "select": "Selecting", "upload": "Uploading",
+                     "add": "Adding", "create": "Creating", "save": "Saving", "play": "Playing", "set": "Setting",
+                     "turn": "Turning", "attach": "Attaching", "reply": "Replying", "draft": "Drafting", "submit": "Submitting"]
+        let words = line.split(separator: " ", maxSplits: 1).map(String.init)
+        if let verb = doing[words[0].lowercased()] {
+            line = ([verb] + words.dropFirst()).joined(separator: " ").replacingOccurrences(of: "to to ", with: "to ")
+        } else if !words[0].hasSuffix("ing") {
+            return nil
+        }
+        // Long ones are details, not news.
+        guard line.split(separator: " ").count <= 9 else { return nil }
+        if line.hasPrefix("Opening "), let host = line.split(separator: " ").last, host.contains(".") {
+            // "Opening mail.google.com" → "Opening Gmail"; other sites by name.
+            let names = ["mail.google.com": "Gmail", "calendar.google.com": "Google Calendar", "docs.google.com": "Google Docs",
+                         "drive.google.com": "Google Drive", "www.youtube.com": "YouTube", "chatgpt.com": "ChatGPT"]
+            // Otherwise the site's own name: "en.wikipedia.org" → "Wikipedia", "bbc.co.uk" → "Bbc".
+            let parts = host.split(separator: ".").map(String.init)
+            var site = parts.count >= 2 ? parts[parts.count - 2] : String(host)
+            if parts.count >= 3, ["co", "com", "ac", "edu", "gov", "org", "net"].contains(site) { site = parts[parts.count - 3] }
+            let name = names[String(host)] ?? (host.contains("managebac") ? "ManageBac" : site.capitalized)
+            line = "Opening " + name
+        }
+        return line.hasSuffix(".") || line.hasSuffix("?") || line.hasSuffix("!") ? line : line + "."
+    }
+
     /// Gets the chosen model ready (downloading it the first time), or lets go of the others.
     @discardableResult
     func prepare() -> Task<Void, Never> {

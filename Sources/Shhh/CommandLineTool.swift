@@ -340,6 +340,10 @@ enum CommandLineTool {
                       : "Alba: " + SpeechOutput.spokenMaths(part)) // as she says it: "x²" → "x squared"
             }
             exit(0)
+        case ("--status-line", 2...):
+            // Joe --status-line "<status>"…: what Joe says aloud for each working step, or (quiet).
+            for status in args.dropFirst() { print(status, "→", SpeechOutput.spokenStatus(status) ?? "(quiet)") }
+            exit(0)
         case ("--study", 3...):
             // Joe --study "<subject>" "<request>" ["<answer>" …]: a whiteboard session, without the window.
             MainActor.assumeIsolated { study(subject: args[1], turns: Array(args.dropFirst(2))) }

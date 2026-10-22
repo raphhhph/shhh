@@ -458,6 +458,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         loadSpeechModel()
         if aiCleanup { loadCleanupModel() }
         refreshResting()
+        Spare.refill(after: 20) // Claude Code ready before the first request, after the models load
     }
 
     /// Opening Joe again (from Spotlight, Applications or the Dock) shows the dashboard.
@@ -558,6 +559,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         if let current = focused { sendToBackground(current) }
+        Latency.begin("typed")
         let task = newTask()
         focused = task
         answerPanel.reset()
@@ -794,6 +796,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         pauseMusic() // nor over music
         if notepad.isListening { notepad.stopListening() } // one recording at a time
         pressedAt = Date()
+        if key == .rightOption { Latency.begin("voice") } // timing this request (Latency.jsonl)
         dictation += 1
         let current = dictation
         followingUp = key == .rightOption && answerPanel.isVisible && focused?.assistant.isActive == true
@@ -813,7 +816,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let preferredUID = microphoneUID
         startTask = Task {
             do {
-                return try await recorder.start(preferredUID: preferredUID)
+                let recording = try await recorder.start(preferredUID: preferredUID)
+                if key == .rightOption { Latency.mark("micLive") }
+                return recording
             } catch {
                 NSSound.beep() // no microphone, or the audio system didn't respond
                 if state == .recording, dictation == current {
@@ -1530,6 +1535,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         stopLiveWords()
         showPanelWork?.cancel()
         let heldFor = Date().timeIntervalSince(pressedAt)
+        if key == .rightOption { Latency.mark("released") }
 
         guard heldFor >= 0.3 else {
             lastTap = (key, Date()) // the first half of a double tap, maybe
@@ -1562,6 +1568,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             guard let recording = await start?.value else { return } // already beeped
             var samples = await recorder.stop(recording, covering: heldFor)
+            if asking { Latency.mark("audioReady") }
             guard samples.count >= 16_000 / 4 else {
                 NSSound.beep() // the microphone sent no audio
                 return
@@ -1583,7 +1590,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // Normally well under a second. Far longer means the model is stuck.
                 let seconds = Double(samples.count) / 16_000
                 let heard = await NoiseFilter.shared.clean(samples) // background noise out (Settings)
+                if asking { Latency.mark("denoised") }
                 text = try await withTimeout(40 + seconds) { try await transcriber.transcribe(heard) } // may wait for Chinese just after launch
+                if asking { Latency.mark("transcribed") }
             } catch {
                 NSSound.beep()
                 if error is WatchdogError, transcriber === self.transcriber { reloadSpeechModel() }

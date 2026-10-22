@@ -26,3 +26,11 @@ Text to speech: Alba (English), the Mandarin voice, the Mac's voices for other s
 - Voices unload after **10 quiet minutes** (~800 MB) and reload with the next sentence. If a voice fails or isn't downloaded, that sentence is said by the Mac's voice.
 - After 2.5 s of silence from Claude on a spoken request, Joe says the status ("Checking your calendar.") or "One sec." once (`acknowledgeIfSlow`).
 - Spoken progress while working (`narrate` in AppDelegate, `spokenStatus`, `announce`): on a spoken request, each new status Claude reports is said as a short line ("Opening Gmail.", "Clicking the Compose button.", "Writing a draft.") so long browser, email and routine tasks never go quiet. At most one every 5 s, none in the first second, never the same line twice, up to 6 per request, never over speech already playing, and only "…ing" steps (orders like "Click X" become "Clicking X"; "Working…", "Using Chrome…" and every page read stay quiet). Check lines with `Joe --status-line "<status>"`.
+
+## Known issues / to-do
+- The Oct 2026 audit changes (maths speech, queue order, warm-up, clips, first comma, speed) are written but were made off the Mac: build and listen before trusting them. Test lines: `Joe --say "Find dy/dx when y = 3x² + 2x − 5."`, `Joe --speech-parts "The speed is 3.2 × 10⁻⁴ m/s² after 5 s."`, then ask Joe something after 10 idle minutes and check the first sentence isn't late.
+- How Alba says letters (HL, SL, IA, TOK, CO₂) is untested by ear; add spellings to `spokenMaths` if she gets them wrong.
+- A Chinese sentence gets `spokenMaths` only when it has maths symbols (`mathsInChinese`), so the maths reaches Alba in English words; otherwise numbers, times and % stay with `chineseNumbers`. Saying the maths in Mandarin (等于, 的平方) is a possible next step.
+- Speaking before the answer exists: done as the acknowledgement; true early speech needs input streaming (see 01).
+- Branch `wip-voice-samples` (an uncompiled `--voice-samples` comparison) predates choosing Alba; it can be dropped.
+- Ideas: a per-subject pronunciation list; "read the next paragraph" / pause and resume for long read-alouds.

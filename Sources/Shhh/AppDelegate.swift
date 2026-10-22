@@ -778,7 +778,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 Task {
                     defer { self.livePartial = false }
                     guard let recording = await start.value else { return }
-                    let samples = self.recorder.tail(recording, seconds: min(elapsed, 30))
+                    // The last 10 s, about what the caption shows (its last 140 characters): longer
+                    // previews took longer, and one still running when the key is let go holds up
+                    // the final transcription behind it.
+                    let samples = self.recorder.tail(recording, seconds: min(elapsed, 10))
                     guard let text = try? await withTimeout(4, { try await transcriber.transcribe(samples) }),
                           self.state == .recording else { return }
                     self.caption.show(text)

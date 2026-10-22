@@ -21,7 +21,7 @@ struct WakeChallenge: Equatable {
 
     /// How many challenges have rung today (0 for the first), counted as each one rings.
     static func nextRing() -> Int {
-        let today = Date().formatted(.iso8601.year().month().day())
+        let today = Date().formatted(.localDay)
         let defaults = UserDefaults.standard
         let count = defaults.string(forKey: "wakeChallengeDay") == today ? defaults.integer(forKey: "wakeChallengeCount") : 0
         defaults.set(today, forKey: "wakeChallengeDay")

@@ -738,8 +738,15 @@ final class Session: Engine {
         }
     }
 
+    /// Every line from Claude Code as it arrives, for `Joe --bench-claude`'s timeline.
+    var onMessage: (([String: Any]) -> Void)?
+
     private func handle(_ message: [String: Any]) {
+        onMessage?(message)
         switch message["type"] as? String {
+        case "system":
+            // The CLI starts on the request: what came before was its own setup for the turn.
+            if message["subtype"] as? String == "init" { Latency.mark("cliInit", from: self) }
         case "stream_event":
             if let event = message["event"] as? [String: Any] { handle(event: event) }
         case "control_request":

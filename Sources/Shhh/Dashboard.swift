@@ -674,7 +674,7 @@ private struct HomePage: View {
                     }
                 }
             }
-            DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil, stretch: true) { model.page = .calendar }
+            DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil || CalendarFeed.linksReadAt != nil, stretch: true) { model.page = .calendar }
                 .frame(width: narrow ? nil : 320)
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -838,8 +838,10 @@ private struct DueSoon: View {
                         .frame(width: 34)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(item.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                            if let group = SubjectGroup.of(item.title) ?? SubjectGroup.of(item.detail) {
-                                Text(group.name).font(.system(size: 11)).foregroundStyle(group.color)
+                            if let group = SubjectGroup.of(item.subject ?? item.title) ?? SubjectGroup.of(item.detail) {
+                                Text(item.subject ?? group.name).font(.system(size: 11)).foregroundStyle(group.color)
+                            } else if let subject = item.subject {
+                                Text(subject).font(.system(size: 11)).foregroundStyle(.secondary)
                             }
                         }
                         Spacer(minLength: 4)
@@ -1540,7 +1542,7 @@ private struct CalendarPage: View {
                 } else {
                     if let selected { detail(selected) }
                     Card { week(dates, items, now) }
-                    DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil) {}
+                    DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil || CalendarFeed.linksReadAt != nil) {}
                 }
             }
         }
@@ -1787,7 +1789,7 @@ private struct CalendarPage: View {
     private func rail(_ now: Date) -> some View {
         VStack(spacing: 16) {
             if let selected { detail(selected) }
-            DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil) {}
+            DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil || CalendarFeed.linksReadAt != nil) {}
             Card(title: "Subjects", symbol: "square.grid.2x2") {
                 VStack(alignment: .leading, spacing: 7) {
                     ForEach(SubjectGroup.allCases, id: \.self) { group in
@@ -1809,7 +1811,7 @@ private struct CalendarPage: View {
         let color = color(item)
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(item.kind == .lesson ? (SubjectGroup.of(item.title)?.name ?? "Class") : item.kind == .deadline ? "ManageBac deadline" : item.kind == .alarm ? "Alarm" : "Event")
+                Text(Self.label(item))
                     .font(.system(size: 11, weight: .semibold)).foregroundStyle(color)
                 Spacer()
                 Button { selected = nil } label: { Image(systemName: "xmark").font(.system(size: 10, weight: .bold)) }
@@ -1831,6 +1833,16 @@ private struct CalendarPage: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(color.opacity(0.07), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(color.opacity(0.3)))
+    }
+
+    /// "Mathematics", "Deadline · Economics HL", "Alarm", "Event".
+    private static func label(_ item: CalendarFeed.Item) -> String {
+        switch item.kind {
+        case .lesson: SubjectGroup.of(item.title)?.name ?? "Class"
+        case .deadline: item.subject.map { "Deadline · \($0)" } ?? "Deadline"
+        case .alarm: "Alarm"
+        case .event: "Event"
+        }
     }
 
     private static func when(_ item: CalendarFeed.Item) -> String {

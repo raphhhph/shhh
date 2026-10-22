@@ -943,14 +943,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         answerPanel.beginTurn(question: "Good morning")
         if SpeechOutput.speakBriefing, SpeechOutput.engine == .off { speech.useForThisReply(.lifelike) }
         Daybook.archiveIfOld()
+        Daybook.buildLocally() // classes, events, deadlines and carried tasks, without Claude
         task.assistant.ask(Assistant.vaultURL == nil ? """
             [Morning briefing: I've just opened my Mac.] Greet me by name: "Good morning, <my name>." Then, \
             from my calendars, in a few short lines: my first period today (subject, time, room), anything \
             due today or tomorrow on ManageBac, and anything else on my calendar today besides classes. If \
             I have no classes today, just say good morning and that there's no school today.
             """ : """
-            [Morning briefing: I've just opened my Mac.] First build today's Daybook, unless it's already \
-            built for today (how: your instructions). Then greet me by name: "Good morning, <my name>." and in a \
+            [Morning briefing: I've just opened my Mac.] First finish today's Daybook if your instructions \
+            say parts of it are still to fill (or build it, if there's none for today). Then greet me by name: \
+            "Good morning, <my name>." and in a \
             few short lines: my first period (subject, time, room) or that there's no school today, my top three \
             tasks, anything due today or tomorrow, the emails that need me, and today's regular meetings from my \
             patterns.

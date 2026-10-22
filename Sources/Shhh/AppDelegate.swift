@@ -1172,6 +1172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // The card and the task band both hang from the notch: while the card is up it has the
         // notch to itself, or the band's count sits on top of the card's buttons.
         let cardAtNotch = answerPanel.isShowing && answerPanel.isAtNotch
+        answerPanel.setBackground(cardAtNotch ? tasks.filter { $0 !== focused && $0.isWorking }.count : 0)
         guard !cardAtNotch, tasks.contains(where: { $0 !== focused }) else {
             shelf.update([])
             return

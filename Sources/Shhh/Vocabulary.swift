@@ -40,6 +40,7 @@ enum Vocabulary {
         // Heard short, put right only where the next word gives it away ("CA" and "MP" are real elsewhere).
         ("ca hours", "CAS hours"), ("ca project", "CAS project"), ("ca experience", "CAS experience"),
         ("ca reflection", "CAS reflection"), ("ca reflections", "CAS reflections"), ("ca portfolio", "CAS portfolio"),
+        ("tok sa", "TOK essay"), ("extended sa", "extended essay"),
         ("mp coordinator", "MYP coordinator"), ("mp personal project", "MYP personal project"),
     ]
 
@@ -119,11 +120,11 @@ enum Vocabulary {
     }
 
     /// SenseVoice sometimes writes the end of a word twice: "knowledgege", "internalnal" (seen with
-    /// `say` recordings on the nightly, 21 Oct). A word that ends in a repeated piece of 2 to 4 letters,
+    /// `say` recordings on the nightly, 21 Oct). Latin letters only: repeats are normal in Chinese ("谢谢"). A word that ends in a repeated piece of 2 to 4 letters,
     /// isn't a word itself, and is one without the repeat, loses the repeat. "banana" stays: it's a word.
     static func withoutStutters(_ text: String) -> String {
         var text = text
-        for match in text.matches(of: #/\b\p{L}*(\p{L}{2,4})\1\b/#).reversed() {
+        for match in text.matches(of: #/\b[A-Za-z]*([A-Za-z]{2,4})\1\b/#).reversed() {
             let word = String(text[match.range])
             let repeated = match.output.1.count
             let fixed = String(word.dropLast(repeated))

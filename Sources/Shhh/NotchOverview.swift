@@ -71,7 +71,7 @@ final class NotchOverview {
 
     func start() {
         timer?.invalidate()
-        let timer = Timer(timeInterval: 0.15, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.check() } }
+        let timer = Timer(timeInterval: 0.04, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.check() } }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
     }
@@ -89,7 +89,7 @@ final class NotchOverview {
         }
         guard notch.contains(mouse), canShow() else { hoverSince = nil; return }
         if hoverSince == nil { hoverSince = Date() }
-        if let since = hoverSince, Date().timeIntervalSince(since) > 0.35 { show(on: screen) }
+        if let since = hoverSince, Date().timeIntervalSince(since) > 0.08 { show(on: screen) } // just long enough that passing to the menu bar doesn't open it
     }
 
     private func show(on screen: NSScreen) {
@@ -138,7 +138,7 @@ final class NotchOverview {
         guard let panel else { return }
         self.panel = nil
         model.isOpen = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             // Unless it was opened again meanwhile (a new panel then shows the model).
             if self?.panel !== panel { panel.orderOut(nil) }
         }
@@ -226,7 +226,7 @@ private struct OverviewView: View {
             .opacity(open ? 1 : 0)
             .scaleEffect(open ? 1 : 0.9, anchor: .top)
             .blur(radius: open ? 0 : 8)
-            .animation(open ? .easeOut(duration: 0.28).delay(0.1) : .easeIn(duration: 0.12), value: open)
+            .animation(open ? .easeOut(duration: 0.16).delay(0.03) : .easeIn(duration: 0.08), value: open)
             .background(alignment: .top) { shape.fill(Color.black).frame(width: width, height: height) }
             .mask(alignment: .top) { shape.frame(width: width, height: height) }
             .animation(open ? NotchShape.opening : NotchShape.closing, value: open)

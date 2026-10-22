@@ -163,7 +163,7 @@ final class AnswerPanel {
             model.islandOpen = false // back into the notch, then gone
             let work = DispatchWorkItem { panel?.orderOut(nil) }
             closeWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: work)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
             return
         }
         NSAnimationContext.runAnimationGroup({ $0.duration = 0.12; panel?.animator().alphaValue = 0 }) {
@@ -905,7 +905,7 @@ private struct Island<Band: View, PeekLine: View, Content: View>: View {
                 .opacity(dropped ? 1 : 0)
                 .scaleEffect(dropped ? 1 : 0.94, anchor: .top)
                 .blur(radius: dropped ? 0 : 6)
-                .animation(listening ? nil : dropped ? .easeOut(duration: 0.24).delay(0.12) : .easeIn(duration: 0.1), value: dropped)
+                .animation(listening ? nil : dropped ? .easeOut(duration: 0.16).delay(0.04) : .easeIn(duration: 0.08), value: dropped)
                 .background(alignment: .top) {
                     ZStack {
                         Rectangle().fill(.ultraThinMaterial)
@@ -933,14 +933,14 @@ private struct Island<Band: View, PeekLine: View, Content: View>: View {
                     band
                         .frame(width: width, height: notch.height)
                         .opacity(open ? 1 : 0)
-                        .animation(open ? .easeOut(duration: 0.2).delay(0.08) : .easeIn(duration: 0.15), value: open)
+                        .animation(open ? .easeOut(duration: 0.14).delay(0.03) : .easeIn(duration: 0.08), value: open)
                 }
                 .overlay(alignment: .top) {
                     peekLine
                         .frame(width: width, height: AnswerPanel.peekHeight)
                         .offset(y: notch.height)
                         .opacity(peeking ? 1 : 0)
-                        .animation(listening ? nil : peeking ? .easeOut(duration: 0.2).delay(0.08) : .easeIn(duration: 0.1), value: peeking)
+                        .animation(listening ? nil : peeking ? .easeOut(duration: 0.14).delay(0.03) : .easeIn(duration: 0.08), value: peeking)
                 }
                 .mask(alignment: .top) { shape.frame(width: width, height: shapeHeight) }
                 .animation(listening ? nil : peek ? Self.opening : Self.closing, value: peek)

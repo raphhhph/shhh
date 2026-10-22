@@ -168,7 +168,7 @@ private struct RestingView: View {
                 Spacer()
             }
             .opacity(model.open ? 1 : 0)
-            .animation(model.open ? .easeOut(duration: 0.2).delay(0.08) : .easeIn(duration: 0.12), value: model.open)
+            .animation(model.open ? .easeOut(duration: 0.14).delay(0.03) : .easeIn(duration: 0.08), value: model.open)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(model.open ? NotchShape.opening : NotchShape.closing, value: model.open)
@@ -243,7 +243,7 @@ private struct GreetingView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .opacity(model.open ? 1 : 0)
-                .animation(model.open ? .easeOut(duration: 0.25).delay(0.15) : .easeIn(duration: 0.12), value: model.open)
+                .animation(model.open ? .easeOut(duration: 0.16).delay(0.05) : .easeIn(duration: 0.08), value: model.open)
             }
             .frame(width: model.open ? geometry.size.width : band, height: model.open ? geometry.size.height : notchHeight)
             .background(Color.black, in: NotchShape(top: NotchShape.shoulder, bottom: model.open ? 20 : 10))
@@ -264,10 +264,10 @@ struct NotchShape: Shape {
     static let shoulder: CGFloat = 10
     /// One motion for everything that comes out of the notch, like the Dynamic Island: a spring
     /// with a little give opening, a firmer, quicker one going back in.
-    static let opening = Animation.spring(response: 0.46, dampingFraction: 0.76)
-    static let closing = Animation.spring(response: 0.3, dampingFraction: 0.95)
+    static let opening = Animation.spring(response: 0.28, dampingFraction: 0.8)
+    static let closing = Animation.spring(response: 0.2, dampingFraction: 0.95)
     /// Following content as it grows (an answer streaming in): the same spring, settling sooner.
-    static let growing = Animation.spring(response: 0.34, dampingFraction: 0.85)
+    static let growing = Animation.spring(response: 0.24, dampingFraction: 0.85)
 
     var animatableData: AnimatablePair<CGFloat, CGFloat> {
         get { AnimatablePair(top, bottom) }

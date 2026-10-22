@@ -77,19 +77,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var overview = NotchOverview(data: dashboard.model)
     private let pen = ScreenPen()
 
-    /// Silence while Claude works feels like nothing's happening: after 2.5 s with no answer yet, Joe
-    /// says what he's doing ("Checking your calendar.") or just "One sec.", once. Later steps are
-    /// said by `narrate`.
+    /// Silence while Claude works feels like nothing's happening. Simple answers start about 2 s after
+    /// sending and need nothing; a request using a tool (calendar, Gmail) takes about 4 s, so as soon
+    /// as Claude reports a step (1.5 s) Joe says it ("Checking your calendar."). With no step and no
+    /// answer by 3 s, "One sec.", once. Later steps are said by `narrate`.
     private func acknowledgeIfSlow(_ task: AssistantTask) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, task === self.focused, task.reply.isEmpty, !task.isDone, !task.background,
-                      SpeechOutput.engine != .off, !self.speech.isSpeaking, self.state == .idle else { return }
-                let line = SpeechOutput.spokenStatus(task.status ?? "") ?? "One sec."
-                guard !task.narrated.contains(line) else { return }
-                task.narrated.append(line)
-                task.narratedAt = Date()
-                self.speech.announce(line)
+        for (delay, needsStep) in [(1.5, true), (3.0, false)] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, task === self.focused, task.reply.isEmpty, task.narrated.isEmpty, !task.isDone,
+                          !task.background, SpeechOutput.engine != .off, !self.speech.isSpeaking, self.state == .idle else { return }
+                    let step = SpeechOutput.spokenStatus(task.status ?? "")
+                    guard let line = step ?? (needsStep ? nil : "One sec.") else { return }
+                    task.narrated.append(line)
+                    task.narratedAt = Date()
+                    self.speech.announce(line)
+                }
             }
         }
     }

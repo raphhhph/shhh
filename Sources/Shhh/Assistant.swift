@@ -102,6 +102,19 @@ final class Assistant {
         set { UserDefaults.standard.set(newValue, forKey: "joeHype") }
     }
 
+    /// Joe's hidden browser (JoeBrowser), when it's set up.
+    nonisolated static var joeBrowserNotes: String { """
+
+        - Joe's own browser (the joe-browser tools): a hidden Chrome with its own sign-ins, so it never \
+        takes over their screen. Use it for web work with several steps that they don't need to watch: \
+        finding an assignment or grade on ManageBac, reading a school portal, checking a site behind a \
+        login. Open the page with navigate_page (or new_page), read it with take_snapshot, never \
+        screenshots unless the layout matters, and act on elements by their uid. If a page asks them to \
+        log in, stop and tell them to run "\(Bundle.main.executablePath ?? "Joe") --browser signin" once \
+        (or run it for them): it opens that browser to sign in, then they quit it. Use their Chrome (the \
+        Claude in Chrome tools) only when they want to see it happen or the task is in a tab they have open.
+        """ }
+
     /// Their school's rules on AI, so Joe helps instead of refusing on their behalf.
     nonisolated static var schoolWork: String { """
 
@@ -472,6 +485,8 @@ final class Session {
             "--effort", effort.rawValue,
             "--system-prompt", Self.systemPrompt(effort, autonomy: autonomy, instructions: instructions.text, vault: vault),
         ]
+        // Joe's hidden browser, for web errands that shouldn't take over their screen.
+        if let browser = JoeBrowser.mcpConfig { process.arguments! += ["--mcp-config", browser] }
         if let tutor {
             // Tutoring: their notes and Joe's PDF tools only, nothing else loaded.
             process.arguments = [
@@ -744,13 +759,15 @@ final class Session {
                 }
             case "tool_result":
                 guard let id = block["tool_use_id"] as? String, block["is_error"] as? Bool != true else { continue }
-                if let name = calls.removeValue(forKey: id), let action = Self.actionLabel(name) { lastAction = action }
-                guard let tool = creating.removeValue(forKey: id) else { continue }
+                let name = calls.removeValue(forKey: id)
+                if let name, let action = Self.actionLabel(name) { lastAction = action }
                 let text: String = switch block["content"] {
                 case let string as String: string
                 case let parts as [[String: Any]]: parts.compactMap { $0["text"] as? String }.joined(separator: "\n")
                 default: ""
                 }
+                if name?.hasPrefix("mcp__\(JoeBrowser.server)__") == true { JoeBrowser.remember(text) }
+                guard let tool = creating.removeValue(forKey: id) else { continue }
                 CreatedItems.shared.record(result: text, tool: tool)
             default:
                 break
@@ -889,6 +906,12 @@ final class Session {
             default: return "Using Chrome…"
             }
         }
+        if parts[1] == JoeBrowser.server {
+            if ["navigate_page", "new_page"].contains(parts[2]), let host = (input["url"] as? String).flatMap({ URL(string: $0)?.host() }) {
+                return "Opening \(host) in Joe's browser"
+            }
+            return parts[2] == "take_snapshot" ? "Reading the page…" : "Working in Joe's browser…"
+        }
         if ["create_draft", "update_draft"].contains(parts[2]) { return "Writing a draft…" }
         return "Using \(ToolPolicy.serverName(parts[1]))…"
     }
@@ -898,7 +921,7 @@ final class Session {
     private static func actionLabel(_ tool: String) -> String? {
         if ["Edit", "Write"].contains(tool) { return "Saved to your notes" }
         let parts = tool.components(separatedBy: "__")
-        guard parts.count == 3, parts[0] == "mcp", parts[1] != "claude-in-chrome" else { return nil }
+        guard parts.count == 3, parts[0] == "mcp", parts[1] != "claude-in-chrome", parts[1] != JoeBrowser.server else { return nil }
         let words = Set(parts[2].lowercased().split(separator: "_").map(String.init))
         let server = parts[1].lowercased()
         if words.contains("draft"), !words.isDisjoint(with: ["create", "update"]) { return "Draft saved in Gmail" }
@@ -1123,6 +1146,11 @@ final class Session {
         notes vault if one is connected. Load these tools with ToolSearch.
         - Their Chrome browser (the Claude in Chrome tools), where they're already signed in to their \
         sites. Read pages with get_page_text or find rather than screenshots: it's faster.
+        - Their browser's tabs, without touching the screen: "\(Bundle.main.executablePath ?? "Joe")" --tab open <url> [<url>…] \
+        opens pages in their browser in the background (they keep working in the app in front), --tab find "<words>" \
+        and --tab list read the open tabs' titles and addresses, --tab show "<words>" makes that tab the current one. \
+        To "open my ManageBac", "pull up the Econ doc", or open several sites, use --tab open with the address (find \
+        it with --tab find, WebSearch or their notes), never clicks or the Chrome tools. Say it's open in one line.\(JoeBrowser.isReady ? Assistant.joeBrowserNotes : "")
         When a connected account and the browser can both do something, use the account: it's much faster.\(ScreenControl.isEnabled ? Assistant.controlRules : "")\(music)\(alarms)\(messages)\(slides)\(Assistant.schoolWork)\(StudyBuddy.instructions)\(files)\(memory)\(habits)\(Assistant.personality)
 
         \(permissions) If they decline, don't retry it. Write emails as Gmail drafts unless they clearly \
@@ -1221,6 +1249,7 @@ struct ToolPolicy {
         let parts = tool.components(separatedBy: "__") // "mcp", server, tool
         guard parts.count == 3, parts[0] == "mcp" else { return builtIn(tool, input) }
         if parts[1] == "claude-in-chrome" { return chrome(parts[2], input) }
+        if parts[1] == JoeBrowser.server { return joeBrowser(parts[2], input) }
         let name = parts[2]
         let title = "\(Self.serverName(parts[1])): \(name.replacingOccurrences(of: "_", with: " "))"
         let words = Set(name.lowercased().split(separator: "_").map(String.init))
@@ -1263,6 +1292,55 @@ struct ToolPolicy {
             return Action(key: "chrome:outward:\(text)", verdict: .ask, title: "\(title): this may send or submit something")
         }
         return Action(key: "chrome:\(level)", verdict: .allow, title: title)
+    }
+
+    /// Joe's hidden browser: reading, opening pages and waiting are free; a click or keystroke is
+    /// judged by the element it hits, which the latest snapshot named ("button Submit assignment").
+    private func joeBrowser(_ tool: String, _ input: [String: Any]) -> Action {
+        let looks: Set = ["navigate_page", "new_page", "list_pages", "select_page", "close_page", "take_snapshot",
+                          "take_screenshot", "wait_for", "hover", "resize_page", "list_console_messages",
+                          "get_console_message", "list_network_requests", "get_network_request"]
+        if looks.contains(tool) { return Action(key: "joe-browser:look", verdict: .allow, title: "Joe's browser") }
+        let target: String
+        let typing: Bool
+        switch tool {
+        case "click", "drag":
+            target = [JoeBrowser.element(input["uid"]), JoeBrowser.element(input["from_uid"]), JoeBrowser.element(input["to_uid"])].joined(separator: " ")
+            typing = false
+        case "fill":
+            target = JoeBrowser.element(input["uid"])
+            JoeBrowser.lastField = target
+            typing = true
+        case "fill_form":
+            let fields = input["elements"] as? [[String: Any]] ?? []
+            target = fields.map { JoeBrowser.element($0["uid"]) }.joined(separator: ", ")
+            JoeBrowser.lastField = target
+            typing = true
+        case "press_key":
+            // Enter in a message box sends it; in a search box it only searches.
+            let key = (input["key"] as? String ?? "").lowercased()
+            let field = JoeBrowser.lastField.lowercased()
+            let search = field.hasPrefix("searchbox") || field.hasPrefix("combobox") || field.contains("search")
+            target = key.contains("enter") && !search ? "send \(JoeBrowser.lastField)" : JoeBrowser.lastField
+            typing = true
+        case "handle_dialog":
+            target = (input["action"] as? String) == "accept" ? "confirm dialog" : ""
+            typing = false
+        default: // upload_file, evaluate_script, anything new
+            return Action(key: "joe-browser:\(tool)", verdict: .ask, title: "Joe's browser: \(tool.replacingOccurrences(of: "_", with: " "))")
+        }
+        if target.range(of: Self.moneyPattern, options: [.regularExpression, .caseInsensitive]) != nil {
+            return Action(key: "joe-browser:money", verdict: .block, title: "Spend money in Joe's browser")
+        }
+        let what = target.trimmingCharacters(in: .whitespaces)
+        let title = (typing ? "Type in Joe's browser" : "Click in Joe's browser") + (what.isEmpty ? "" : ": \(what)")
+        guard autonomy == .handsOff else { return Action(key: "joe-browser:\(tool)", verdict: .ask, title: title) }
+        let pattern = typing ? Self.submitPattern : Self.outwardPattern
+        // A click on an element no snapshot named can't be judged, so it asks.
+        if (!typing && what.isEmpty) || target.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil {
+            return Action(key: "joe-browser:outward:\(what)", verdict: .ask, title: "\(title) (this may send or submit something)")
+        }
+        return Action(key: "joe-browser:\(tool)", verdict: .allow, title: title)
     }
 
     private static let moneyPattern = #"\b(pay|pays|paying|payment|purchase|purchases|buy|buys|checkout|check out|place (an |the |my )?order|order now|subscribe|subscription|donate|to (the |your |my )?(cart|basket|bag)|card number|billing|top up|transfer money|send money)\b"#
@@ -1331,7 +1409,7 @@ struct ToolPolicy {
             return ["draft", "open"].contains(words[2]) ? Action(key: "message:draft", verdict: .allow, title: "Open a chat or draft a message")
                 : Action(key: "message:send:\(input["command"] as? String ?? "")", verdict: .ask, title: "Send a message")
         case "Bash" where Self.shellWords(input["command"] as? String ?? "").map({
-            $0.count >= 2 && $0[0] == Bundle.main.executablePath && ["--pdf-find", "--pdf-text", "--prereading", "--workspace", "--workspace-reset", "--spotify", "--alarm", "--slides", "--recap", "--plan", "--math-pdf", "--whatsapp", "--calendar-link"].contains($0[1]) }) == true:
+            $0.count >= 2 && $0[0] == Bundle.main.executablePath && ["--pdf-find", "--pdf-text", "--prereading", "--tab", "--browser", "--workspace", "--workspace-reset", "--spotify", "--alarm", "--slides", "--recap", "--plan", "--math-pdf", "--whatsapp", "--calendar-link"].contains($0[1]) }) == true:
             return Action(key: "shhh-tools", verdict: .allow, title: "Use Joe's tools")
         case "Bash" where FileCommands.judge(input["command"] as? String ?? "",
                                              cwd: vault ?? FileManager.default.temporaryDirectory) != nil:
@@ -1536,6 +1614,7 @@ struct ToolPolicy {
     /// "claude_ai_Google_Calendar" → "Google Calendar", "obsidian-vault" → "Obsidian vault".
     static func serverName(_ raw: String) -> String {
         if raw == "claude-in-chrome" { return "Chrome" }
+        if raw == JoeBrowser.server { return "Joe's browser" }
         let name = (raw.hasPrefix("claude_ai_") ? String(raw.dropFirst(10)) : raw)
             .replacingOccurrences(of: "_", with: " ")
             .replacingOccurrences(of: "-", with: " ")

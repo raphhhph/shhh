@@ -134,6 +134,14 @@ final class SpeechOutput {
         set { UserDefaults.standard.set(newValue, forKey: "speakBriefing") }
     }
 
+    /// How fast Joe talks: 1 is the voice's own pace. Faster helps when revising by ear.
+    static var speed: Double {
+        get { UserDefaults.standard.object(forKey: "voiceSpeed") as? Double ?? 1 }
+        set { UserDefaults.standard.set(newValue, forKey: "voiceSpeed") }
+    }
+
+    static let speeds: [(value: Double, name: String)] = [(1, "Normal"), (1.15, "A bit faster"), (1.3, "Fast")]
+
     /// Sounds an older voice could make (`[chuckle]`…), taken out if a reply still has one.
     static let soundTags = ["laugh", "chuckle", "sigh"]
 
@@ -148,9 +156,18 @@ final class SpeechOutput {
     /// The current reply as it will be spoken, and how much of it is already queued.
     private var reply = ""
     private var queued = 0
-    /// Sentences waiting for a model, in order, and the task working through them.
-    private var pending: [String] = []
+    /// Sentences waiting to be said, in order, and the task working through them. `mac`: another
+    /// language, said by the Mac's voice in its turn, so it never talks over Alba.
+    private struct Line {
+        let text: String
+        var mac = false
+    }
+
+    private var pending: [Line] = []
     private var worker: Task<Void, Never>?
+    /// Short lines already made ("One sec.", "Checking your calendar."), kept so they play at once,
+    /// even after the voice has been let go.
+    private var clips: [String: NeuralVoices.Audio] = [:]
     /// For one reply, a voice other than the chosen one (the morning briefing with the voice off).
     private var oneOff: Engine?
     private var current: Engine { oneOff ?? Self.engine }
@@ -170,7 +187,17 @@ final class SpeechOutput {
         reply = speakable
         let rest = reply.dropFirst(queued)
         // Up to the last sentence end: ". " "! " "? " or a line break.
-        guard let end = rest.range(of: #"[.!?…:](?=\s)|\n"#, options: [.regularExpression, .backwards]) else { return }
+        guard let end = rest.range(of: #"[.!?…:](?=\s)|\n"#, options: [.regularExpression, .backwards]) else {
+            // Nothing said yet and a long first sentence: start at its first comma instead of waiting
+            // for the end ("Good morning Raphael, you have Economics at nine…").
+            if queued == 0, let comma = rest.range(of: #",(?=\s)"#, options: .regularExpression),
+               rest[..<comma.lowerBound].split(separator: " ").count >= 6 {
+                let clause = rest[..<comma.upperBound]
+                queued += clause.count
+                say(String(clause))
+            }
+            return
+        }
         let sentences = rest[..<end.upperBound]
         queued += sentences.count
         say(String(sentences))
@@ -199,10 +226,68 @@ final class SpeechOutput {
         oneOff = nil
     }
 
+    /// Says a short line in the gaps of a reply ("Opening Gmail."), without touching the reply
+    /// being spoken: it joins the queue after whatever is already there.
+    func announce(_ line: String) {
+        guard current != .off else { return }
+        say(line)
+    }
+
+    /// What Claude's status says, as Joe would say it while working, or nil for the steps not worth
+    /// saying ("Working…", every click): "Searching: IB ESS paper 2" → "Searching for IB ESS paper 2.".
+    nonisolated static func spokenStatus(_ status: String) -> String? {
+        var line = status.replacingOccurrences(of: "…", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let quiet = ["Working", "Getting tools ready", "Reading the page", "Using Chrome", "Running a command"]
+        guard !line.isEmpty, !quiet.contains(line), !hasHan(line) || isChinese(line) else { return nil }
+        if line.hasPrefix("Searching: ") {
+            line = "Searching for " + line.dropFirst("Searching: ".count).split(separator: " ").prefix(6).joined(separator: " ")
+        }
+        if line == "Searching your notes" { line = "Checking your notes" }
+        // Steps Claude writes as orders ("Click the Compose button", "Start the study routine") are
+        // said as what Joe is doing; anything else that isn't "…ing" isn't said.
+        let doing = ["click": "Clicking", "type": "Typing", "open": "Opening", "fill": "Filling in", "navigate": "Going to",
+                     "go": "Going to", "search": "Searching", "send": "Sending", "write": "Writing", "check": "Checking",
+                     "read": "Reading", "find": "Finding", "start": "Starting", "select": "Selecting", "upload": "Uploading",
+                     "add": "Adding", "create": "Creating", "save": "Saving", "play": "Playing", "set": "Setting",
+                     "turn": "Turning", "attach": "Attaching", "reply": "Replying", "draft": "Drafting", "submit": "Submitting"]
+        let words = line.split(separator: " ", maxSplits: 1).map(String.init)
+        if let verb = doing[words[0].lowercased()] {
+            line = ([verb] + words.dropFirst()).joined(separator: " ").replacingOccurrences(of: "to to ", with: "to ")
+        } else if !words[0].hasSuffix("ing") {
+            return nil
+        }
+        // Long ones are details, not news.
+        guard line.split(separator: " ").count <= 9 else { return nil }
+        if line.hasPrefix("Opening "), let host = line.split(separator: " ").last, host.contains(".") {
+            // "Opening mail.google.com" → "Opening Gmail"; other sites by name.
+            let names = ["mail.google.com": "Gmail", "calendar.google.com": "Google Calendar", "docs.google.com": "Google Docs",
+                         "drive.google.com": "Google Drive", "www.youtube.com": "YouTube", "chatgpt.com": "ChatGPT"]
+            // Otherwise the site's own name: "en.wikipedia.org" → "Wikipedia", "bbc.co.uk" → "Bbc".
+            let parts = host.split(separator: ".").map(String.init)
+            var site = parts.count >= 2 ? parts[parts.count - 2] : String(host)
+            if parts.count >= 3, ["co", "com", "ac", "edu", "gov", "org", "net"].contains(site) { site = parts[parts.count - 3] }
+            let name = names[String(host)] ?? (host.contains("managebac") ? "ManageBac" : site.capitalized)
+            line = "Opening " + name
+        }
+        return line.hasSuffix(".") || line.hasSuffix("?") || line.hasSuffix("!") ? line : line + "."
+    }
+
     /// Gets the chosen model ready (downloading it the first time), or lets go of the others.
-    func prepare() {
+    @discardableResult
+    func prepare() -> Task<Void, Never> {
         let engine = Self.engine
-        Task { await neural.prepare(engine) }
+        return Task {
+            await neural.prepare(engine)
+            guard engine != .off else { return }
+            // The lines Joe says while Claude works, made now, so even the first one plays at once.
+            for line in ["One sec."] where clips[line] == nil {
+                var made: [Float] = []
+                var rate = 0
+                guard (try? await neural.speak(line, onAudio: { made += $0.samples; rate = $0.sampleRate })) != nil,
+                      !made.isEmpty else { continue }
+                clips[line] = NeuralVoices.Audio(samples: made, sampleRate: rate)
+            }
+        }
     }
 
     /// Lets go of the voices after ten quiet minutes (they take about 800 MB); the next sentence
@@ -217,6 +302,14 @@ final class SpeechOutput {
     /// The Mandarin voice, downloaded and loaded now (onboarding's "Get Joe ready").
     func prepareMandarin() {
         Task { _ = try? await neural.loadMandarin() }
+    }
+
+    /// The ask key went down: load Alba while they talk and Claude thinks, so the answer isn't held
+    /// up by the reload after an idle unload.
+    func warmUp() {
+        guard Self.engine != .off else { return }
+        lastSpoke = Date()
+        Task { await neural.prepare(.lifelike) }
     }
 
     /// Loads Alba even with the voice off, for the welcome tour, so she's ready when Joe speaks.
@@ -241,13 +334,11 @@ final class SpeechOutput {
             if Self.hasHan(clean) {
                 // Chinese, often with English in it ("数学 AI HL，08:30"): the Chinese parts in the
                 // Mandarin voice with numbers said in Chinese, the English words in Alba's.
-                pending += Self.chineseParts(clean)
+                pending += Self.chineseParts(Self.mathsInChinese(clean)).map { Line(text: $0) }
             } else if Self.isOtherLanguage(clean) {
-                let utterance = AVSpeechUtterance(string: clean)
-                utterance.voice = Self.appleVoice(for: sentence)
-                apple.speak(utterance)
+                pending.append(Line(text: clean, mac: true))
             } else {
-                pending.append(clean)
+                pending.append(Line(text: Self.spokenMaths(clean)))
             }
         }
         startWorking(engine)
@@ -259,11 +350,30 @@ final class SpeechOutput {
         guard worker == nil, !pending.isEmpty else { return }
         worker = Task { [weak self] in
             while let self, !Task.isCancelled, !self.pending.isEmpty {
-                let sentence = self.pending.removeFirst()
+                var line = self.pending.removeFirst()
+                // Sentences already waiting are said together, in one breath: the rhythm and
+                // intonation carry across them, with no gap. Only what's already here, so the first
+                // sentence of a reply never waits for the next.
+                while !line.mac, self.clips[line.text] == nil, !Self.isChinese(line.text), let next = self.pending.first,
+                      !next.mac, !Self.isChinese(next.text), line.text.count + next.text.count < 160 {
+                    line = Line(text: line.text + " " + next.text)
+                    self.pending.removeFirst()
+                }
+                let sentence = line.text
                 let started = Date()
                 self.lastSpoke = started
+                if line.mac {
+                    await self.sayWithMac(sentence)
+                    continue
+                }
+                if let clip = self.clips[sentence] {
+                    self.player.play(clip.samples, sampleRate: clip.sampleRate)
+                    continue
+                }
                 var first: TimeInterval?
                 var seconds = 0.0
+                var made: [Float] = []
+                var rate = 0
                 do {
                     // Audio is played as it's made, a fraction of a second at a time, so speech
                     // starts almost at once instead of after the whole sentence.
@@ -271,17 +381,18 @@ final class SpeechOutput {
                         guard !Task.isCancelled else { return }
                         if first == nil { first = Date().timeIntervalSince(started) }
                         seconds += Double(audio.samples.count) / Double(audio.sampleRate)
+                        if sentence.count <= 40 { made += audio.samples; rate = audio.sampleRate }
                         self.player.play(audio.samples, sampleRate: audio.sampleRate)
                     }
                 } catch {
                     if ProcessInfo.processInfo.environment["SHHH_VOICE_LOG"] != nil { print("voice error:", error) }
                     // The voice isn't there (still downloading, or broken): the Mac's own says it.
-                    if first == nil {
-                        let utterance = AVSpeechUtterance(string: sentence)
-                        utterance.voice = Self.appleVoice(for: sentence)
-                        self.apple.speak(utterance)
-                    }
+                    if first == nil { await self.sayWithMac(sentence) }
                     continue
+                }
+                if !made.isEmpty, !Task.isCancelled {
+                    if self.clips.count >= 40, let old = self.clips.keys.first { self.clips[old] = nil }
+                    self.clips[sentence] = NeuralVoices.Audio(samples: made, sampleRate: rate)
                 }
                 guard !Task.isCancelled else { break }
                 if ProcessInfo.processInfo.environment["SHHH_VOICE_LOG"] != nil { // `Joe --say` timing
@@ -291,6 +402,18 @@ final class SpeechOutput {
             }
             self?.worker = nil
         }
+    }
+
+    /// The Mac's voice says it once Alba's audio has played out, and is done before the next line.
+    private func sayWithMac(_ text: String) async {
+        while player.isPlaying, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(50)) }
+        guard !Task.isCancelled else { return }
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = Self.appleVoice(for: text)
+        utterance.rate = min(AVSpeechUtteranceMaximumSpeechRate, AVSpeechUtteranceDefaultSpeechRate * Float(Self.speed))
+        apple.speak(utterance)
+        try? await Task.sleep(for: .milliseconds(150)) // until it has started
+        while apple.isSpeaking, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(50)) }
     }
 
     // MARK: - Text
@@ -349,14 +472,161 @@ final class SpeechOutput {
         let replacements: [(String, String)] = [
             (#"\[([^\]]+)\]\([^)]*\)"#, "$1"),         // [title](url) → title
             (#"https?://\S+"#, ""),                    // bare links
+            (#"[\p{Extended_Pictographic}\x{FE0F}\x{200D}]"#, ""), // emoji
             (#"(\*\*|__|`|\*)"#, ""),                  // bold, code, italics
             (#"(?m)^\s*([-•*]|\d+\.)\s+"#, ""),        // list markers
+            // Abbreviations said in full; their dots would also end a sentence too early.
+            (#"\b[Ee]\.g\.,?"#, "for example,"),
+            (#"\b[Ii]\.e\.,?"#, "that is,"),
+            (#"\betc\.(?=[,;)])"#, "and so on"),
+            (#"\betc\."#, "and so on."),
+            (#"\bvs\.?(?=\s)"#, "versus"),
+            (#"\bapprox\.(?=\s)"#, "about"),
             (#"(?m)([^.!?:\s\]])[ \t]*$"#, "$1."),     // a line without an ending gets a pause
         ]
         for (pattern, template) in replacements {
             text = text.replacingOccurrences(of: pattern, with: template, options: .regularExpression)
         }
         return text
+    }
+
+    /// A Chinese sentence with maths in it ("求 y = 3x² 的导数"): the maths in words first, so the
+    /// English parts go to Alba as words, not symbols. Without maths it's left as it is, so times,
+    /// numbers and percentages are still said in Chinese.
+    nonisolated static func mathsInChinese(_ text: String) -> String {
+        text.range(of: #"[=^²³√∫×÷−]|\\[A-Za-z]+"#, options: .regularExpression) != nil ? spokenMaths(text, inChinese: true) : text
+    }
+
+    /// Maths, science and units the way a teacher says them, for Alba, who would skip or spell out
+    /// the symbols: "v = 3.2 × 10⁻⁴ m/s²" → "v equals 3.2 times 10 to the power of minus 4 metres per
+    /// second squared". Study questions and feedback are full of these.
+    /// `inChinese`: times, ranges and percentages are left for `chineseNumbers` to say in Chinese.
+    nonisolated static func spokenMaths(_ text: String, inChinese: Bool = false) -> String {
+        // Bare fractions ("3/4") and " - " are only read as maths in a sentence that is maths, not
+        // in a date or a dash between words.
+        let isMaths = text.range(of: #"[=+×÷^²³√∫−]|\\(frac|sqrt)"#, options: .regularExpression) != nil
+        var text = text.replacingOccurrences(of: "−", with: "-")
+        func sub(_ pattern: String, _ template: String) {
+            text = text.replacingOccurrences(of: pattern, with: template, options: .regularExpression)
+        }
+        // Clock times as said: "08:30" → "8:30", "9:00 AM" → "9 AM", "9:00" → "9 o'clock".
+        if !inChinese {
+            sub(#"(?<![0-9:])0([0-9]):([0-9]{2})"#, "$1:$2")
+            sub(#"(?<![0-9:])([0-9]{1,2}):00\s?[Aa]\.?[Mm]\b\.?(?=\S)"#, "$1 AM")
+            sub(#"(?<![0-9:])([0-9]{1,2}):00\s?[Pp]\.?[Mm]\b\.?(?=\S)"#, "$1 PM")
+            sub(#"(?<![0-9:])([0-9]{1,2}):00\s?[Aa]\.?[Mm]\b"#, "$1 AM")
+            sub(#"(?<![0-9:])([0-9]{1,2}):00\s?[Pp]\.?[Mm]\b"#, "$1 PM")
+            sub(#"(?<![0-9:])([0-9]|1[0-2]):00(?![0-9:])"#, "$1 o'clock")
+        }
+        // Money, then LaTeX ($x^2$, \(…\), \frac{a}{b}) into plain symbols.
+        sub(#"\$([0-9][0-9,]*(\.[0-9]+)?)"#, "$1 dollars")
+        sub(#"\\[()\[\]]|\$"#, " ")
+        sub(#"\\[dt]?frac\{([^{}]*)\}\{([^{}]*)\}"#, " $1 over $2 ")
+        sub(#"\\sqrt\{([^{}]*)\}"#, " the square root of $1 ")
+        sub(#"\\(?:text|mathrm|mathbf)\{([^{}]*)\}"#, "$1")
+        sub(#"\\int_\{?([^{}\s^]+)\}?\^\{?([^{}\s]+)\}?"#, " the integral from $1 to $2 of ")
+        let commands: [(String, String)] = [
+            ("times|cdot", "×"), ("div", "÷"), ("pm", "±"), ("leq?", "≤"), ("geq?", "≥"), ("neq?", "≠"),
+            ("approx", "≈"), ("infty", "∞"), ("int", "∫"), ("sum", "∑"), ("to", " tends to "), ("rightarrow", "→"),
+            ("circ|degree", "°"),
+            ("(alpha|beta|gamma|delta|epsilon|theta|lambda|mu|pi|rho|sigma|phi|omega|Delta|sin|cos|tan|log|ln|exp)", " $1 "),
+            ("(?:left|right|quad|qquad|displaystyle)", " "),
+        ]
+        for (name, template) in commands { sub(#"\\(?:"# + name + #")(?![A-Za-z])"#, template) }
+        sub(#"\\[,;! ]|\\[A-Za-z]+"#, " ")
+        sub(#"\^\{([^{}]*)\}"#, "^($1)")
+        sub(#"_\{([^{}]*)\}|_([0-9A-Za-z])"#, " $1$2")
+        sub(#"[{}]"#, " ")
+        // Superscripts and subscripts as plain powers and numbers: x² → x^2, H₂O → H 2 O.
+        let superscripts: [Character: String] = ["⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4", "⁵": "5",
+                                                 "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9", "⁻": "-"]
+        while let range = text.range(of: #"[⁰¹²³⁴⁵⁶⁷⁸⁹⁻]+"#, options: .regularExpression) {
+            text.replaceSubrange(range, with: "^(" + text[range].map { superscripts[$0] ?? "" }.joined() + ")")
+        }
+        // Formulas symbol by symbol, as said in class: "6CO₂" → "6 C O 2", "C₆H₁₂O₆" → "C 6 H 12 O 6".
+        if let formulas = try? NSRegularExpression(pattern: #"\b([0-9]*)((?:[A-Z][a-z]?[₀-₉]*)+)(?![A-Za-z])"#),
+           let element = try? NSRegularExpression(pattern: #"([A-Z][a-z]?)([₀-₉]*)"#) {
+            for match in formulas.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
+                guard let whole = Range(match.range, in: text), let body = Range(match.range(at: 2), in: text),
+                      text[body].range(of: "[₀-₉]", options: .regularExpression) != nil,
+                      let count = Range(match.range(at: 1), in: text) else { continue }
+                let symbols = String(text[body])
+                let parts = element.matches(in: symbols, range: NSRange(symbols.startIndex..., in: symbols)).compactMap { part -> String? in
+                    guard let symbol = Range(part.range(at: 1), in: symbols), let digits = Range(part.range(at: 2), in: symbols) else { return nil }
+                    let number = symbols[digits].unicodeScalars.map { String($0.value - 0x2080) }.joined()
+                    return number.isEmpty ? String(symbols[symbol]) : String(symbols[symbol]) + " " + number
+                }
+                text.replaceSubrange(whole, with: ([String(text[count])] + parts).filter { !$0.isEmpty }.joined(separator: " "))
+            }
+        }
+        while let range = text.range(of: #"[₀₁₂₃₄₅₆₇₈₉]+"#, options: .regularExpression) {
+            let digits = text[range].unicodeScalars.map { String($0.value - 0x2080) }.joined()
+            text.replaceSubrange(range, with: " \(digits) ")
+        }
+        sub(#"\^\((-?[0-9a-zA-Z.]+)\)"#, "^$1")
+        // Units after a number. Single letters need a space before them ("5 m", not "1990s").
+        let units: [(String, String)] = [
+            (#"m/s\^2|m s\^-2"#, "metres per second squared"), (#"m/s|m s\^-1"#, "metres per second"),
+            ("km/h", "kilometres per hour"), (#"mol/dm\^3|mol dm\^-3"#, "moles per cubic decimetre"),
+            ("kJ/mol", "kilojoules per mole"), ("g/mol", "grams per mole"), (#"cm\^3"#, "cubic centimetres"), (#"dm\^3"#, "cubic decimetres"),
+            (#"m\^3"#, "cubic metres"), (#"cm\^2"#, "square centimetres"), (#"km\^2"#, "square kilometres"),
+            (#"m\^2"#, "square metres"), ("kJ", "kilojoules"), ("kg", "kilograms"), ("mg", "milligrams"),
+            ("km", "kilometres"), ("cm", "centimetres"), ("mm", "millimetres"), ("ml|mL", "millilitres"),
+            ("kPa", "kilopascals"), ("Hz", "hertz"), ("kW", "kilowatts"), (#"°\s?C"#, "degrees Celsius"),
+        ]
+        for (unit, words) in units { sub(#"([0-9])\s?(?:"# + unit + #")(?![A-Za-z0-9^])"#, "$1 " + words) }
+        let letterUnits = [("m", "metres"), ("s", "seconds"), ("g", "grams"), ("N", "newtons"), ("J", "joules")]
+        for (unit, words) in letterUnits { sub(#"([0-9]) "# + unit + #"(?![A-Za-z0-9^'’])"#, "$1 " + words) }
+        sub("°", " degrees")
+        // Calculus and functions: dy/dx, f'(x), f(x).
+        sub(#"\bd([a-zA-Z])/d([a-zA-Z])\b"#, "d $1 by d $2")
+        sub(#"\b([fgh])['’]\(([^()]{1,10})\)"#, "$1 prime of $2")
+        sub(#"\b([fgh])\(([^()]{1,10})\)"#, "$1 of $2")
+        sub(#"√\(([^()]*)\)"#, " the square root of $1 ")
+        sub("√", " the square root of ")
+        // Powers.
+        sub(#"\^\(?2\)?(?![0-9A-Za-z.])"#, " squared")
+        sub(#"\^\(?3\)?(?![0-9A-Za-z.])"#, " cubed")
+        sub(#"\^\((-?[^()]+)\)"#, " to the power of $1")
+        sub(#"\^(-?[0-9a-zA-Z.]+)"#, " to the power of $1")
+        sub(#"to the power of -"#, "to the power of minus ") // e^{-x}: the minus is said, not dropped
+        // Fractions.
+        sub(#"\b([a-z])/([a-z])\b"#, "$1 over $2")
+        if isMaths {
+            sub(#"(?<![0-9/])([0-9]+)/([0-9]+)(?![0-9/])"#, "$1 over $2")
+        } else if let scores = try? NSRegularExpression(pattern: #"(?<![0-9/])([0-9]{1,3})/([0-9]{1,3})(?![0-9/])"#) {
+            // A score, "6/7", is "6 out of 7"; a date, "21/10", is left alone.
+            for match in scores.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
+                guard let whole = Range(match.range, in: text), let top = Range(match.range(at: 1), in: text),
+                      let bottom = Range(match.range(at: 2), in: text),
+                      let mark = Int(text[top]), let total = Int(text[bottom]), mark <= total else { continue }
+                text.replaceSubrange(whole, with: "\(mark) out of \(total)")
+            }
+        }
+        // Symbols and operators.
+        let symbols: [(String, String)] = [
+            ("<=|≤", " is less than or equal to "), (">=|≥", " is greater than or equal to "),
+            ("!=|≠", " is not equal to "), ("≈", " is about "), ("±", " plus or minus "), ("×", " times "),
+            ("÷", " divided by "), ("∞", " infinity "), ("π", " pi "), ("θ", " theta "), ("Δ", " delta "),
+            ("∫", " the integral of "), ("∑", " the sum of "), ("⇌", " is in equilibrium with "),
+            (#"\b([a-z])\s*→\s*(?=-?[0-9∞])"#, "$1 tends to "), ("→", " gives "),
+            ("=", " equals "),
+            (#"(^|[\s(,])-(?=[0-9.])"#, "$1minus "),
+        ]
+        for (pattern, template) in symbols { sub(pattern, template) }
+        if !inChinese {
+            sub(#"([0-9])\s?[–—]\s?([0-9])"#, "$1 to $2")
+            sub("%", " percent")
+        }
+        if isMaths {
+            sub(#"\s<\s"#, " is less than ")
+            sub(#"\s>\s"#, " is greater than ")
+            sub(#"(?<=[0-9A-Za-z)])\s*\+\s*(?=[0-9A-Za-z(])"#, " plus ")
+            sub(#"(?<=[0-9A-Za-z)])\s+-\s+(?=[0-9A-Za-z(])"#, " minus ")
+        }
+        sub(#"[ \t]{2,}"#, " ")
+        sub(#"\s+([.,!?;:])"#, "$1")
+        return text.trimmingCharacters(in: .whitespaces)
     }
 }
 
@@ -406,14 +676,24 @@ private final class NeuralVoices {
         if !buffer.isEmpty { onAudio(Audio(samples: buffer, sampleRate: 24_000)) }
     }
 
+    /// Alba being loaded: a sentence asked for while the ask key's warm-up is still loading her
+    /// waits for that load instead of starting a second one (another 800 MB).
+    private var loadingEnglish: Task<PocketTtsManager, Error>?
+
     private func englishManager() async throws -> PocketTtsManager {
         if let pocket { return pocket }
+        if let loadingEnglish { return try await loadingEnglish.value }
         status = "Getting the voice ready…"
-        defer { status = nil }
-        let manager = PocketTtsManager(defaultVoice: SpeechOutput.lifelikeVoice)
-        ModelGuard.willLoad(.voice)
-        do { try await manager.initialize() } catch { ModelGuard.didFail(.voice, error); throw error }
-        ModelGuard.didLoad(.voice)
+        let load = Task { @MainActor in
+            let manager = PocketTtsManager(defaultVoice: SpeechOutput.lifelikeVoice)
+            ModelGuard.willLoad(.voice)
+            do { try await manager.initialize() } catch { ModelGuard.didFail(.voice, error); throw error }
+            ModelGuard.didLoad(.voice)
+            return manager
+        }
+        loadingEnglish = load
+        defer { loadingEnglish = nil; status = nil }
+        let manager = try await load.value
         pocket = manager
         return manager
     }
@@ -440,6 +720,8 @@ private final class NeuralVoices {
 private final class VoicePlayer {
     private let engine = AVAudioEngine()
     private let node = AVAudioPlayerNode()
+    /// Speeds the voice up (the speed setting) without raising its pitch.
+    private let pace = AVAudioUnitTimePitch()
     private var format: AVAudioFormat?
     /// Buffers scheduled and not yet played out.
     private var inFlight = 0
@@ -455,10 +737,14 @@ private final class VoicePlayer {
         if self.format != format {
             engine.stop()
             if engine.attachedNodes.contains(node) { engine.detach(node) }
+            if engine.attachedNodes.contains(pace) { engine.detach(pace) }
             engine.attach(node)
-            engine.connect(node, to: engine.mainMixerNode, format: format)
+            engine.attach(pace)
+            engine.connect(node, to: pace, format: format)
+            engine.connect(pace, to: engine.mainMixerNode, format: format)
             self.format = format
         }
+        pace.rate = Float(SpeechOutput.speed)
         if !engine.isRunning {
             do { try engine.start() } catch {
                 if ProcessInfo.processInfo.environment["SHHH_VOICE_LOG"] != nil { print("audio error:", error) }

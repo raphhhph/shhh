@@ -78,19 +78,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let pen = ScreenPen()
 
     /// Silence while Claude works feels like nothing's happening: after 2.5 s with no answer yet, Joe
-    /// says what he's doing ("Checking your calendar.") or just "One sec.", once.
+    /// says what he's doing ("Checking your calendar.") or just "One sec.", once. Later steps are
+    /// said by `narrate`.
     private func acknowledgeIfSlow(_ task: AssistantTask) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, task === self.focused, task.reply.isEmpty, !task.isDone, !task.background,
                       SpeechOutput.engine != .off, !self.speech.isSpeaking, self.state == .idle else { return }
-                let status = (task.status ?? "").replacingOccurrences(of: "…", with: "")
-                let line = status.range(of: #"^(Checking|Reading|Searching|Looking|Opening|Finding)\b"#, options: .regularExpression) != nil
-                    ? status + "." : "One sec."
-                self.speech.update(line)
-                self.speech.finish()
+                let line = SpeechOutput.spokenStatus(task.status ?? "") ?? "One sec."
+                guard !task.narrated.contains(line) else { return }
+                task.narrated.append(line)
+                task.narratedAt = Date()
+                self.speech.announce(line)
             }
         }
+    }
+
+    /// While a spoken request works (Chrome, Gmail, a routine), Joe says what he's doing as he goes
+    /// ("Opening mail.google.com.", "Writing a draft."), so it never feels like he's gone quiet:
+    /// a new step at most every 5 s, never the same line twice, up to 6 a request, and only between
+    /// sentences of the reply, never over them.
+    private func narrate(_ status: String, for task: AssistantTask) {
+        guard task.spoken, task === focused, !task.background, !task.isDone, SpeechOutput.engine != .off,
+              state == .idle, !speech.isSpeaking, task.narrated.count < 6,
+              Date().timeIntervalSince(task.narratedAt ?? .distantPast) >= 5,
+              Date().timeIntervalSince(task.startedAt) >= 1,
+              let line = SpeechOutput.spokenStatus(status), !task.narrated.contains(line) else { return }
+        task.narrated.append(line)
+        task.narratedAt = Date()
+        speech.announce(line)
     }
 
     /// macOS keeps a compiled copy of each Neural Engine model per build of Joe, and never clears the
@@ -121,6 +137,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     /// "Quiz me on econ externalities", "test me on…": the study whiteboard, not the notch.
+    /// "Read this to me", "read it out loud": the selected text (or the front window's, in a PDF or
+    /// a document) in Joe's voice, all of it, for revising by ear. Nothing goes to Claude, so it's
+    /// instant and costs nothing. A key press stops it.
+    private func readAloud(_ request: String) -> Bool {
+        let pattern = #"^\W*((hey|ok|okay),?\s+)?(joe,?\s+)?(can you\s+|could you\s+|please\s+)?read\s+(this|that|it|the (selected|highlighted) text|the selection|this (page|paragraph|passage|text))(\s+out)?\s*(aloud|out loud|to me|for me)?\W*$"#
+        guard request.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil else { return false }
+        Task { [weak self] in
+            var passage = await ScreenContext.selection(limit: 20_000)?.text
+            if passage == nil { passage = await ScreenContext.windowText(limit: 20_000)?.text.text }
+            guard let self else { return }
+            guard let passage, !passage.isEmpty else {
+                self.toast.show("Select the text to read, then ask again", symbol: "text.cursor", tint: .orange)
+                return
+            }
+            self.speech.stop()
+            if SpeechOutput.engine == .off { self.speech.useForThisReply(.lifelike) }
+            self.speech.update(passage)
+            self.speech.finish()
+            self.toast.show("Reading it aloud. Press a key to stop", symbol: "speaker.wave.2", tint: .blue)
+        }
+        return true
+    }
+
     private func openStudy(_ request: String) -> Bool {
         // "Quiz me on…", "let's start a quiz", "study session", "open (up) the whiteboard"…
         let quiz = #"^\W*((hey|ok|okay|yo),?\s+)?(joe,?\s+)?(can you\s+)?(quiz|test) me\b|give me (a|an|one) (full )?exam(-style)? question|\b(start|do|begin|run)\b[^.?!]{0,12}\b(quiz|study session|revision session|practice session)\b|\b(open|pull|bring|start|show|get)\b[^.?!]{0,15}\bwhite ?board\b|^\W*(the )?white ?board\W*$"#
@@ -550,9 +589,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 speechReady = true
                 speechStatus = "Hold right ⌘ to dictate"
                 // Then the rest, so the keys never wait behind them: the voice and the noise filter.
+                // One model at a time, after SenseVoice's warm-up: several starting on the GPU at once
+                // aborted in Metal (MPSGraphTensorData) a few seconds after the first launch.
                 if first {
-                    speech.prepare()
-                    Task.detached(priority: .utility) { await NoiseFilter.shared.prepare() }
+                    Task {
+                        var waited = 0
+                        while Transcriber.languages == .chinese, !(await transcriber.chineseReady), waited < 180 {
+                            try? await Task.sleep(for: .milliseconds(500))
+                            waited += 1
+                        }
+                        await speech.prepare().value
+                        await Task.detached(priority: .utility) { await NoiseFilter.shared.prepare() }.value
+                    }
                 }
             } catch {
                 guard transcriber === self.transcriber else { return }
@@ -695,6 +743,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         self.key = key
         alarms.quiet(true) // answering the wake-up challenge: the beeping waits
         speech.stop() // never talk into the microphone
+        if key == .rightOption { speech.warmUp() } // a question: the voice loads while they talk
         pauseMusic() // nor over music
         if notepad.isListening { notepad.stopListening() } // one recording at a time
         pressedAt = Date()
@@ -804,6 +853,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .status(let status):
             task.status = status
             if let status { task.addStep(status) }
+            if let status { narrate(status, for: task) }
         case .plan(let plan): task.plan = plan
         case .answer(let text): task.reply = text
         case .approval(let approval): task.approval = approval
@@ -1482,6 +1532,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 if openStudy(text) { return }
                 if openPen(text) { return }
+                if readAloud(text) {
+                    if task.question.isEmpty { end(task) }
+                    return
+                }
                 if Self.isDismissRequest(text) {
                     if Self.isClearAll(text) { for other in tasks where other !== task { end(other) } }
                     // Said with nothing on the card: "it" is the finished answers waiting at the notch.
@@ -1610,6 +1664,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if Self.wantsBackground(text) { task.background = true }
                 task.assistant.ask(request, screenshot: image)
                 asked = true
+                task.spoken = true
+                task.narrated = []
+                task.narratedAt = nil
                 acknowledgeIfSlow(task)
                 return
             }
@@ -1879,6 +1936,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             items.append(item)
         }
         items.append(.separator())
+        for speed in SpeechOutput.speeds {
+            let item = item("Speed: \(speed.name)", #selector(selectVoiceSpeed(_:)))
+            item.representedObject = speed.value
+            item.state = speed.value == SpeechOutput.speed ? .on : .off
+            items.append(item)
+        }
+        items.append(.separator())
         let briefing = item("Read the morning briefing aloud", #selector(toggleSpeakBriefing))
         briefing.state = SpeechOutput.speakBriefing ? .on : .off
         items.append(briefing)
@@ -1891,6 +1955,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         speech.stop()
         SpeechOutput.engine = engine
         speech.prepare() // downloads the model the first time; lets go of the other
+    }
+
+    @objc private func selectVoiceSpeed(_ sender: NSMenuItem) {
+        guard let speed = sender.representedObject as? Double else { return }
+        SpeechOutput.speed = speed
     }
 
     @objc private func toggleSpeakBriefing() {

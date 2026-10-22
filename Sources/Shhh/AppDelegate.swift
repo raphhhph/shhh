@@ -275,6 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hotkey.onCancel = { [weak self] _ in self?.cancelRecording() }
         answerPanel.onClose = { [weak self] in self?.closeCard() }
         answerPanel.onFollowUp = { [weak self] in self?.followUpTyped($0) }
+        answerPanel.onShowingChange = { [weak self] _ in self?.refreshShelf() }
         answerPanel.onStopSpeaking = { [weak self] in
             self?.speech.stop()
             self?.answerPanel.setSpeaking(false)
@@ -1168,7 +1169,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// list has every task, the one on the card too, by its subject (or the request, until there is one).
     private func refreshShelf() {
         // Alarms stay out of the notch (Raph, Oct 2026): the hover overview's Next alarm has them.
-        guard tasks.contains(where: { $0 !== focused }) else {
+        // The card and the task band both hang from the notch: while the card is up it has the
+        // notch to itself, or the band's count sits on top of the card's buttons.
+        let cardAtNotch = answerPanel.isShowing && answerPanel.isAtNotch
+        guard !cardAtNotch, tasks.contains(where: { $0 !== focused }) else {
             shelf.update([])
             return
         }

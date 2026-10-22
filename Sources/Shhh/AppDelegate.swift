@@ -123,8 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// "Quiz me on econ externalities", "test me on…", "open the whiteboard", "review my flashcards":
     /// the study whiteboard, not the notch. Saying "whiteboard" always opens it.
     private func openStudy(_ request: String) -> Bool {
-        let quiz = #"\b(quiz|test) me\b|\blet'?s\b[^.?!]{0,10}\bquiz\b|\b(give|set|make)\b[^.?!]{0,10}\b(quiz|practice questions|exam(-style)? question)|\b(start|do|begin|run)\b[^.?!]{0,12}\b(quiz|study session|revision session|practice session)\b|\bwhite ?board\b|\bflash ?cards?\b"#
-        guard request.range(of: quiz, options: [.regularExpression, .caseInsensitive]) != nil else { return false }
+        guard let mode = Self.studyMode(request) else { return false }
         // The subject: said now, or in the conversation on the card ("let's start a quiz on econ",
         // then "open the whiteboard"), or the one studied last.
         let context = [request, focused?.question ?? ""] + tasks.suffix(3).map(\.question)
@@ -140,13 +139,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let task = focused, task.question.isEmpty || task.question.range(of: "quiz|whiteboard|flash ?card", options: [.regularExpression, .caseInsensitive]) != nil {
             end(task) // the quiz moves to the whiteboard
         }
-        // "Review my flashcards" is the deck; "make flashcards on…" is the tutor writing them.
-        let makeCards = request.range(of: #"\b(make|create|generate|write)\b[^.?!]{0,20}\bflash ?cards?\b"#, options: [.regularExpression, .caseInsensitive]) != nil
-        let cards = !makeCards && request.range(of: #"\bflash ?cards?\b"#, options: [.regularExpression, .caseInsensitive]) != nil
-            && request.range(of: #"\b(quiz|test) me\b"#, options: [.regularExpression, .caseInsensitive]) == nil
-        let exam = request.range(of: #"\bexam\b"#, options: [.regularExpression, .caseInsensitive]) != nil
-        studyBoard.show(subject: subject, request: request, mode: cards ? .cards : exam ? .exam : .quiz)
+        studyBoard.show(subject: subject, request: request, mode: mode)
         return true
+    }
+
+    /// Whether a request is for the whiteboard, and how: a quiz, an exam question, or their flashcards
+    /// ("review my flashcards" is the deck; "make flashcards on…" is the tutor writing them). Also `--route`.
+    static func studyMode(_ request: String) -> StudyBoardModel.Mode? {
+        let quiz = #"\b(quiz|test) me\b|\blet'?s\b[^.?!]{0,10}\bquiz\b|\b(give|set|make)\b[^.?!]{0,10}\b(quiz|practice questions|exam(-style)? question)|\b(start|do|begin|run)\b[^.?!]{0,12}\b(quiz|study session|revision session|practice session)\b|\bwhite ?board\b|\bflash ?cards?\b"#
+        func has(_ pattern: String) -> Bool { request.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil }
+        guard has(quiz) else { return nil }
+        if has(#"\bflash ?cards?\b"#), !has(#"\b(make|create|generate|write)\b[^.?!]{0,20}\bflash ?cards?\b"#), !has(#"\b(quiz|test) me\b"#) { return .cards }
+        return has(#"\bexam\b"#) ? .exam : .quiz
     }
 
     /// Joe at the notch, saying a line out loud: for the tour, with no conversation behind it.

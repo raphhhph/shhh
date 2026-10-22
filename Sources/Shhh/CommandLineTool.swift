@@ -497,7 +497,7 @@ enum CommandLineTool {
                 printed = board.items.count
                 guard turns.count > 0 else { check?.invalidate(); exit(0) }
                 let next = turns.removeFirst()
-                if printed == 0 { board.start(subject: subject, request: next, mode: next.lowercased().contains("exam") ? .exam : .quiz) }
+                if printed == 0 { board.start(subject: subject, request: next, mode: AppDelegate.studyMode(next) ?? .quiz) }
                 else if next.hasPrefix("@"), let image = FileManager.default.contents(atPath: String(next.dropFirst())) { board.submit("", image: image) }
                 else { board.submit(next) }
                 printed = board.items.count

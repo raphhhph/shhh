@@ -559,8 +559,15 @@ private struct DashboardView: View {
 }
 
 private struct NarrowKey: EnvironmentKey { static let defaultValue = false }
+private struct SettingsHighlightKey: EnvironmentKey { static let defaultValue: String? = nil }
 private struct WideKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues {
+    /// The Settings row a search just opened, lit up for a moment.
+    var settingsHighlight: String? {
+        get { self[SettingsHighlightKey.self] }
+        set { self[SettingsHighlightKey.self] = newValue }
+    }
+
     /// Room for a side column beside the page (the calendar's details and deadlines).
     var wide: Bool {
         get { self[WideKey.self] }
@@ -2833,20 +2840,26 @@ private struct SettingsRow<Content: View>: View {
     let last: Bool
     let content: Content
     @State private var hovering = false
+    @Environment(\.settingsHighlight) private var highlight
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(label).font(.system(size: 13.5, weight: .medium))
-                    if let detail { Text(detail).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1) }
+                    // Two lines rather than cut off mid-sentence ("connector…").
+                    if let detail {
+                        Text(detail).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 Spacer(minLength: 12)
                 content
             }
             .padding(.vertical, 11)
             .padding(.horizontal, 10)
-            .background(hovering ? Color.primary.opacity(0.035) : .clear, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .background(highlight == label ? Look.accent.opacity(0.14) : hovering ? Color.primary.opacity(0.035) : .clear,
+                        in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             .padding(.horizontal, -10)
             .onHover { hovering = $0 }
             if !last { Rectangle().fill(Look.line).frame(height: 1) }
@@ -3034,8 +3047,8 @@ private struct SettingsPage: View {
     @AppStorage("profileSubjects") private var profileSubjects = ""
     @AppStorage("profileProject") private var profileProject = ""
 
-    private func profileRow(_ label: String, _ detail: String, _ value: Binding<String>, _ placeholder: String) -> some View {
-        row(label, detail) {
+    private func profileRow(_ label: String, _ detail: String, _ value: Binding<String>, _ placeholder: String, last: Bool = false) -> some View {
+        row(label, detail, last: last) {
             TextField(placeholder, text: value)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13, weight: .medium))
@@ -3085,26 +3098,155 @@ private struct SettingsPage: View {
         Task { await CalendarFeed.refreshLinks() }
     }
 
+    /// Grouped the way a student looks for things: about you, how Joe behaves, how it hears you,
+    /// what it does each day, what it keeps, and the rest. The ids are the old ones where they still
+    /// fit, so a saved tab and `openSettings("general")` still land in the right place.
     private static let tabs: [(id: String, title: String, symbol: String)] = [
-        ("general", "General", "gearshape"),
-        ("personality", "Personality", "face.smiling"),
-        ("automations", "Automations", "clock.badge.checkmark"),
+        ("general", "You", "person.crop.circle"),
+        ("personality", "Joe", "sparkle"),
+        ("listening", "Listening", "waveform"),
+        ("automations", "Daily", "sun.horizon"),
         ("privacy", "Privacy", "lock"),
         ("advanced", "Advanced", "slider.horizontal.3"),
     ]
 
+    /// Every setting by name, with the words someone might type for it, and its tab: the search.
+    private static let index: [(label: String, words: String, tab: String)] = [
+        ("Your name", "name call me", "general"),
+        ("School", "school", "general"),
+        ("Programme", "ib diploma year dp1 dp2 myp", "general"),
+        ("Subjects", "subjects hl sl classes", "general"),
+        ("Your project", "business club project", "general"),
+        ("Calendar links", "managebac google ical calendar timetable deadlines link subscribe", "general"),
+        ("Style", "theme colour color classic midnight paper ocean look", "general"),
+        ("Appearance", "dark light mode auto", "general"),
+        ("Open Joe at login", "startup start login launch", "general"),
+        ("Welcome tour", "onboarding tour setup again", "general"),
+        ("Quit Joe", "quit close exit", "general"),
+        ("Answers", "length brief chatty how much", "personality"),
+        ("Tone", "gentle direct blunt personality", "personality"),
+        ("Hype you up", "cheer encourage hype", "personality"),
+        ("Joe's voice", "voice speak out loud talk tts", "personality"),
+        ("Chinese voice", "chinese mandarin voice", "personality"),
+        ("Read briefings aloud", "briefing speak morning", "personality"),
+        ("Overview on hover", "notch overview hover widgets", "personality"),
+        ("Overview widgets", "notch widgets edit arrange", "personality"),
+        ("Answers at the notch", "notch card answers island", "personality"),
+        ("Writing style", "dictation punctuation style", "listening"),
+        ("Microphone", "mic airpods input", "listening"),
+        ("Live words", "caption live words transcript", "listening"),
+        ("Reduce background noise", "noise fan chatter filter", "listening"),
+        ("Languages", "language english chinese russian european", "listening"),
+        ("“Hey Joe”", "hey joe wake word hands free", "listening"),
+        ("Your voice", "voice print learn recognise", "listening"),
+        ("Morning briefing", "morning brief wake", "automations"),
+        ("Evening check", "evening managebac grades daybook", "automations"),
+        ("Night shutdown", "night bedtime shutdown sleep", "automations"),
+        ("IB question of the day", "question daily quiz", "automations"),
+        ("Wake-up challenge", "alarm wake challenge verse fact", "automations"),
+        ("Alarms on iPhone", "iphone reminders alarms phone", "automations"),
+        ("Ask from iPhone", "iphone siri phone", "automations"),
+        ("Keep history", "history log", "privacy"),
+        ("Remember conversations", "memory remember conversations log", "privacy"),
+        ("Save notes to Obsidian", "obsidian notes vault save", "privacy"),
+        ("Clear history", "delete clear history", "privacy"),
+        ("Permissions", "accessibility microphone screen recording reminders calendar speech allow", "privacy"),
+        ("Model", "model haiku sonnet opus fast smart", "advanced"),
+        ("Opus for big jobs", "opus schoolwork slides", "advanced"),
+        ("Effort", "effort think speed", "advanced"),
+        ("Permissions", "autonomy ask approve control", "advanced"),
+        ("Click and type", "mouse keyboard screen control computer use", "advanced"),
+        ("AI cleanup", "filler words cleanup dictation", "advanced"),
+        ("Pay for Claude with", "api key plan billing account pay", "advanced"),
+        ("Use another model", "openrouter gpt deepseek gemini qwen custom api endpoint", "advanced"),
+        ("Download models from", "china mirror hugging face download vpn", "advanced"),
+        ("Memory vault", "vault obsidian folder memory", "advanced"),
+        ("Instructions", "instructions standing notes rules", "advanced"),
+    ]
+
+    @State private var query = ""
+    /// The setting a search result opened: its row lights up for a moment.
+    @State private var highlight: String?
+
+    private var results: [(label: String, words: String, tab: String)] {
+        let words = query.lowercased().split(separator: " ")
+        return Self.index.filter { entry in
+            let haystack = (entry.label + " " + entry.words).lowercased()
+            return words.allSatisfy { haystack.contains($0) }
+        }
+    }
+
     var body: some View {
-        PageTitle(title: "Settings")
-            .onAppear { login = SMAppService.mainApp.status == .enabled }
+        HStack(alignment: .top) {
+            PageTitle(title: "Settings")
+                .onAppear { login = SMAppService.mainApp.status == .enabled }
+            Spacer(minLength: 16)
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(.secondary)
+                TextField("Find a setting", text: $query)
+                    .textFieldStyle(.plain).font(.system(size: 13))
+                    .onSubmit { if let first = results.first { open(first) } }
+                if !query.isEmpty {
+                    Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain).foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .frame(width: 220, height: 32)
+            .background(Color.primary.opacity(0.06), in: Capsule())
+            .overlay(Capsule().strokeBorder(Look.line))
+            .padding(.top, 4)
+        }
 
-        Segmented(options: Self.tabs.map { ($0.id, $0.title) }, symbols: Self.tabs.map(\.symbol), selection: $tab, large: true)
+        if query.isEmpty {
+            Segmented(options: Self.tabs.map { ($0.id, $0.title) }, symbols: Self.tabs.map(\.symbol), selection: $tab, large: true)
 
-        switch tab {
-        case "personality": personality
-        case "automations": automations
-        case "privacy": privacy
-        case "advanced": advanced
-        default: general
+            Group {
+                switch tab {
+                case "personality": personality
+                case "listening": listening
+                case "automations": automations
+                case "privacy": privacy
+                case "advanced": advanced
+                default: general
+                }
+            }
+            .environment(\.settingsHighlight, highlight)
+        } else {
+            Card(title: results.isEmpty ? "Nothing called that" : "Settings", symbol: "magnifyingglass") {
+                if results.isEmpty {
+                    Text("Try another word, like \u{201C}voice\u{201D}, \u{201C}calendar\u{201D} or \u{201C}dark\u{201D}.")
+                        .font(.system(size: 13)).foregroundStyle(.secondary)
+                }
+                VStack(spacing: 0) {
+                    ForEach(results.indices, id: \.self) { index in
+                        let entry = results[index]
+                        Button { open(entry) } label: {
+                            HStack {
+                                Text(entry.label).font(.system(size: 13.5, weight: .medium))
+                                Spacer()
+                                Text(Self.tabs.first { $0.id == entry.tab }?.title ?? "")
+                                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                                Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(.tertiary)
+                            }
+                            .padding(.vertical, 10)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        if index < results.count - 1 { Rectangle().fill(Look.line).frame(height: 1) }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A search result: its tab, with the row lit up for a moment.
+    private func open(_ entry: (label: String, words: String, tab: String)) {
+        tab = entry.tab
+        query = ""
+        highlight = entry.label
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+            withAnimation(.easeOut(duration: 0.4)) { if highlight == entry.label { highlight = nil } }
         }
     }
 
@@ -3123,11 +3265,10 @@ private struct SettingsPage: View {
             profileRow("School", "Where you study", $profileSchool, "Your school")
             profileRow("Programme", "e.g. IB Diploma, year 1 (DP1)", $profileProgramme, "IB Diploma, year 1")
             profileRow("Subjects", "Joe’s IB help and daily question use these", $profileSubjects, "Math AI HL, ESS SL…")
-            profileRow("Your project", "A business or club Joe should know about", $profileProject, "Optional")
-            row("Welcome tour", "See the first-launch tour again; your settings stay") {
-                Button("Replay") { model.actions.showOnboarding() }.buttonStyle(PillButton())
-            }
-            row("Calendar links", calendarLinks.isEmpty ? "ManageBac: Calendar → Subscribe → copy the link. Google: settings → Secret address in iCal format" : "\(calendarLinks.count) added: read every half hour") {
+            profileRow("Your project", "A business or club Joe should know about", $profileProject, "Optional", last: true)
+        }
+        section("School calendar", "calendar") {
+            row("Calendar links", calendarLinks.isEmpty ? "ManageBac: Calendar → Subscribe → copy the link. Google: settings → Secret address in iCal format" : "\(calendarLinks.count) added: read every half hour", last: true) {
                 HStack(spacing: 6) {
                     TextField("Paste a calendar link", text: $newLink)
                         .textFieldStyle(.plain).font(.system(size: 12.5))
@@ -3140,51 +3281,26 @@ private struct SettingsPage: View {
                     }
                 }
             }
+        }
+        section("Look", "paintbrush") {
             row("Style", "How Joe looks: Classic, Midnight (navy and gold), Paper (serif, warm) or Ocean") {
                 Choice(options: Theme.allCases.map { ($0.rawValue, $0.title) }, selection: $theme)
                     .onChange(of: theme) { AppAppearance.apply() }
             }
-            row("Appearance", "Light, dark, or follow the Mac") {
+            row("Appearance", "Light, dark, or follow the Mac", last: true) {
                 Choice(options: AppAppearance.allCases.map { ($0.rawValue, $0.title) }, selection: $appearance)
                     .onChange(of: appearance) { AppAppearance.apply() }
             }
-            row("Open Joe at login", last: true) {
+        }
+        section("Joe on this Mac", "macwindow") {
+            row("Open Joe at login") {
                 switchOn($login) { on in
                     do { if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() } } catch { NSSound.beep() }
                 }
             }
-        }
-        section("Dictation", "waveform") {
-            row("Writing style", "How your dictation is punctuated") {
-                Choice(options: WritingStyle.allCases.map { ($0.rawValue, $0.title) }, selection: $writingStyle)
+            row("Welcome tour", "See the first-launch tour again; your settings stay") {
+                Button("Replay") { model.actions.showOnboarding() }.buttonStyle(PillButton())
             }
-            row("Microphone") {
-                Choice(options: [("", "Automatic")] + model.actions.microphones().map { ($0.uid, $0.name) }, selection: $microphone)
-            }
-            row("Live words", "Shows what you're saying under the pill as you talk") { switchOn($liveWords) }
-            row("Reduce background noise", "Takes out fans and chatter before your words are written, on this Mac") { switchOn($reduceNoise) }
-            row("Languages", "What you speak to Joe in. English only stops it mishearing you as Russian", last: true) {
-                Choice(options: [("english", "English only"), ("chinese", "English + Chinese"), ("european", "25 European languages")],
-                       selection: $speechLanguages)
-                    .onChange(of: speechLanguages) { model.actions.setSpeechLanguages(speechLanguages) }
-            }
-        }
-        section("Notch", "rectangle.topthird.inset.filled") {
-            row("Overview on hover", "Rest the pointer on the notch: time, next class, what's due, your tasks, music") { switchOn($overviewOn) }
-            row("Overview widgets", overviewWidgets.map { NotchOverview.Widget(rawValue: $0)?.title ?? $0 }.joined(separator: " · ")) {
-                Button(editingWidgets ? "Done" : "Edit…") { withAnimation(.snappy) { editingWidgets.toggle() } }
-                    .buttonStyle(PillButton(prominent: editingWidgets))
-            }
-            if editingWidgets {
-                WidgetEditor(widgets: Binding(
-                    get: { overviewWidgets.compactMap(NotchOverview.Widget.init) },
-                    set: { overviewWidgets = $0.map(\.rawValue); NotchOverview.widgets = $0 }),
-                             done: { withAnimation(.snappy) { editingWidgets = false } })
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-            row("Answers at the notch", "Answers drop down from the notch", last: true) { switchOn($notch) { model.actions.setNotch($0) } }
-        }
-        section("Joe", "power") {
             row("Quit Joe", "Dictation and the notch stop until you open Joe again", last: true) {
                 Button("Quit") { NSApp.terminate(nil) }.buttonStyle(PillButton())
             }
@@ -3211,6 +3327,51 @@ private struct SettingsPage: View {
             }
             row("Read briefings aloud", last: true) { switchOn($speakBriefing) }
         }
+        section("Notch", "rectangle.topthird.inset.filled") {
+            row("Overview on hover", "Rest the pointer on the notch: time, next class, what's due, your tasks, music") { switchOn($overviewOn) }
+            row("Overview widgets", overviewWidgets.map { NotchOverview.Widget(rawValue: $0)?.title ?? $0 }.joined(separator: " · ")) {
+                Button(editingWidgets ? "Done" : "Edit…") { withAnimation(.snappy) { editingWidgets.toggle() } }
+                    .buttonStyle(PillButton(prominent: editingWidgets))
+            }
+            if editingWidgets {
+                WidgetEditor(widgets: Binding(
+                    get: { overviewWidgets.compactMap(NotchOverview.Widget.init) },
+                    set: { overviewWidgets = $0.map(\.rawValue); NotchOverview.widgets = $0 }),
+                             done: { withAnimation(.snappy) { editingWidgets = false } })
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+            row("Answers at the notch", "Answers drop down from the notch", last: true) { switchOn($notch) { model.actions.setNotch($0) } }
+        }
+    }
+
+    @ViewBuilder private var listening: some View {
+        section("Dictation", "waveform") {
+            row("Writing style", "How your dictation is punctuated") {
+                Choice(options: WritingStyle.allCases.map { ($0.rawValue, $0.title) }, selection: $writingStyle)
+            }
+            row("Microphone") {
+                Choice(options: [("", "Automatic")] + model.actions.microphones().map { ($0.uid, $0.name) }, selection: $microphone)
+            }
+            row("Live words", "Shows what you're saying under the pill as you talk") { switchOn($liveWords) }
+            row("Reduce background noise", "Takes out fans and chatter before your words are written, on this Mac") { switchOn($reduceNoise) }
+            row("Languages", "What you speak to Joe in. English only stops it mishearing you as Russian", last: true) {
+                Choice(options: [("english", "English only"), ("chinese", "English + Chinese"), ("european", "25 European languages")],
+                       selection: $speechLanguages)
+                    .onChange(of: speechLanguages) { model.actions.setSpeechLanguages(speechLanguages) }
+            }
+        }
+        section("Hands-free", "ear") {
+            row("“Hey Joe”", "Talk without a key. On your Mac only; the mic stays on") { switchOn($wakeWord) }
+            row("Your voice", voiceLearned >= 3 ? "Learned from \(voiceLearned) recordings: Joe listens for you, not the room"
+                    : "Learning: talk to Joe holding the key a few times (\(voiceLearned) of 3)", last: true) {
+                Button("Reset") {
+                    Task { await VoicePrint.shared.reset(); voiceLearned = 0 }
+                }
+                .buttonStyle(PillButton())
+                .disabled(voiceLearned == 0)
+            }
+            .task { voiceLearned = await VoicePrint.shared.learned }
+        }
     }
 
     @ViewBuilder private var automations: some View {
@@ -3224,18 +3385,6 @@ private struct SettingsPage: View {
         section("iPhone", "iphone") {
             row("Alarms on iPhone", "Copies alarms to a “Joe” list in Reminders") { switchOn($toReminders) }
             row("Ask from iPhone", "“Hey Siri, add … to Ask Joe”", last: true) { switchOn($phoneRemote) }
-        }
-        section("Hands-free", "ear") {
-            row("“Hey Joe”", "Talk without a key. On your Mac only; the mic stays on") { switchOn($wakeWord) }
-            row("Your voice", voiceLearned >= 3 ? "Learned from \(voiceLearned) recordings: Joe listens for you, not the room"
-                    : "Learning: talk to Joe holding the key a few times (\(voiceLearned) of 3)", last: true) {
-                Button("Reset") {
-                    Task { await VoicePrint.shared.reset(); voiceLearned = 0 }
-                }
-                .buttonStyle(PillButton())
-                .disabled(voiceLearned == 0)
-            }
-            .task { voiceLearned = await VoicePrint.shared.learned }
         }
     }
 
@@ -3266,43 +3415,6 @@ private struct SettingsPage: View {
     }
 
     @ViewBuilder private var advanced: some View {
-        section("AI account", "creditcard") {
-            row("Pay for Claude with", useAPIKey ? "An Anthropic API key, billed per request" : "The Claude plan Claude Code is signed in to", last: !useAPIKey) {
-                Choice(options: [(false, "Claude plan"), (true, "API key")], selection: $useAPIKey)
-            }
-            if useAPIKey {
-                row("API key", AIAccount.maskedKey.map { "Saved: \($0). New conversations use it." } ?? "From console.anthropic.com → API keys", last: true) {
-                    HStack(spacing: 8) {
-                        SecureField("sk-ant-…", text: $apiKeyDraft)
-                            .joeField()
-                            .frame(width: 220)
-                        Button("Save") { AIAccount.save(apiKeyDraft); apiKeyDraft = ""; model.settingsVersion += 1 }
-                            .buttonStyle(PillButton(prominent: true))
-                            .disabled(apiKeyDraft.count < 20)
-                    }
-                }
-            }
-        }
-        section("Other models and custom APIs", "square.stack.3d.up") {
-            row("Use another model", "GPT, DeepSeek, Qwen, Gemini… through OpenRouter, or your own Anthropic-compatible API. Gmail, Calendar and Chrome connectors aren't available in this mode") {
-                switchOn($useOpenRouter)
-            }
-            row("Endpoint", "OpenRouter, or any Anthropic-compatible base URL (LiteLLM, a gateway, a local server)") {
-                TextField("https://openrouter.ai/api", text: $customEndpoint)
-                    .joeField().frame(width: 260)
-            }
-            row("API key", AIAccount.maskedOpenRouterKey.map { "Saved: \($0)" } ?? "OpenRouter: openrouter.ai → Keys") {
-                HStack(spacing: 8) {
-                    SecureField("sk-or-…", text: $openRouterDraft).joeField().frame(width: 220)
-                    Button("Save") { AIAccount.save(openRouterDraft, as: "openRouterKey"); openRouterDraft = ""; model.settingsVersion += 1 }
-                        .buttonStyle(PillButton(prominent: true)).disabled(openRouterDraft.count < 20)
-                }
-            }
-            row("Model", "An OpenRouter model ID, e.g. openai/…, deepseek/…, qwen/…; openrouter/auto picks one", last: true) {
-                TextField("openrouter/auto", text: $openRouterModel)
-                    .joeField().frame(width: 260)
-            }
-        }
         section("Brain", "cpu") {
             row("Model", "Smarter, or faster and lighter on your usage") {
                 Choice(options: Assistant.Model.allCases.map { ($0.rawValue, $0.name) }, selection: $assistantModel)
@@ -3320,6 +3432,45 @@ private struct SettingsPage: View {
             }
             row("Click and type", "Joe can use your mouse and keyboard") { switchOn($control) { model.actions.setScreenControl($0) } }
             row("AI cleanup", "Removes filler words from dictation, on this Mac", last: true) { switchOn($cleanup) { model.actions.setCleanup($0) } }
+        }
+        section("AI account", "creditcard") {
+            row("Pay for Claude with", useAPIKey ? "An Anthropic API key, billed per request" : "The Claude plan Claude Code is signed in to", last: !useAPIKey) {
+                Choice(options: [(false, "Claude plan"), (true, "API key")], selection: $useAPIKey)
+            }
+            if useAPIKey {
+                row("API key", AIAccount.maskedKey.map { "Saved: \($0). New conversations use it." } ?? "From console.anthropic.com → API keys", last: true) {
+                    HStack(spacing: 8) {
+                        SecureField("sk-ant-…", text: $apiKeyDraft)
+                            .joeField()
+                            .frame(width: 220)
+                        Button("Save") { AIAccount.save(apiKeyDraft); apiKeyDraft = ""; model.settingsVersion += 1 }
+                            .buttonStyle(PillButton(prominent: true))
+                            .disabled(apiKeyDraft.count < 20)
+                    }
+                }
+            }
+        }
+        section("Other models", "square.stack.3d.up") {
+            row("Use another model", "GPT, DeepSeek, Gemini… through OpenRouter or your own API. Gmail, Calendar and Chrome don't work in this mode", last: !useOpenRouter) {
+                switchOn($useOpenRouter)
+            }
+            if useOpenRouter {
+                row("Endpoint", "OpenRouter, or any Anthropic-compatible base URL (LiteLLM, a gateway, a local server)") {
+                    TextField("https://openrouter.ai/api", text: $customEndpoint)
+                        .joeField().frame(width: 260)
+                }
+                row("API key", AIAccount.maskedOpenRouterKey.map { "Saved: \($0)" } ?? "OpenRouter: openrouter.ai → Keys") {
+                    HStack(spacing: 8) {
+                        SecureField("sk-or-…", text: $openRouterDraft).joeField().frame(width: 220)
+                        Button("Save") { AIAccount.save(openRouterDraft, as: "openRouterKey"); openRouterDraft = ""; model.settingsVersion += 1 }
+                            .buttonStyle(PillButton(prominent: true)).disabled(openRouterDraft.count < 20)
+                    }
+                }
+                row("Model", "An OpenRouter model ID, e.g. openai/…, deepseek/…, qwen/…; openrouter/auto picks one", last: true) {
+                    TextField("openrouter/auto", text: $openRouterModel)
+                        .joeField().frame(width: 260)
+                }
+            }
         }
         section("Downloads", "arrow.down.circle") {
             row("Download models from", chinaMirror ? "HF-Mirror: works in mainland China without a VPN" : "Hugging Face", last: true) {

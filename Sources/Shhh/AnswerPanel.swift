@@ -39,7 +39,13 @@ final class AnswerPanel {
 
     var isVisible: Bool { panel.isVisible }
     /// Showing, as far as the app goes: false as soon as it starts tucking away.
-    private(set) var isShowing = false
+    private(set) var isShowing = false {
+        didSet { if isShowing != oldValue { onShowingChange(isShowing) } }
+    }
+    /// Whether the card hangs from the notch (rather than sitting at the bottom of the screen).
+    var isAtNotch: Bool { notch != nil }
+    /// The card coming up or going: the task band steps aside for it, as they share the notch.
+    var onShowingChange: (Bool) -> Void = { _ in }
     /// Whether the pointer is over the card (or the island), and when it last was: the card clears
     /// itself a while after the answer, unless it's being read.
     var isHovering: Bool { model.hovering }
@@ -480,7 +486,9 @@ private struct AnswerView: View {
                 .animation(nil, value: model.listening)
             Spacer(minLength: notch.width) // behind the notch
             if model.expanded {
-                buttons.font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.8))
+                // Spaced like the header's, not packed against the edge.
+                HStack(spacing: 14) { buttons }
+                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.8))
             } else if model.error != nil {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 13, weight: .semibold))

@@ -306,10 +306,10 @@ private struct DiagramPiece: View {
         case .area:
             if !points.isEmpty, !piece.label.isEmpty {
                 let centre = CGPoint(x: points.map(\.x).reduce(0, +) / CGFloat(points.count), y: points.map(\.y).reduce(0, +) / CGFloat(points.count))
-                tag(piece.label, size: 11).fixedSize().position(centre)
+                tag(piece.label, size: 11).fixedSize().readable().position(centre)
             }
         case .text:
-            if let p = points.first { tag(piece.label, color: color).fixedSize().position(p) }
+            if let p = points.first { tag(piece.label, color: color).fixedSize().readable().position(p) }
         case .box:
             if let p = points.first {
                 tag(piece.label, bold: true).fixedSize()
@@ -323,6 +323,14 @@ private struct DiagramPiece: View {
 
     private func tag(_ text: String, bold: Bool = false, size: CGFloat = 12.5, color: Color = .primary) -> some View {
         Text(text).font(.system(size: size, weight: bold ? .semibold : .regular)).foregroundStyle(color)
+    }
+}
+
+private extension View {
+    /// Text over curves and shading: on a patch of the page, so a line crossing it doesn't cut it.
+    func readable() -> some View {
+        padding(.horizontal, 4).padding(.vertical, 1)
+            .background(Color(nsColor: .controlBackgroundColor).opacity(0.9), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
     }
 }
 

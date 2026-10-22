@@ -500,11 +500,15 @@ final class StudyBoardModel: ObservableObject {
             point E2 41,61 x="Q2" y="Pc"
             point "" 41,40 y="Pp"
             area 0,61 41,61 41,40 0,40 orange "Tax revenue"
+            area 41,61 53,50 41,40 gray
+            text 76,38 "Welfare loss"
+            arrow 68,40 48,50 gray
             text 80,30 "Excess supply"
             </diagram>
             Commands: axes "x label" "y label"; line <label> x,y x,y [more points make a smooth curve, e.g. MC or AC]; \
             arrow x,y x,y [label] for a shift or movement; point <label> x,y [x="Q1"] [y="P1"] (dashed guides to the axes with \
-            those marks); area x,y x,y x,y… [label] to shade (tax revenue, welfare loss, surplus); text x,y "words"; \
+            those marks); area x,y x,y x,y… [label] to shade (tax revenue, welfare loss, \
+            surplus; a small one like a welfare-loss triangle gets no label: a text beside it and an arrow to it); text x,y "words"; \
             box x,y "label" for flow diagrams (with arrows between boxes, no axes). Colours: blue, red, green, orange, purple, \
             gray (black by default); add dashed for a curve after a shift. Draw in the order you'd explain: axes, the original \
             curves and equilibrium, then the shift (new curve in a colour, an arrow), the new equilibrium, then shaded areas. \
@@ -1040,7 +1044,9 @@ extension StudyBoard {
                 point E2 38,63 x="Q2" y="Pc"
                 point "" 38,38 y="Pp"
                 area 0,63 38,63 38,38 0,38 orange "Tax revenue"
-                text 78,30 "Welfare loss"
+                area 38,63 53,50 38,38 gray
+                text 76,38 "Welfare loss"
+                arrow 68,40 47,50 gray
                 </diagram>
                 <lesson title="2.7 Indirect taxes">A **specific tax** is a fixed amount per unit. Supply shifts up by the tax: consumers pay Pc, producers keep Pp.</lesson>
                 """), subject: "Economics HL", sketching: false, mode: .explain)

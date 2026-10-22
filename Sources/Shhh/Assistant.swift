@@ -53,7 +53,7 @@ final class Assistant {
     }
 
     static var model: Model {
-        get { Model(rawValue: UserDefaults.standard.string(forKey: "assistantModel") ?? "") ?? .opus }
+        get { Model(rawValue: UserDefaults.standard.string(forKey: "assistantModel") ?? "") ?? .haiku }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "assistantModel") }
     }
 
@@ -257,7 +257,7 @@ final class Assistant {
         set { UserDefaults.standard.set(newValue?.path, forKey: "memoryVault") }
     }
 
-    private var session: Session?
+    private var session: (any Engine)?
     private var onEvent: @MainActor (Event) -> Void = { _ in }
 
     /// True while a conversation is open, so the next request can follow up on it.
@@ -267,8 +267,22 @@ final class Assistant {
     func prepare(onEvent: @escaping @MainActor (Event) -> Void) {
         cancel()
         self.onEvent = onEvent
-        guard let executable = Self.executable else { return } // reported by ask()
-        session = Session(executable: executable, model: modelOverride, effort: effortOverride, tutor: tutorPrompt, onEvent: { [weak self] in self?.relay($0) })
+        session = makeEngine() // nil when the CLI isn't installed: reported by ask()
+    }
+
+    /// A conversation on the chosen AI: Claude Code, or Codex signed in to ChatGPT.
+    private func makeEngine() -> (any Engine)? {
+        if AIAccount.usesChatGPT {
+            guard let codex = CodexSession.executable else { return nil }
+            return CodexSession(executable: codex, model: modelOverride, effort: effortOverride, tutor: tutorPrompt, onEvent: { [weak self] in self?.relay($0) })
+        }
+        guard let executable = Self.executable else { return nil }
+        return Session(executable: executable, model: modelOverride, effort: effortOverride, tutor: tutorPrompt, onEvent: { [weak self] in self?.relay($0) })
+    }
+
+    /// Whether the chosen AI's CLI is installed, so requests can go anywhere.
+    nonisolated static var isInstalled: Bool {
+        AIAccount.usesChatGPT ? CodexSession.executable != nil : executable != nil
     }
 
     // MARK: Hard jobs
@@ -325,7 +339,7 @@ final class Assistant {
     private var retried = false
 
     private static func isDropped(_ message: String) -> Bool {
-        message.range(of: #"ECONNRESET|connection (dropped|error|reset|refused)|socket hang up|ETIMEDOUT|EPIPE|fetch failed|network|overloaded|\b(502|503|504|529)\b"#,
+        message.range(of: #"ECONNRESET|connection (dropped|error|reset|refused)|socket hang up|ETIMEDOUT|EPIPE|fetch failed|network|overloaded|stream disconnected|\b(502|503|504|529)\b"#,
                       options: [.regularExpression, .caseInsensitive]) != nil
     }
 
@@ -342,11 +356,11 @@ final class Assistant {
     }
 
     private func resend(_ request: String, _ screenshot: Data?) {
-        if session?.isRunning != true, let executable = Self.executable {
-            session = Session(executable: executable, model: modelOverride, effort: effortOverride, tutor: tutorPrompt, onEvent: { [weak self] in self?.relay($0) }) // a fresh connection
+        if session?.isRunning != true {
+            session = makeEngine() // a fresh connection
         }
         guard let session, session.isRunning else {
-            onEvent(.failed("The connection to Claude dropped twice. Check your internet or proxy, then try again."))
+            onEvent(.failed("The connection to \(AIAccount.brainName) dropped twice. Check your internet or proxy, then try again."))
             return
         }
         session.send(request, screenshot: screenshot)
@@ -355,9 +369,10 @@ final class Assistant {
     /// Sends a request, with a screenshot when it's about what's on screen.
     func ask(_ request: String, screenshot: Data? = nil) {
         guard let session, session.isRunning else {
-            let reason = Self.executable == nil
-                ? "Couldn't find Claude Code. Install it from claude.com/code, then try again."
-                : session?.launchError ?? "Claude Code stopped. Close this card and try again."
+            let reason = !Self.isInstalled
+                ? (AIAccount.usesChatGPT ? "Couldn't find Codex. Set it up in Settings → Advanced → AI, then try again."
+                   : "Couldn't find Claude Code. Install it from claude.com/code, then try again.")
+                : session?.launchError ?? "\(AIAccount.usesChatGPT ? "Codex" : "Claude Code") stopped. Close this card and try again."
             onEvent(.failed(reason))
             return
         }
@@ -399,9 +414,18 @@ final class Assistant {
     }
 }
 
+/// What `Assistant` needs from a conversation with the AI, whichever CLI runs it.
+@MainActor
+protocol Engine: AnyObject {
+    var isRunning: Bool { get }
+    var launchError: String? { get }
+    func send(_ request: String, screenshot: Data?)
+    func stop()
+}
+
 /// One `claude -p` process, talking JSON lines over stdin and stdout.
 @MainActor
-final class Session {
+final class Session: Engine {
     private let process = Process()
     private let input = Pipe()
     private let output = Pipe()
@@ -822,6 +846,18 @@ final class Session {
     }
 
     private func allow(_ id: String, _ input: [String: Any]) {
+        Self.beforeRunning(input) { [weak self] in
+            self?.stop()
+            self?.onEvent(.failed("Stopped: you pressed Esc."))
+        }
+        write(["type": "control_response", "response": [
+            "subtype": "success", "request_id": id,
+            "response": ["behavior": "allow", "updatedInput": input],
+        ]])
+    }
+
+    /// What happens before an allowed action runs, whichever engine asked (see `CodexSession`).
+    static func beforeRunning(_ input: [String: Any], onEscape: @escaping () -> Void) {
         // An edit or a new file: a backup first, for "undo that".
         if let path = input["file_path"] as? String, input["content"] != nil || input["old_string"] != nil {
             UndoJournal.beforeChanging(path)
@@ -834,15 +870,8 @@ final class Session {
         // Clicking and typing: the bar shows, the clicks flash, and Esc stops the request.
         if let text = input["command"] as? String, let path = ScreenControl.cliclick, text.contains(path),
            let command = ScreenControl.parseChain(text, mapped: true)?.command {
-            ScreenControl.shared.acting(command) { [weak self] in
-                self?.stop()
-                self?.onEvent(.failed("Stopped: you pressed Esc."))
-            }
+            ScreenControl.shared.acting(command, stop: onEscape)
         }
-        write(["type": "control_response", "response": [
-            "subtype": "success", "request_id": id,
-            "response": ["behavior": "allow", "updatedInput": input],
-        ]])
     }
 
     private func deny(_ id: String, _ message: String) {
@@ -854,7 +883,7 @@ final class Session {
 
     // MARK: - Text
 
-    private static func describe(tool: String, input: [String: Any]) -> String {
+    static func describe(tool: String, input: [String: Any]) -> String {
         switch tool {
         case "WebSearch":
             return (input["query"] as? String).map { "Searching: \($0)" } ?? "Searching the web…"
@@ -895,7 +924,7 @@ final class Session {
 
     /// What a tool that succeeded did, in a few words for the "done" toast, or nil for tools that
     /// only read (and for clicks and typing in Chrome, which happen many times a task).
-    private static func actionLabel(_ tool: String) -> String? {
+    static func actionLabel(_ tool: String) -> String? {
         if ["Edit", "Write"].contains(tool) { return "Saved to your notes" }
         let parts = tool.components(separatedBy: "__")
         guard parts.count == 3, parts[0] == "mcp", parts[1] != "claude-in-chrome" else { return nil }
@@ -936,8 +965,8 @@ final class Session {
         return systemPrompt(Assistant.effort, autonomy: Assistant.autonomy, instructions: Instructions(vault: vault).text, vault: vault)
     }
 
-    private static func systemPrompt(_ effort: Assistant.Effort, autonomy: Assistant.Autonomy,
-                                     instructions: String, vault: URL?) -> String {
+    static func systemPrompt(_ effort: Assistant.Effort, autonomy: Assistant.Autonomy,
+                             instructions: String, vault: URL?) -> String {
         let zone = TimeZone.current.identifier
         // With a voice on, replies are written to be heard, in the voice's character.
         let spoken = switch SpeechOutput.engine {
@@ -1159,7 +1188,7 @@ final class Session {
 
 /// The user's instructions file, with each `@path` line replaced by that file from the vault, and
 /// the `Read-only:` folders and `Allow command:` commands picked out for the tool policy.
-private struct Instructions {
+struct Instructions {
     private(set) var text = ""
     private(set) var readOnly: [String] = []
     private(set) var allowedCommands: [String] = []

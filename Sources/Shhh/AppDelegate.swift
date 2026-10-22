@@ -250,6 +250,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         AppAppearance.apply() // light, dark or the Mac's
+        AIAccount.chooseProviderIfUnset()
         phone.run = { [weak self] request, done in self?.startInBackground(request, onFinished: done) }
         wake.canListen = { [weak self] in
             guard let self else { return false }
@@ -927,7 +928,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let now = Date()
         let calendar = Calendar.current
         let today = now.formatted(.localDay)
-        guard morningBriefing, Assistant.executable != nil,
+        guard morningBriefing, Assistant.isInstalled,
               // School days from 5:00; a day off from 7:00 (a lie-in shouldn't wake to a briefing).
               // Woken by their alarm: whenever it is.
               afterAlarm || (Daybook.isSchoolDay(now) ? 5..<12 : 7..<13).contains(calendar.component(.hour, from: now)),
@@ -989,7 +990,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let calendar = Calendar.current
         let today = now.formatted(.localDay)
         let minutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
-        guard nightShutdown, Assistant.executable != nil, Assistant.vaultURL != nil,
+        guard nightShutdown, Assistant.isInstalled, Assistant.vaultURL != nil,
               minutes >= 21 * 60 + 30,
               let tomorrow = calendar.date(byAdding: .day, value: 1, to: now), Daybook.isSchoolDay(tomorrow),
               UserDefaults.standard.string(forKey: "lastNightShutdown") != today,
@@ -1083,7 +1084,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let calendar = Calendar.current
         let today = now.formatted(.localDay)
         let minutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
-        guard eveningCheck, Assistant.executable != nil, Assistant.vaultURL != nil,
+        guard eveningCheck, Assistant.isInstalled, Assistant.vaultURL != nil,
               (19 * 60 + 30..<23 * 60).contains(minutes),
               UserDefaults.standard.string(forKey: "lastEveningCheck") != today,
               state == .idle,
@@ -1732,7 +1733,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// "Assistant": how to use it, which model and effort, what it may do alone, and its memory.
     private func askMenu() -> NSMenuItem {
-        let hint = NSMenuItem(title: Assistant.executable == nil ? "Claude Code not found" : "Hold right ⌥ to ask or delegate",
+        let hint = NSMenuItem(title: !Assistant.isInstalled ? (AIAccount.usesChatGPT ? "Codex not found" : "Claude Code not found") : "Hold right ⌥ to ask or delegate",
                               action: nil, keyEquivalent: "")
         hint.isEnabled = false
         var items = [hint, .separator()]

@@ -222,9 +222,8 @@ final class NoteSaver {
     // MARK: - Titling
 
     /// A title, a one-line summary and what kind of notes these are, from Claude (Haiku, no tools,
-    /// about five seconds), or nil if it couldn't.
+    /// about five seconds) or Codex in ChatGPT mode, or nil if it couldn't.
     private static func describe(notes: String, kind: Kind?, requests: [String]) async -> (kind: Kind, title: String, summary: String)? {
-        guard let executable = Assistant.executable else { return nil }
         let excerpt = notes.count > 7000 ? notes.prefix(5500) + "\n…\n" + notes.suffix(1500) : Substring(notes)
         let prompt = """
             Title these notes the user took in a notepad, for their Obsidian vault.
@@ -241,6 +240,25 @@ final class NoteSaver {
             \(excerpt)
             </notes>
             """
+        let text: String?
+        if AIAccount.usesChatGPT || Assistant.executable == nil {
+            // ChatGPT mode (or no Claude Code): the same through Codex.
+            text = await withCheckedContinuation { continuation in
+                DispatchQueue.global().async { continuation.resume(returning: CodexAccount.quickAnswer(prompt, timeout: 60)) }
+            }
+        } else {
+            text = await claudeText(prompt)
+        }
+        guard let text, let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"),
+              let json = try? JSONSerialization.jsonObject(with: Data(text[start...end].utf8)) as? [String: Any],
+              let title = (json["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty
+        else { return nil }
+        return (Kind(rawValue: json["kind"] as? String ?? "") ?? .notes, String(title.prefix(80)), json["summary"] as? String ?? "")
+    }
+
+    /// Claude Code's answer to a prompt (Haiku, no tools), or nil.
+    private static func claudeText(_ prompt: String) async -> String? {
+        guard let executable = Assistant.executable else { return nil }
         let process = Process()
         process.executableURL = executable
         process.arguments = ["-p", "--model", Assistant.Model.haiku.rawValue, "--tools", "", "--strict-mcp-config",
@@ -252,7 +270,7 @@ final class NoteSaver {
         process.standardInput = input
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
-        let text: String? = await withCheckedContinuation { continuation in
+        return await withCheckedContinuation { continuation in
             DispatchQueue.global().async {
                 guard (try? process.run()) != nil else { return continuation.resume(returning: nil) }
                 let timeout = DispatchWorkItem { process.terminate() }
@@ -265,10 +283,5 @@ final class NoteSaver {
                 continuation.resume(returning: String(data: data, encoding: .utf8))
             }
         }
-        guard let text, let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"),
-              let json = try? JSONSerialization.jsonObject(with: Data(text[start...end].utf8)) as? [String: Any],
-              let title = (json["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty
-        else { return nil }
-        return (Kind(rawValue: json["kind"] as? String ?? "") ?? .notes, String(title.prefix(80)), json["summary"] as? String ?? "")
     }
 }

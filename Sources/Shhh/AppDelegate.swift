@@ -198,6 +198,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var followingUp = false
     private var showPanelWork: DispatchWorkItem?
     private var startTask: Task<AudioRecorder.Recording?, Never>?
+    /// The noise filter working through the recording while it's made, and the loop feeding it.
+    private var liveNoise: LiveNoiseFilter?
+    private var liveNoiseFeed: Task<Void, Never>?
     /// Live words while a key is held (Settings → Live words).
     private let caption = LiveCaption()
     private var liveTimer: Timer?
@@ -735,6 +738,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 return nil
             }
         }
+        startLiveNoiseFilter(current)
         // Show the pill only for a real hold, not a quick tap of ⌘.
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
@@ -790,6 +794,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         RunLoop.main.add(timer, forMode: .common)
         liveTimer = timer
+    }
+
+    /// The noise filter cleans the recording every half second while they talk, so after the key is
+    /// let go it has only the last moment left (it used to do the whole recording then).
+    private func startLiveNoiseFilter(_ current: Int) {
+        liveNoiseFeed?.cancel()
+        liveNoise = nil
+        let start = startTask
+        liveNoiseFeed = Task { [weak self] in
+            guard let filter = await NoiseFilter.shared.live(), let recording = await start?.value,
+                  let self, self.state == .recording, self.dictation == current else { return }
+            self.liveNoise = filter
+            while !Task.isCancelled, self.state == .recording, self.dictation == current {
+                let from = await filter.fed
+                await filter.feed(self.recorder.samples(recording, from: from), from: from)
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+        }
     }
 
     private func stopLiveWords() {
@@ -1386,6 +1408,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard state == .recording else { return }
         if locked { return } // a shortcut typed while it's locked on is just typing; the next tap ends it
         stopLiveWords()
+        liveNoiseFeed?.cancel()
+        liveNoise = nil
         handsFreeTake = false
         endListener.stop()
         showPanelWork?.cancel()
@@ -1424,6 +1448,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let style = writingStyle
         let start = startTask
         let transcriber = self.transcriber
+        liveNoiseFeed?.cancel()
+        let liveNoise = handsFreeTake ? nil : self.liveNoise // "Hey Joe" keeps only their voice: a different recording
+        self.liveNoise = nil
 
         Task {
             var asked = false
@@ -1457,9 +1484,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             do {
                 // Normally well under a second. Far longer means the model is stuck.
                 let seconds = Double(samples.count) / 16_000
-                let heard = await NoiseFilter.shared.clean(samples) // background noise out (Settings)
+                // Background noise out (Settings): mostly done while they talked.
+                var heard = await liveNoise?.finish(samples)
+                if heard == nil { heard = await NoiseFilter.shared.clean(samples) }
+                let cleaned = heard ?? samples
                 if asking { Latency.mark("denoised") }
-                text = try await withTimeout(40 + seconds) { try await transcriber.transcribe(heard) } // may wait for Chinese just after launch
+                text = try await withTimeout(40 + seconds) { try await transcriber.transcribe(cleaned) } // may wait for Chinese just after launch
                 if asking { Latency.mark("transcribed") }
             } catch {
                 NSSound.beep()

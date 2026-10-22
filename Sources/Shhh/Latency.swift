@@ -5,7 +5,8 @@ import Foundation
 /// the request in front (the card) is timed; `Joe --latency` sums up the last ones.
 ///
 /// Steps, in order: micLive (recording started), released (key let go), audioReady (recording
-/// stopped), denoised, transcribed, sent (to Claude Code), firstEvent (Claude's reply began),
+/// stopped), denoised, transcribed, sent (to Claude Code), cliInit (Claude Code began the turn: the
+/// gap before it is its own setup, e.g. connectors), firstEvent (Claude's reply began),
 /// firstText (its first words), firstAudio (Joe's voice started), done (the reply was complete).
 @MainActor
 enum Latency {
@@ -105,7 +106,7 @@ enum Latency {
     nonisolated static func summary(last count: Int = 20) -> String {
         let entries = Array(load().suffix(count))
         guard !entries.isEmpty else { return "No timed requests yet: ask Joe something with right ⌥, then run this again." }
-        let steps = ["micLive", "released", "audioReady", "denoised", "transcribed", "sent", "firstEvent", "firstText", "firstAudio", "done"]
+        let steps = ["micLive", "released", "audioReady", "denoised", "transcribed", "sent", "cliInit", "firstEvent", "firstText", "firstAudio", "done"]
         func median(_ values: [Int]) -> Int? {
             guard !values.isEmpty else { return nil }
             let sorted = values.sorted()

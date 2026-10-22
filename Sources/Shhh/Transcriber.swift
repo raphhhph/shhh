@@ -184,6 +184,61 @@ actor NoiseFilter {
     }
 }
 
+extension NoiseFilter {
+    /// The filter for a recording that's still being made: it cleans the audio as it comes in, so
+    /// when the key is let go only the last half second is left. Nil when the filter is off or not
+    /// loaded yet: then `clean` does the whole recording afterwards, as before.
+    func live() async -> LiveNoiseFilter? {
+        guard Self.isOn, let manager, let stream = try? await manager.makeStream() else { return nil }
+        return LiveNoiseFilter(stream: stream)
+    }
+}
+
+/// `NoiseFilter.live()`: the same filter as `clean`, run piece by piece while they talk (the stream
+/// gives the same samples as one pass over the whole recording). Its pieces go through one at a
+/// time, in order.
+actor LiveNoiseFilter {
+    private let stream: LocalVqeStream
+    /// How many samples of the recording it has been given.
+    private(set) var fed = 0
+    private var cleaned: [Float] = []
+    private var failed = false
+    private var working: Task<Void, Never>?
+
+    init(stream: LocalVqeStream) {
+        self.stream = stream
+    }
+
+    /// The recording from sample `start` on (anything already given is skipped).
+    func feed(_ samples: [Float], from start: Int) {
+        guard !failed, start <= fed, start + samples.count > fed else { return }
+        let new = Array(samples.dropFirst(fed - start))
+        fed += new.count
+        let before = working
+        working = Task {
+            await before?.value
+            guard !failed else { return }
+            do { cleaned += try await stream.enhance(mic: new, reference: [Float](repeating: 0, count: new.count)) }
+            catch { failed = true }
+        }
+    }
+
+    /// The whole recording, cleaned and lined up as `NoiseFilter.clean` returns it; nil if it didn't
+    /// work (then it's cleaned the usual way).
+    func finish(_ samples: [Float]) async -> [Float]? {
+        guard samples.count >= 16_000 / 2 else { return samples } // `clean` leaves these as they are
+        guard samples.count >= fed else { return nil }
+        feed(Array(samples[fed...]), from: fed)
+        await working?.value
+        guard !failed, let tail = try? await stream.flush() else { return nil }
+        let output = cleaned + tail
+        let delay = LocalVqeManager.outputDelaySamples
+        let aligned = Array(output.dropFirst(min(delay, output.count)))
+        guard !aligned.isEmpty else { return nil }
+        return aligned.count >= samples.count - delay ? aligned + [Float](repeating: 0, count: max(0, samples.count - aligned.count)) : samples
+    }
+}
+
 /// Where Joe downloads its speech and voice models: Hugging Face, or HF-Mirror (hf-mirror.com),
 /// which works from mainland China without a VPN. Settings → Advanced.
 enum ModelDownloads {

@@ -68,6 +68,8 @@ final class AudioRecorder {
     /// taking them all.
     func pendingSeconds(_ recording: Recording) -> Double { recording.session.capturedSeconds }
     func tail(_ recording: Recording, seconds: Double) -> [Float] { recording.session.tail(Int(seconds * 16_000)) }
+    /// What it has heard from sample `start` on (the noise filter reads the recording as it's made).
+    func samples(_ recording: Recording, from start: Int) -> [Float] { recording.session.samples(from: start) }
     func take(_ recording: Recording) -> [Float] { recording.session.take() }
     func hasFailed(_ recording: Recording) -> Bool { recording.session.hasFailed }
 
@@ -120,6 +122,11 @@ private final class RecordingSession: @unchecked Sendable {
     func tail(_ count: Int) -> [Float] {
         lock.lock(); defer { lock.unlock() }
         return Array(buffer.suffix(count))
+    }
+
+    func samples(from start: Int) -> [Float] {
+        lock.lock(); defer { lock.unlock() }
+        return start < buffer.count ? Array(buffer[start...]) : []
     }
 
     /// For long recordings: everything captured so far, cleared from the buffer so it doesn't grow

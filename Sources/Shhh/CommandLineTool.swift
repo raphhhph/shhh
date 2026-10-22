@@ -565,7 +565,7 @@ enum CommandLineTool {
     @MainActor
     private static func benchClaude() async throws {
         guard let executable = Assistant.executable else { fail("Claude Code isn't installed.") }
-        print("Model: \(Assistant.model.name), effort \(Assistant.effort.name)")
+        print("Model: \(Assistant.model.name), effort \(Assistant.sessionEffort.name)")
         final class Timing { var session: Session?; var sent = Date(); var firstWord: Date?; var failure: String?; var resumed = false }
         for (label, head) in [("started with the request", 0.0), ("started 8 s ahead", 8.0)] {
             let timing = Timing()
@@ -598,7 +598,7 @@ enum CommandLineTool {
     @MainActor
     private static func benchClaude(head: Double, request: String) async throws {
         guard let executable = Assistant.executable else { fail("Claude Code isn't installed.") }
-        print("Model: \(Assistant.model.name), effort \(Assistant.effort.name); request sent \(head) s after start")
+        print("Model: \(Assistant.model.name), effort \(Assistant.sessionEffort.name); request sent \(head) s after start")
         final class Timeline { var session: Session?; var sent: Date?; var seen: [String] = []; var resumed = false }
         let timeline = Timeline()
         await withCheckedContinuation { (finished: CheckedContinuation<Void, Never>) in

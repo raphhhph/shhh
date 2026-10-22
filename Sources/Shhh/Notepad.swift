@@ -27,6 +27,8 @@ final class Notepad {
     /// Set by the app: the recorder, the speech model and the microphone choice to listen with.
     var listen: (() async -> (recorder: AudioRecorder, transcriber: Transcriber, microphone: String?)?)?
 
+    /// The distributed notification `Joe --notepad` posts to the running app.
+    nonisolated static let openRequest = "io.github.tibophlp.shhh.openNotepad"
     static let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Shhh/Notepad.md")
 

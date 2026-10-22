@@ -400,17 +400,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.notepad.show(kind: nil)
         }
         notepad.onKind = { [weak self] kind in self?.noteSaver.kind = kind }
-        // A lecture or meeting note, once saved: Joe adds a summary, key terms and recall questions.
+        // `Joe --notepad "<what they said>"` from Claude: a notepad request worded so the check above missed it.
+        DistributedNotificationCenter.default().addObserver(forName: .init(Notepad.openRequest), object: nil, queue: .main) { [weak self] note in
+            let said = note.object as? String ?? ""
+            MainActor.assumeIsolated { self?.openNotepad(for: said) }
+        }
+        // A note, once saved and titled: Joe tidies it in the background (see below).
         noteSaver.onTitled = { [weak self] url, kind, body in
-            guard kind != .notes, body.split(whereSeparator: \.isWhitespace).count >= 120 else { return }
+            let words = body.split(whereSeparator: \.isWhitespace).count
+            guard words >= 60 else { return } // a few lines: nothing to condense
+            // A meeting recorded and transcribed ("You:", "Speaker 1:" lines) is a record: kept word for
+            // word under a summary. Everything else is condensed: grouped by topic, the fluff gone.
+            let speakerLines = body.split(separator: "\n").filter {
+                $0.range(of: #"^\s*(You|Me|Speaker \d+|[A-Z][a-z]+( [A-Z][a-z]+)?):\s"#, options: .regularExpression) != nil
+            }.count
+            if kind == .meeting, speakerLines >= 5, words >= 200 {
+                self?.startInBackground("""
+                    [My meeting notes were just saved: \(url.path).] It's a recorded meeting, so keep the transcript word \
+                    for word. Under the title add ## Summary (3–5 bullets), ## Decisions, ## Actions (who does what, by \
+                    when), then ## Transcript with the lines unchanged. Where it's clear who a speaker is, say so in the \
+                    summary. Add the actions that are mine to my Daybook. Reply in one line.
+                    """)
+                return
+            }
             self?.startInBackground("""
-                [My \(kind == .lecture ? "lecture" : "meeting") notes were just saved: \(url.path).] Structure that note, keeping \
-                every word of my notes: under the title add ## Summary (3–5 bullets), ## Key terms (term: one-line \
-                meaning), \(kind == .lecture ? "## Recall questions (5, for revising)" : "## Actions (who does what, by when)"), then \
-                ## Notes with my original notes unchanged. Fix obvious speech-recognition mistakes in the summary only. \
-                Lines start with who said them ("You:", "Speaker 1:"): keep that, and where it's clear who a speaker is \
-                (the teacher, a named classmate), say so in the summary. \
-                \(kind == .meeting ? "Add the actions that are mine to my Daybook. " : "")Reply in one line.
+                [My \(kind.label.lowercased()) were just saved: \(url.path).] Rewrite that note as clean, condensed notes I \
+                can revise from. Keep its frontmatter and title. Group everything by topic under ## headings, as short \
+                bullets; merge repeats and drop filler, chit-chat, false starts and anything said twice; fix obvious \
+                speech-recognition mistakes. Keep every fact, number, date, name, definition, example and task. \
+                \(kind == .lecture ? "End with ## Key terms (term: one-line meaning) and ## Recall questions (5, for revising). " : "")\
+                \(kind == .meeting ? "End with ## Actions (who does what, by when) and add mine to my Daybook. " : "")\
+                Put a one-line summary under the title. Write the whole note in one Write. Reply in one line.
                 """)
         }
         notepad.listen = { [weak self] in
@@ -529,6 +549,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let request = AlarmRequest.parse(text) { alarms.handle(request); return }
         if openStudy(text) { return }
         if screenshot == nil, openPen(text) { return }
+        if !notepad.isVisible, Self.isNotepadRequest(text) { openNotepad(for: text); return }
         if let music = Spotify.quick(in: text) {
             Task.detached { [weak self] in
                 let result = Spotify.run(music)
@@ -1356,10 +1377,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return (text + pointer, screenshot.jpeg, screenshot)
     }
 
-    /// "Help me take notes", "open a notepad".
-    private static func isNotepadRequest(_ text: String) -> Bool {
-        text.range(of: #"\b((take|taking|start|make) (some |my )?notes|note ?pad|(open|show) (a |my |the )?notes|(record|transcribe) (this|the|my) (lecture|class|lesson|meeting|call|seminar))\b"#,
-                   options: [.regularExpression, .caseInsensitive]) != nil
+    /// "Help me take notes for Econ", "open up a notebook", or Claude's `Joe --notepad`: the notepad
+    /// opens. The last notes are in the vault already, so these start fresh.
+    private func openNotepad(for text: String) {
+        if notepad.isVisible { return notepad.show() } // already open: keep what's in it
+        if notepad.text.isEmpty || (NoteSaver.isEnabled && noteSaver.isSaved) {
+            notepad.clear()
+            noteSaver.begin(text)
+        } else {
+            noteSaver.heard(text)
+        }
+        notepad.show(kind: noteSaver.kind)
+        notepad.show()
+        // "Record this lecture": listening hands-free straight away.
+        if text.range(of: #"\b(record|transcribe)\b"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            notepad.startListening()
+            toast.show("Recording the \(noteSaver.kind == .meeting ? "meeting" : "lecture"). Close the notepad when it's over.",
+                       symbol: "record.circle", tint: .red)
+        } else {
+            toast.show("\(noteSaver.kind?.label ?? "Notepad") open: hold right ⌘ to dictate, or press Listen",
+                       symbol: "note.text", tint: .orange)
+        }
+    }
+
+    /// "Help me take notes", "open a notepad", and how speech recognition hears "open the notepad":
+    /// "open up a notebook", "open up a note" (both went to Claude, which opened Obsidian instead).
+    static func isNotepadRequest(_ text: String) -> Bool {
+        if text.range(of: #"\b((take|taking|start|make) (some |my )?notes|note ?pad|(open|show) (a |my |the )?notes|(record|transcribe) (this|the|my) (lecture|class|lesson|meeting|call|seminar))\b"#,
+                      options: [.regularExpression, .caseInsensitive]) != nil { return true }
+        // The whole request is "open (up) a notebook / a note / Joe's notes", nothing about Obsidian or a file.
+        let filler = #"(?:hey|hi|yo|ok|okay|so|um|uh|joe|jo|can you|could you|please|just|now|real quick)"#
+        let open = #"(?:open|bring up|pull up|show|start|get|give me)(?: up| me)?"#
+        let thing = #"(?:a |my |the |your |joe'?s |a new |new )?(?:note ?books?|notes?|note pads?|writing pad|scratch ?pad)"#
+        return text.range(of: #"^\W*(?:\#(filler)\W+)*\#(open) \#(thing)(?:\W+(?:please|thanks|thank you|joe))*\W*$"#,
+                          options: [.regularExpression, .caseInsensitive]) != nil
     }
 
     /// "Email Ammiel. Next task, find revision sites. Next task, …": one request per job (the first
@@ -1621,23 +1672,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // "Help me take notes for Econ": the notepad opens, nothing goes to Claude. The last
                 // notes are in the vault already, so these start fresh.
                 if !notepad.isVisible, Self.isNotepadRequest(text) {
-                    if notepad.text.isEmpty || (NoteSaver.isEnabled && noteSaver.isSaved) {
-                        notepad.clear()
-                        noteSaver.begin(text)
-                    } else {
-                        noteSaver.heard(text)
-                    }
-                    notepad.show(kind: noteSaver.kind)
-                    notepad.show()
-                    // "Record this lecture": listening hands-free straight away.
-                    if text.range(of: #"\b(record|transcribe)\b"#, options: [.regularExpression, .caseInsensitive]) != nil {
-                        notepad.startListening()
-                        toast.show("Recording the \(noteSaver.kind == .meeting ? "meeting" : "lecture"). Close the notepad when it's over.",
-                                   symbol: "record.circle", tint: .red)
-                    } else {
-                        toast.show("\(noteSaver.kind?.label ?? "Notepad") open: hold right ⌘ to dictate, or press Listen",
-                                   symbol: "note.text", tint: .orange)
-                    }
+                    openNotepad(for: text)
                     return
                 }
                 // "This is a meeting": what the notes are, for their title and folder in the vault.

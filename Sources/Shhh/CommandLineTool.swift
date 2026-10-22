@@ -177,6 +177,14 @@ enum CommandLineTool {
             }
             print(Spotify.run(command))
             exit(0)
+        case ("--notepad", _):
+            // Joe --notepad ["<what they said>"]: opens the running Joe's notepad (for Claude, when a
+            // request to open it was worded so Joe didn't catch it himself).
+            let said = args.dropFirst().joined(separator: " ")
+            DistributedNotificationCenter.default().postNotificationName(.init(Notepad.openRequest), object: said.isEmpty ? nil : said,
+                                                                         userInfo: nil, deliverImmediately: true)
+            print("Notepad opened.")
+            exit(0)
         case ("--workspace-reset", 1):
             print(Workspace.reset())
             exit(0)
@@ -303,6 +311,7 @@ enum CommandLineTool {
                 var route = MainActor.assumeIsolated { Assistant.needsStrongModel(request) } ? "Claude (Opus)" : "Claude (Haiku)"
                 if MainActor.assumeIsolated({ ScreenCapture.isWalkthrough(request) }), route.hasSuffix("(Haiku)") { route = "walkthrough (Sonnet)" }
                 if AlarmRequest.parse(request) != nil { route = "alarm" }
+                else if MainActor.assumeIsolated({ AppDelegate.isNotepadRequest(request) }) { route = "notepad" }
                 else if Spotify.quick(in: request) != nil { route = "Spotify" }
                 else if PromptPolish.request(in: request) != nil { route = "prompt rewrite (dictation)" }
                 print("\(route.padding(toLength: 26, withPad: " ", startingAt: 0)) \(request)")

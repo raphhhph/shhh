@@ -237,38 +237,56 @@ final class SpeechOutput {
     /// saying ("Working…", every click): "Searching: IB ESS paper 2" → "Searching for IB ESS paper 2.".
     nonisolated static func spokenStatus(_ status: String) -> String? {
         var line = status.replacingOccurrences(of: "…", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let quiet = ["Working", "Getting tools ready", "Reading the page", "Using Chrome", "Running a command"]
-        guard !line.isEmpty, !quiet.contains(line), !hasHan(line) || isChinese(line) else { return nil }
+        let quiet = ["Working", "Thinking", "Getting tools ready", "Reading the page", "Using Chrome", "Running a command"]
+        // Small browser steps (scrolling, waiting, screenshots) happen many times a task: not news.
+        guard !line.isEmpty, !quiet.contains(line), !hasHan(line) || isChinese(line),
+              line.range(of: #"^(Scroll|Wait|Tak(e|es|ing) a screenshot|Hover|Press)"#, options: [.regularExpression, .caseInsensitive]) == nil
+        else { return nil }
         if line.hasPrefix("Searching: ") {
             line = "Searching for " + line.dropFirst("Searching: ".count).split(separator: " ").prefix(6).joined(separator: " ")
         }
         if line == "Searching your notes" { line = "Checking your notes" }
-        // Steps Claude writes as orders ("Click the Compose button", "Start the study routine") are
-        // said as what Joe is doing; anything else that isn't "…ing" isn't said.
+        // Steps Claude writes as orders ("Click the Compose button", "Start the study routine") or as
+        // Chrome's summaries ("Opens the compose window") are said as what Joe is doing; anything else
+        // that isn't "…ing" isn't said.
         let doing = ["click": "Clicking", "type": "Typing", "open": "Opening", "fill": "Filling in", "navigate": "Going to",
                      "go": "Going to", "search": "Searching", "send": "Sending", "write": "Writing", "check": "Checking",
                      "read": "Reading", "find": "Finding", "start": "Starting", "select": "Selecting", "upload": "Uploading",
                      "add": "Adding", "create": "Creating", "save": "Saving", "play": "Playing", "set": "Setting",
-                     "turn": "Turning", "attach": "Attaching", "reply": "Replying", "draft": "Drafting", "submit": "Submitting"]
+                     "turn": "Turning", "attach": "Attaching", "reply": "Replying", "draft": "Drafting", "submit": "Submitting",
+                     "run": "Running", "look": "Looking", "switch": "Switching", "enter": "Entering", "update": "Updating",
+                     "download": "Downloading", "copy": "Copying", "paste": "Pasting", "log": "Logging", "sign": "Signing"]
         let words = line.split(separator: " ", maxSplits: 1).map(String.init)
-        if let verb = doing[words[0].lowercased()] {
+        let first = words[0].lowercased()
+        let order = first.hasSuffix("ies") ? String(first.dropLast(3)) + "y"
+            : doing[first] == nil && first.hasSuffix("es") && doing[String(first.dropLast(2))] != nil ? String(first.dropLast(2))
+            : doing[first] == nil && first.hasSuffix("s") ? String(first.dropLast()) : first // "Opens" → "open"
+        if let verb = doing[order] {
             line = ([verb] + words.dropFirst()).joined(separator: " ").replacingOccurrences(of: "to to ", with: "to ")
         } else if !words[0].hasSuffix("ing") {
             return nil
         }
+        // An address as the name in it: "to pat.lee@school.org" → "to Pat Lee".
+        while let address = line.range(of: #"[\w.+-]+@[\w-]+(\.[\w-]+)+"#, options: .regularExpression) {
+            let name = line[address].split(separator: "@")[0].split(whereSeparator: { ".+_-".contains($0) || $0.isNumber })
+            line.replaceSubrange(address, with: name.map(\.capitalized).joined(separator: " "))
+        }
         // Long ones are details, not news.
         guard line.split(separator: " ").count <= 9 else { return nil }
-        if line.hasPrefix("Opening "), let host = line.split(separator: " ").last, host.contains(".") {
+        if line.hasPrefix("Opening ") || line.hasPrefix("Reading "), let host = line.split(separator: " ").last,
+           line.split(separator: " ").count == 2, host.contains("."), !host.hasSuffix(".md") {
             // "Opening mail.google.com" → "Opening Gmail"; other sites by name.
             let names = ["mail.google.com": "Gmail", "calendar.google.com": "Google Calendar", "docs.google.com": "Google Docs",
                          "drive.google.com": "Google Drive", "www.youtube.com": "YouTube", "chatgpt.com": "ChatGPT"]
-            // Otherwise the site's own name: "en.wikipedia.org" → "Wikipedia", "bbc.co.uk" → "Bbc".
+            // Otherwise the site's own name: "en.wikipedia.org" → "Wikipedia", "bbc.co.uk" → "BBC".
             let parts = host.split(separator: ".").map(String.init)
             var site = parts.count >= 2 ? parts[parts.count - 2] : String(host)
             if parts.count >= 3, ["co", "com", "ac", "edu", "gov", "org", "net"].contains(site) { site = parts[parts.count - 3] }
-            let name = names[String(host)] ?? (host.contains("managebac") ? "ManageBac" : site.capitalized)
-            line = "Opening " + name
+            let name = names[String(host)] ?? (host.contains("managebac") ? "ManageBac" : site.count <= 3 ? site.uppercased() : site.capitalized)
+            line = String(line.split(separator: " ")[0]) + " " + name
         }
+        // Note and file names: "Reading DP_ESS_Bioaccumulation" → "Reading DP ESS Bioaccumulation".
+        line = line.replacingOccurrences(of: "_", with: " ")
         return line.hasSuffix(".") || line.hasSuffix("?") || line.hasSuffix("!") ? line : line + "."
     }
 

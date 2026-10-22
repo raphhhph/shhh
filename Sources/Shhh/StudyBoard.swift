@@ -39,7 +39,12 @@ final class StudyBoard: NSObject, NSWindowDelegate {
         }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
-        if let subject { model.start(subject: subject, request: request, mode: mode) }
+        // Another "draw…" while Joe is already explaining this subject: the next question on the same board.
+        if subject == model.subject, mode == .explain, model.mode == .explain, model.isActive, let request {
+            model.submit(request, spoken: true)
+        } else if let subject {
+            model.start(subject: subject, request: request, mode: mode)
+        }
     }
 
     /// Open and in front: a voice answer (right ⌥) goes here, not to the notch.
@@ -94,7 +99,8 @@ final class StudyBoard: NSObject, NSWindowDelegate {
 
 @MainActor
 final class StudyBoardModel: ObservableObject {
-    enum Mode: String { case quiz, exam, cards }
+    /// `explain`: no quiz, they ask and Joe answers at the board, drawing the diagrams as he goes.
+    enum Mode: String { case quiz, exam, cards, explain }
 
     enum Item: Identifiable, Equatable {
         case question(n: Int, marks: Int, topic: String, source: String, text: String)
@@ -105,6 +111,8 @@ final class StudyBoardModel: ObservableObject {
         case lesson(title: String, text: String)
         /// Definitions to learn word for word, after the summary: saved to their flashcards.
         case cards([Flashcards.Card])
+        /// A diagram Joe draws as the reply streams in: supply and demand, a tax, cost curves…
+        case diagram(BoardDiagram)
         case note(String)
 
         var id: String {
@@ -115,6 +123,7 @@ final class StudyBoardModel: ObservableObject {
             case let .summary(_, _, text): "s\(text.prefix(20))"
             case let .lesson(title, text): "l\(title)\(text.prefix(20))"
             case let .cards(cards): "c\(cards.count)\(cards.first?.term ?? "")"
+            case let .diagram(diagram): "d\(diagram.title)\(diagram.pieces.count)"
             case let .note(text): "n\(text.hashValue)"
             }
         }
@@ -182,6 +191,7 @@ final class StudyBoardModel: ObservableObject {
         assistant.prepare { [weak self] event in self?.handle(event) }
         let opening = request ?? (mode == .exam
             ? "Give me one full exam-style question."
+            : mode == .explain ? "I'm at the whiteboard. In one line, ask what I'd like explained."
             : "Start the quiz: five questions, focusing on my weak spots if you know them.")
         send(opening)
     }
@@ -254,6 +264,14 @@ final class StudyBoardModel: ObservableObject {
         guard assistant != nil, !isBusy else { return }
         items.append(.note(text))
         send(text)
+    }
+
+    /// From explaining to testing, in the same session: the tutor already knows what was covered.
+    func quizOnThis() {
+        guard assistant != nil, !isBusy else { return }
+        mode = .quiz
+        items.append(.note("Quiz me on this"))
+        send("Now quiz me on what we just went through: quiz mode, five questions, easier to harder, then the summary.")
     }
 
     private func send(_ text: String, image: Data? = nil) {
@@ -362,7 +380,7 @@ final class StudyBoardModel: ObservableObject {
             if let (score, total, body) = pendingFeedback { items.append(.feedback(score: score, total: total, text: body, model: model)) }
             pendingFeedback = nil
         }
-        while let open = rest.range(of: #"<(question|feedback|model|summary|lesson|cards|ms)\b[^>]*>"#, options: .regularExpression) {
+        while let open = rest.range(of: #"<(question|feedback|model|summary|lesson|cards|diagram|ms)\b[^>]*>"#, options: .regularExpression) {
             let before = rest[..<open.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
             if !before.isEmpty { flushFeedback(); items.append(.note(before)) }
             let tag = String(rest[open])
@@ -387,6 +405,11 @@ final class StudyBoardModel: ObservableObject {
             case "lesson":
                 flushFeedback()
                 items.append(.lesson(title: attribute("title"), text: body))
+            case "diagram":
+                flushFeedback()
+                // Drawn line by line while it streams; a half-written last line waits for the rest.
+                let diagram = BoardDiagram.parse(body, title: attribute("title"), complete: close != nil)
+                if !diagram.pieces.isEmpty || close == nil { items.append(.diagram(diagram)) }
             case "cards":
                 flushFeedback()
                 let cards = body.components(separatedBy: "\n").compactMap(Flashcards.parse)
@@ -442,6 +465,7 @@ final class StudyBoardModel: ObservableObject {
         let coverage = StudyReview.coverage(subject: subject)
         let untouched = myp || coverage.untouched.isEmpty ? "" : "\n\n# Never practised yet (\(coverage.done) of \(coverage.total) subtopics done; when nothing is due and they name no topic, mix these in; \"something new\" means these)\n" + coverage.untouched.prefix(20).map { "- " + $0 }.joined(separator: "\n")
         let notes = StudyBuddy.schoolFolder?.appendingPathComponent("Subjects").path
+        let quizRules = "Quiz mode: five questions, easier to harder, IB command terms and marks in brackets, a mix of definitions, application to a short context, calculations where the subject has them, and one exam-style question. Cover the topic they ask for; otherwise the topics due for review below first (they're about to forget them), then their weakest topics from the results. After the fifth, the summary."
         return """
             You are Joe, an IB \(Profile.isMYP ? "MYP" : "Diploma") tutor running a practice session on a whiteboard for \(Profile.name.isEmpty ? "a student" : Profile.name). \
             \(Profile.description) Subject: \(subject).
@@ -453,7 +477,34 @@ final class StudyBoardModel: ObservableObject {
             - Right after each question, its markscheme, hidden from them: <ms>each mark point as the IB would write it (M1, A1, \
             or one point per mark; for markband questions, what each band needs), and acceptable alternatives</ms>. Mark their answer \
             strictly against it, so the same answer always gets the same mark.
-            - They can draw: a diagram sent as an image with their answer. Mark what's drawn (axes, labels, curves, shifts, areas) as an examiner would.
+            - They can draw: a diagram sent as an image with their answer. You see it. Mark what's drawn (axes, labels, curves, shifts, areas) \
+            as an examiner would, then draw the correct version yourself in a <diagram> (below) so they can compare.
+            - You draw on the board too, live: it draws each line of a <diagram> as you write it, like a teacher at a whiteboard. \
+            Draw whenever a diagram is part of the answer: every economics diagram (supply and demand, shifts, taxes and subsidies, \
+            price controls, externalities and welfare loss, elasticity, PPC, AD/AS, cost and revenue curves, market structures, \
+            Lorenz curve, J-curve), graphs in maths and the sciences, flows and cycles. Put the diagram first, before the text \
+            that explains it, so it builds while they read. Never inside another tag. The format, one command per line, \
+            positions as x,y from 0 to 100 inside the axes (0,0 is the origin, 100,100 the top right):
+            <diagram title="Specific tax">
+            axes "Quantity" "Price"
+            line D 10,90 90,15
+            line S1 10,15 90,80 blue
+            line S2 10,35 75,90 red dashed
+            arrow 66,62 66,78 red
+            point E1 53,50 x="Q1" y="P1"
+            point E2 41,61 x="Q2" y="Pc"
+            point "" 41,40 y="Pp"
+            area 0,61 41,61 41,40 0,40 orange "Tax revenue"
+            text 80,30 "Excess supply"
+            </diagram>
+            Commands: axes "x label" "y label"; line <label> x,y x,y [more points make a smooth curve, e.g. MC or AC]; \
+            arrow x,y x,y [label] for a shift or movement; point <label> x,y [x="Q1"] [y="P1"] (dashed guides to the axes with \
+            those marks); area x,y x,y x,y… [label] to shade (tax revenue, welfare loss, surplus); text x,y "words"; \
+            box x,y "label" for flow diagrams (with arrows between boxes, no axes). Colours: blue, red, green, orange, purple, \
+            gray (black by default); add dashed for a curve after a shift. Draw in the order you'd explain: axes, the original \
+            curves and equilibrium, then the shift (new curve in a colour, an arrow), the new equilibrium, then shaded areas. \
+            Compute the coordinates so the lines really cross where the points say. Label every curve and axis as the IB expects \
+            (P and Q or the real names, D, S, S+tax, MSC, MPB, AD, SRAS, LRAS…). Up to about 14 lines.
             - After they answer: <feedback n="1" score="3" total="4">✓ what earned marks, one bullet each; ✗ missing: what was missing, one bullet each</feedback> \
             then <model>the answer a markscheme would credit, concise</model>, then the next <question>.
             - Outside the tags, at most one short sentence, said aloud ("Nice, three out of four."). No other chatter.
@@ -469,13 +520,16 @@ final class StudyBoardModel: ObservableObject {
 
             \(myp ? MYP.prompt(subject: subject) : "")
             # The session
-            \(mode == .exam
+            \(mode == .explain
+                ? "Explain mode: no quiz. They ask questions, by voice or typing, and you answer like a teacher at a whiteboard: first the <diagram> when one helps (always for an economics diagram), then <lesson title=\"…\">the explanation in Markdown: definitions word for word, the steps of the diagram, what to write in an exam to get the marks</lesson>. Before it, at most two short sentences outside the tags, said aloud. Follow-ups build on what's on the board (\"now add a subsidy\": draw the whole diagram again with it). When they say \"quiz me\", switch to quiz mode: " + quizRules
+                : mode == .exam
                 ? "Exam mode: one full question in the style of a real paper for this subject (with parts (a), (b)…, a stimulus or data where the paper has one, marks per part), with time=\"<minutes>\" in the question tag: the time the real paper allows for those marks. Mark it part by part; long parts with markbands. Then the summary, saying whether they'd have finished in time."
-                : "Quiz mode: five questions, easier to harder, IB command terms and marks in brackets, a mix of definitions, application to a short context, calculations where the subject has them, and one exam-style question. Cover the topic they ask for; otherwise the topics due for review below first (they're about to forget them), then their weakest topics from the results. After the fifth, the summary.")
+                : quizRules)
             - "hint": a hint, not the answer. "skip": the model answer and 0 marks (a feedback tag with score 0), then go on. "end": the summary now. \
             Any other question from them: answer it briefly, then carry on.
             - Mark strictly but fairly, like an IB examiner: the command term sets the depth, partial marks are fine, follow-through for \
-            a slip carried correctly. Diagrams: they describe them in words; mark the description.
+            a slip carried correctly. Diagrams: they draw them or describe them in words; mark what they gave. Model answers to \
+            diagram questions get a <diagram> after the <model>.
             \(pack == "Chinese B" ? "- Chinese B: questions in simplified Chinese; corrections as 原句 → 改正; explanations in English.\n" : "")
             # Material
             - Real past-paper questions beat invented ones. \(material)
@@ -640,7 +694,7 @@ private struct StudyBoardView: View {
             Image(systemName: "graduationcap.fill").foregroundStyle(accent).font(.system(size: 16))
             VStack(alignment: .leading, spacing: 1) {
                 Text(model.subject.isEmpty ? "Study" : model.subject).font(.system(size: 16, weight: .bold))
-                Text(model.mode == .cards ? "Flashcards" + (model.deck.isEmpty ? "" : " · \(model.deck.count) to go") : model.mode == .exam ? "Exam question" : "Quiz").font(.system(size: 11.5)).foregroundStyle(.secondary)
+                Text(model.mode == .cards ? "Flashcards" + (model.deck.isEmpty ? "" : " · \(model.deck.count) to go") : model.mode == .exam ? "Exam question" : model.mode == .explain ? "Ask anything: Joe draws it" : "Quiz").font(.system(size: 11.5)).foregroundStyle(.secondary)
             }
             Spacer()
             if model.mode == .exam, let since = model.questionSince {
@@ -673,7 +727,7 @@ private struct StudyBoardView: View {
 
     private var empty: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Pick a subject on the Study page, or say “quiz me on…”.").font(.system(size: 14)).foregroundStyle(.secondary)
+            Text("Pick a subject on the Study page, or say “quiz me on…” or “draw me a diagram of…”.").font(.system(size: 14)).foregroundStyle(.secondary)
         }
         .padding(.top, 40)
     }
@@ -775,6 +829,8 @@ private struct StudyBoardView: View {
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        case let .diagram(diagram):
+            BoardDiagramView(diagram: diagram)
         case let .lesson(title, text):
             VStack(alignment: .leading, spacing: 8) {
                 Label(title.isEmpty ? "Lesson" : title, systemImage: "book.closed.fill")
@@ -798,7 +854,7 @@ private struct StudyBoardView: View {
             }
             ZStack(alignment: .topLeading) {
                 if model.draft.isEmpty {
-                    Text("Type your answer… (⌘↩ to submit) or hold right ⌥ and say it")
+                    Text(model.mode == .explain ? "Ask a question… (⌘↩ to send) or hold right ⌥ and say it" : "Type your answer… (⌘↩ to submit) or hold right ⌥ and say it")
                         .font(.system(size: 14)).foregroundStyle(.tertiary).padding(.top, 8).padding(.leading, 5)
                 }
                 TextEditor(text: $model.draft)
@@ -822,14 +878,18 @@ private struct StudyBoardView: View {
                     }
                     Button("Clear") { strokes = [] }
                 }
-                Button("Hint") { model.command("hint") }
-                Button("Skip") { model.command("skip") }
-                Button("End") { model.command("end") }
+                if model.mode == .explain {
+                    Button("Quiz me on this") { model.quizOnThis() }.disabled(model.items.isEmpty)
+                } else {
+                    Button("Hint") { model.command("hint") }
+                    Button("Skip") { model.command("skip") }
+                    Button("End") { model.command("end") }
+                }
                 Spacer()
                 Button {
                     model.submit(model.draft, image: strokes.isEmpty ? nil : SketchPad.jpeg(strokes))
                     strokes = []
-                } label: { Label("Submit", systemImage: "arrow.up") }
+                } label: { Label(model.mode == .explain ? "Ask" : "Submit", systemImage: "arrow.up") }
                     .keyboardShortcut(.return, modifiers: .command)
                     .buttonStyle(.borderedProminent)
                     .disabled((model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && strokes.isEmpty) || model.isBusy)
@@ -911,6 +971,7 @@ struct SketchPad: View {
 extension StudyBoard {
     /// `Joe --board-preview <file.png> [sketch]`: the whiteboard with a sample question and mark.
     static func preview(to file: URL, sketch: Bool, deck: Bool = false, done: @escaping () -> Void) {
+        DiagramClock.instant = true
         let board = StudyBoard()
         board.model.preview(StudyBoardModel.parse("""
             Let's go. <question n="1" marks="4" topic="2.7 Indirect taxes" source="IB-style">**Draw** a diagram to show the effect of a specific tax on a market. [4]</question><ms>hidden</ms>
@@ -918,6 +979,17 @@ extension StudyBoard {
             <feedback n="1" score="3" total="4">✓ Supply shifts up by the tax
             ✓ Higher price, lower quantity
             ✗ missing: the price producers receive</feedback><model>S shifts vertically by the tax; consumers pay Pc, producers get Pp.</model>
+            <diagram title="Specific tax">
+            axes "Quantity" "Price"
+            line D 10,90 90,15
+            line S 10,15 90,80 blue
+            line "S + tax" 10,40 70,89 red dashed
+            arrow 64,61 64,80 red
+            point E1 53,50 x="Q1" y="P1"
+            point E2 38,63 x="Q2" y="Pc"
+            point "" 38,38 y="Pp"
+            area 0,63 38,63 38,38 0,38 orange "Tax revenue"
+            </diagram>
             <summary score="3" total="4">Good diagram; label the price producers receive.</summary>
             <cards>
             Specific tax :: a fixed amount of tax per unit of a good, shifting supply up by the tax

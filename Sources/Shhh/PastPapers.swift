@@ -212,8 +212,8 @@ enum PastPapers {
         if parts.isEmpty, pages.contains(where: { !$0.isEmpty }) {
             // No numbered questions (a language Paper 1, a source booklet): the paper as one entry,
             // from its first page with text, so the tutor can still use it.
-            let first = pages.firstIndex { $0.trimmingCharacters(in: .whitespacesAndNewlines).count > 40 } ?? 0
-            parts = [(0, Array((first + 1)...pages.count), pages[first...].joined(separator: "\n"))]
+            let start = pages.firstIndex { $0.trimmingCharacters(in: .whitespacesAndNewlines).count > 40 } ?? 0
+            parts = [(0, Array((start + 1)...pages.count), pages[start...].joined(separator: "\n"))]
         }
         let questions = parts.map { part -> Question in
             Question(number: part.number, pages: part.pages,

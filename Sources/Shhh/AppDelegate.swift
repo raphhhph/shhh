@@ -120,7 +120,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return true
     }
 
-    /// "Quiz me on econ externalities", "test me on…": the study whiteboard, not the notch.
     /// "Read this to me", "read it out loud": the selected text (or the front window's, in a PDF or
     /// a document) in Joe's voice, all of it, for revising by ear. Nothing goes to Claude, so it's
     /// instant and costs nothing. A key press stops it.
@@ -144,9 +143,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return true
     }
 
+    /// "Quiz me on econ externalities", "test me on…", "open the whiteboard", "review my flashcards":
+    /// the study whiteboard, not the notch. Saying "whiteboard" always opens it.
     private func openStudy(_ request: String) -> Bool {
-        // "Quiz me on…", "let's start a quiz", "study session", "open (up) the whiteboard"…
-        let quiz = #"^\W*((hey|ok|okay|yo),?\s+)?(joe,?\s+)?(can you\s+)?(quiz|test) me\b|give me (a|an|one) (full )?exam(-style)? question|\b(start|do|begin|run)\b[^.?!]{0,12}\b(quiz|study session|revision session|practice session)\b|\b(open|pull|bring|start|show|get)\b[^.?!]{0,15}\bwhite ?board\b|^\W*(the )?white ?board\W*$"#
+        let quiz = #"\b(quiz|test) me\b|\blet'?s\b[^.?!]{0,10}\bquiz\b|\b(give|set|make)\b[^.?!]{0,10}\b(quiz|practice questions|exam(-style)? question)|\b(start|do|begin|run)\b[^.?!]{0,12}\b(quiz|study session|revision session|practice session)\b|\bwhite ?board\b|\bflash ?cards?\b"#
         guard request.range(of: quiz, options: [.regularExpression, .caseInsensitive]) != nil else { return false }
         // The subject: said now, or in the conversation on the card ("let's start a quiz on econ",
         // then "open the whiteboard"), or the one studied last.
@@ -154,11 +154,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let subject = context.lazy.compactMap { StudyBoard.subject(in: $0) }.first
             ?? UserDefaults.standard.string(forKey: "lastStudySubject")
             ?? Profile.subjects.components(separatedBy: ",").first?.trimmingCharacters(in: .whitespaces) ?? "Economics"
-        if let task = focused, task.question.isEmpty || task.question.range(of: "quiz|whiteboard", options: [.regularExpression, .caseInsensitive]) != nil {
+        // "Quiz me on that" on an answer card: on what the card was about.
+        var request = request
+        if let asked = focused?.question, !asked.isEmpty,
+           request.range(of: #"\b(on|about|from) (that|this|it)\b|^\W*quiz me\W*$"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            request += "\n\n(What I'd asked about: \"\(asked.prefix(300))\")"
+        }
+        if let task = focused, task.question.isEmpty || task.question.range(of: "quiz|whiteboard|flash ?card", options: [.regularExpression, .caseInsensitive]) != nil {
             end(task) // the quiz moves to the whiteboard
         }
-        let exam = request.range(of: "exam", options: .caseInsensitive) != nil
-        studyBoard.show(subject: subject, request: request, mode: exam ? .exam : .quiz)
+        // "Review my flashcards" is the deck; "make flashcards on…" is the tutor writing them.
+        let makeCards = request.range(of: #"\b(make|create|generate|write)\b[^.?!]{0,20}\bflash ?cards?\b"#, options: [.regularExpression, .caseInsensitive]) != nil
+        let cards = !makeCards && request.range(of: #"\bflash ?cards?\b"#, options: [.regularExpression, .caseInsensitive]) != nil
+            && request.range(of: #"\b(quiz|test) me\b"#, options: [.regularExpression, .caseInsensitive]) == nil
+        let exam = request.range(of: #"\bexam\b"#, options: [.regularExpression, .caseInsensitive]) != nil
+        studyBoard.show(subject: subject, request: request, mode: cards ? .cards : exam ? .exam : .quiz)
         return true
     }
 

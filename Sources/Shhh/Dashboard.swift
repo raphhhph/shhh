@@ -2130,10 +2130,14 @@ private struct StudyPage: View {
                 }
             }
             let mistakes = Mistakes.count(subject)
-            if mistakes > 0 {
+            let cards = Flashcards.cards(subject).count
+            if mistakes > 0 || cards > 0 {
                 HStack(spacing: 12) {
-                    Button("Mistake book (\(mistakes))") { Mistakes.open(subject) }
-                    Button("Redo my mistakes") { model.actions.ask("Quiz me on \(subject): redo my mistakes, a fresh question on each point I got wrong.") }
+                    if cards > 0 { Button("Flashcards (\(cards))") { model.actions.ask("Review my \(subject) flashcards.") } }
+                    if mistakes > 0 {
+                        Button("Mistake book (\(mistakes))") { Mistakes.open(subject) }
+                        Button("Redo my mistakes") { model.actions.ask("Quiz me on \(subject): redo my mistakes, a fresh question on each point I got wrong.") }
+                    }
                 }
                 .buttonStyle(.plain).font(.system(size: 12, weight: .medium)).foregroundStyle(color)
             }

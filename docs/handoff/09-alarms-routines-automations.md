@@ -15,7 +15,8 @@ Alarms, timers and reminders, the wake-up challenge, routines (spoken phrases th
 - `Joe --challenge [seed] ["answer"]`, `Joe --alarm-check "<request>"` (sets nothing), `Joe --alarm-preview <file.png>`, `Joe --routines` (lists routines after adding missing defaults, and the wake-up streak). Don't set real alarms that would ring at night.
 
 ## Decisions
-- Challenge applies to alarms between 4:00 and 11:00 and to any alarm with "wake" in its title. An untitled "wake me up at…" is titled "Wake up". No Stop button; one snooze; rings up to 20 min.
+- Challenge applies to alarms between 4:00 and 11:00 and to any alarm with "wake" in its title. An untitled "wake me up at…" is titled "Wake up". A bare hour in a wake-up or repeating alarm ("an alarm for 7 every school day") is morning; a one-off "alarm at 7" said in the afternoon is still 7 pm.
+- Streak and the morning's challenge count use the local day (`.localDay`), not UTC: at +08:00 a 7:30 alarm used to be filed under the day before. No Stop button; one snooze; rings up to 20 min.
 - A wake-up alarm **can't be cancelled in its last hour** (a spoken "cancel my alarm" at 7:27 deleted the 7:30 one). Spoken alarm commands are logged in History.
 - After passing: the morning briefing (if not already given today).
 - An alarm more than 30 min late (the Mac slept through it) doesn't ring: a "Missed while the Mac was asleep" toast instead (`AlarmClock.tooLate`). The iPhone copy in Reminders is what covers a closed laptop.

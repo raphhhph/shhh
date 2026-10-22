@@ -217,7 +217,9 @@ enum AlarmRequest {
                 var date = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day) ?? now
                 if date <= now {
                     // "at 7" at 3 pm means 7 pm; otherwise the same time tomorrow.
-                    if meridiem == nil, hour < 12, let evening = calendar.date(byAdding: .hour, value: 12, to: date), evening > now {
+                    // Not for a wake-up or a repeating alarm: "an alarm for 7 every school day" is 7 am.
+                    let morning = kind == .alarm && text.range(of: #"\bwake\b|\bevery\b|\bdaily\b|weekdays?\b|school day|\bmornings?\b"#, options: .regularExpression) != nil
+                    if meridiem == nil, hour < 12, !morning, let evening = calendar.date(byAdding: .hour, value: 12, to: date), evening > now {
                         date = evening
                     } else {
                         date = calendar.date(byAdding: .day, value: 1, to: date) ?? date
@@ -375,7 +377,7 @@ final class AlarmClock {
     /// Counted once a morning; a day with no wake-up alarm doesn't break it (weekends).
     static func countWakeUp(snoozed: Bool, now: Date = Date()) -> Int {
         let defaults = UserDefaults.standard
-        let today = now.formatted(.iso8601.year().month().day())
+        let today = now.formatted(.localDay)
         var streak = defaults.integer(forKey: "wakeStreak")
         guard defaults.string(forKey: "wakeStreakDay") != today else { return streak }
         streak = snoozed ? 0 : streak + 1

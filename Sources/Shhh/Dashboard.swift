@@ -1875,13 +1875,28 @@ private struct StudyPage: View {
                 .font(.system(size: 14))
                 .onSubmit(start)
             Button("Start", action: start).buttonStyle(PillButton(prominent: !request.isEmpty)).disabled(request.isEmpty)
+            // Straight to the board (back to the quiz running on it, if there is one).
+            Button { model.actions.ask("Open the whiteboard") } label: { Label("Whiteboard", systemImage: "rectangle.and.pencil.and.ellipsis") }
+                .buttonStyle(PillButton())
         }
         .padding(.horizontal, 16)
         .frame(height: 50)
         .background(Look.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Look.line))
-        Text("Questions open on the whiteboard: type your answer, or hold right ⌥ and say it. Joe marks it like an examiner and gives a model answer.")
-            .font(.system(size: 12)).foregroundStyle(.secondary).padding(.leading, 4)
+        HStack(spacing: 12) {
+            Text("Questions open on the whiteboard: type your answer, or hold right ⌥ and say it. Joe marks it like an examiner and gives a model answer.")
+                .font(.system(size: 12)).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            // A little momentum: days in a row, and answers this week.
+            let streak = StudyReview.streak(results)
+            if streak.week > 0 {
+                Label(streak.days > 1 ? "\(streak.days)-day streak · \(streak.week) this week" : "\(streak.week) answer\(streak.week == 1 ? "" : "s") this week",
+                      systemImage: streak.days > 1 ? "flame.fill" : "checkmark.circle")
+                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(streak.days > 1 ? Look.accent : .secondary)
+                    .fixedSize()
+            }
+        }
+        .padding(.leading, 4)
         reviewCard
         flashcardsCard
         pastPapersCard

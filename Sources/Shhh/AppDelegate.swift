@@ -498,6 +498,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// A follow-up tapped on the card (Simpler, Example, Quiz me): the same conversation carries on,
     /// as when you hold right ⌥ while it's open. A new conversation if that one can't.
     private func followUpTyped(_ text: String) {
+        if openStudy(text) { return } // the card's "Quiz me" chip: on the whiteboard, like a spoken quiz
         guard let task = focused, task.canFollowUp else { askTyped(text); return }
         task.beginTurn(text)
         answerPanel.beginTurn(question: text)

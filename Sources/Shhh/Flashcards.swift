@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 /// Flashcards for definitions: after a whiteboard quiz the tutor lists the terms it asked them to
 /// define (and the ones its model answers relied on) with the exact wording, and they're kept per
@@ -31,7 +31,8 @@ enum Flashcards {
         let trimmed = line.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: #"^[-*•]\s*"#, with: "", options: .regularExpression)
         let separator = trimmed.range(of: "::") ?? trimmed.range(of: " | ")
         guard let separator else { return nil }
-        let term = trimmed[..<separator.lowerBound].trimmingCharacters(in: .whitespaces)
+        // The tutor sometimes bolds the term: "**Tax incidence** :: …".
+        let term = trimmed[..<separator.lowerBound].replacingOccurrences(of: "**", with: "").trimmingCharacters(in: .whitespaces)
         let definition = trimmed[separator.upperBound...].trimmingCharacters(in: .whitespaces)
         guard !term.isEmpty, !definition.isEmpty, term.count <= 80 else { return nil }
         return Card(term: term, definition: definition)
@@ -49,6 +50,14 @@ enum Flashcards {
             + all.map { "\($0.term)::\($0.definition.replacingOccurrences(of: "\n", with: " "))" }.joined(separator: "\n") + "\n"
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try? text.write(to: url(for: subject), atomically: true, encoding: .utf8)
+    }
+
+    /// Opens the deck in their Markdown app (Obsidian when it owns .md files).
+    @MainActor
+    static func open(_ subject: String) {
+        let file = url(for: subject)
+        guard FileManager.default.fileExists(atPath: file.path) else { return }
+        NSWorkspace.shared.open(file)
     }
 
     /// The cards they pressed "Again" on in their last review, to come first next time.

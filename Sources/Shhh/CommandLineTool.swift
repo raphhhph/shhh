@@ -321,6 +321,7 @@ enum CommandLineTool {
                 var route = MainActor.assumeIsolated { Assistant.needsStrongModel(request) } ? "Claude (Opus)" : "Claude (Haiku)"
                 if MainActor.assumeIsolated({ ScreenCapture.isWalkthrough(request) }), route.hasSuffix("(Haiku)") { route = "walkthrough (Sonnet)" }
                 if AlarmRequest.parse(request) != nil { route = "alarm" }
+                else if let mode = MainActor.assumeIsolated({ AppDelegate.studyMode(request) }) { route = "whiteboard (\(mode.rawValue))" }
                 else if MainActor.assumeIsolated({ AppDelegate.isNotepadRequest(request) }) { route = "notepad" }
                 else if Spotify.quick(in: request) != nil { route = "Spotify" }
                 else if PromptPolish.request(in: request) != nil { route = "prompt rewrite (dictation)" }
@@ -330,7 +331,7 @@ enum CommandLineTool {
         case ("--board-preview", 2...):
             MainActor.assumeIsolated {
                 NSApplication.shared.setActivationPolicy(.accessory)
-                StudyBoard.preview(to: URL(fileURLWithPath: args[1]), sketch: args.count > 2) { exit(0) }
+                StudyBoard.preview(to: URL(fileURLWithPath: args[1]), sketch: args.dropFirst(2).contains("sketch"), deck: args.dropFirst(2).contains("deck")) { exit(0) }
             }
             NSApplication.shared.run()
             exit(0)

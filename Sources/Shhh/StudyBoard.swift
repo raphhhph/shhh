@@ -137,7 +137,11 @@ final class StudyBoardModel: ObservableObject {
     @Published private(set) var deckSize = 0
     @Published private(set) var known = 0
     @Published private(set) var again: Set<String> = []
-    @Published var flipped = false
+    @Published var flipped = false {
+        didSet { if flipped, !oldValue, readAloud, let card = deck.first { speak(BoardMath.speakable(card.definition)) } }
+    }
+    /// What they said for this card (right ⌥), shown above the definition to compare.
+    @Published private(set) var said: String?
 
     var speak: (String) -> Void = { _ in }
     var stopSpeaking: () -> Void = {}
@@ -146,7 +150,7 @@ final class StudyBoardModel: ObservableObject {
     private var reply = ""
     private var startedAt = Date()
 
-    var isActive: Bool { assistant != nil }
+    var isActive: Bool { assistant != nil || (mode == .cards && !deck.isEmpty) }
 
     /// Marks so far this session.
     var score: (Int, Int) {
@@ -189,6 +193,13 @@ final class StudyBoardModel: ObservableObject {
         known = 0
         again = []
         flipped = false
+        said = nil
+        sayTerm()
+    }
+
+    private func sayTerm() {
+        stopSpeaking()
+        if readAloud, let card = deck.first { speak(card.term) }
     }
 
     func reviewCards() {
@@ -200,8 +211,9 @@ final class StudyBoardModel: ObservableObject {
         guard !deck.isEmpty else { return }
         let card = deck.removeFirst()
         flipped = false
+        said = nil
         if gotIt { known += 1 } else { deck.append(card); again.insert(card.id) }
-        if deck.isEmpty { Flashcards.setMissed(Array(again), subject: subject) }
+        if deck.isEmpty { Flashcards.setMissed(Array(again), subject: subject) } else { sayTerm() }
     }
 
     /// A quiz on the cards they needed another go at (or the whole deck).
@@ -223,6 +235,7 @@ final class StudyBoardModel: ObservableObject {
 
     /// Their answer (typed or said), or "hint", "skip", "end".
     func submit(_ text: String, spoken: Bool = false, image: Data? = nil) {
+        if mode == .cards { said = text; flipped = true; return }
         var text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || image != nil, assistant != nil, !isBusy else { return }
         items.append(.answer(text: text, spoken: spoken, image: image))
@@ -288,7 +301,9 @@ final class StudyBoardModel: ObservableObject {
             }
             if case let .feedback(score, total, text, _) = item, total > 0 {
                 let missing = text.components(separatedBy: "\n").first { $0.lowercased().contains("missing") || $0.contains("✗") } ?? ""
-                let note = missing.replacingOccurrences(of: #"^[-•*✗\s]+"#, with: "", options: .regularExpression).prefix(80)
+                var note = missing.replacingOccurrences(of: #"^[-•*✗\s]+"#, with: "", options: .regularExpression)
+                // Cut at a word, not mid-word ("the price producers rec").
+                if note.count > 90 { note = String(note.prefix(90)).replacingOccurrences(of: #"\s+\S*$"#, with: "", options: .regularExpression) + "…" }
                 lines.append("- \(date) · \(subject) · \(topic) · \(score)/\(total) · \(note)")
             }
         }
@@ -525,7 +540,8 @@ private struct StudyBoardView: View {
                     if model.items.isEmpty && model.live.isEmpty && !model.isBusy {
                         empty
                     }
-                    ForEach(model.items + model.live) { item in
+                    // By position: two rows can be alike ("Nice." twice), and SwiftUI needs unique ids.
+                    ForEach(Array((model.items + model.live).enumerated()), id: \.offset) { _, item in
                         row(item)
                     }
                     if model.isBusy {
@@ -558,10 +574,13 @@ private struct StudyBoardView: View {
                 VStack(spacing: 14) {
                     Text(card.term).font(.system(size: 24, weight: .bold)).multilineTextAlignment(.center)
                     if model.flipped {
+                        if let said = model.said, !said.isEmpty {
+                            Text("You said: \(said)").font(.system(size: 13)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        }
                         Divider()
                         BoardText(card.definition, size: 16, spacing: 3)
                     } else {
-                        Text("Say the definition to yourself, then turn the card").font(.system(size: 12.5)).foregroundStyle(.tertiary)
+                        Text("Hold right ⌥ and say the definition, or think it, then turn the card").font(.system(size: 12.5)).foregroundStyle(.tertiary)
                     }
                 }
                 .padding(28)
@@ -607,7 +626,7 @@ private struct StudyBoardView: View {
             Image(systemName: "graduationcap.fill").foregroundStyle(accent).font(.system(size: 16))
             VStack(alignment: .leading, spacing: 1) {
                 Text(model.subject.isEmpty ? "Study" : model.subject).font(.system(size: 16, weight: .bold))
-                Text(model.mode == .cards ? "Flashcards" : model.mode == .exam ? "Exam question" : "Quiz · five questions").font(.system(size: 11.5)).foregroundStyle(.secondary)
+                Text(model.mode == .cards ? "Flashcards" + (model.deck.isEmpty ? "" : " · \(model.deck.count) to go") : model.mode == .exam ? "Exam question" : "Quiz").font(.system(size: 11.5)).foregroundStyle(.secondary)
             }
             Spacer()
             let (score, total) = model.score
@@ -856,7 +875,7 @@ struct SketchPad: View {
 
 extension StudyBoard {
     /// `Joe --board-preview <file.png> [sketch]`: the whiteboard with a sample question and mark.
-    static func preview(to file: URL, sketch: Bool, done: @escaping () -> Void) {
+    static func preview(to file: URL, sketch: Bool, deck: Bool = false, done: @escaping () -> Void) {
         let board = StudyBoard()
         board.model.preview(StudyBoardModel.parse("""
             Let's go. <question n="1" marks="4" topic="2.7 Indirect taxes" source="IB-style">**Draw** a diagram to show the effect of a specific tax on a market. [4]</question><ms>hidden</ms>
@@ -864,7 +883,16 @@ extension StudyBoard {
             <feedback n="1" score="3" total="4">✓ Supply shifts up by the tax
             ✓ Higher price, lower quantity
             ✗ missing: the price producers receive</feedback><model>S shifts vertically by the tax; consumers pay Pc, producers get Pp.</model>
+            <summary score="3" total="4">Good diagram; label the price producers receive.</summary>
+            <cards>
+            Specific tax :: a fixed amount of tax per unit of a good, shifting supply up by the tax
+            **Tax incidence** :: how the burden of a tax is split between consumers and producers
+            </cards>
             """), subject: "Economics HL", sketching: sketch)
+        if deck {
+            board.model.previewDeck([Flashcards.Card(term: "Specific tax", definition: "A fixed amount of tax per unit of a good, shifting supply up by the amount of the tax."),
+                                     Flashcards.Card(term: "Tax incidence", definition: "How the burden of a tax is split between consumers and producers.")])
+        }
         // A tax diagram in the three inks: black axes and demand, blue supply, red supply after the tax.
         func line(_ a: CGPoint, _ b: CGPoint, _ color: Color) -> SketchPad.Stroke {
             SketchPad.Stroke(points: (0...20).map { t in CGPoint(x: a.x + (b.x - a.x) * Double(t) / 20, y: a.y + (b.y - a.y) * Double(t) / 20) }, color: color)
@@ -897,5 +925,15 @@ extension StudyBoardModel {
     func preview(_ items: [Item], subject: String, sketching: Bool) {
         self.subject = subject
         self.items = items
+    }
+
+    /// The deck, turned over, with a spoken answer: for `--board-preview <png> deck`.
+    func previewDeck(_ cards: [Flashcards.Card]) {
+        mode = .cards
+        deck = cards
+        deckSize = cards.count + 3
+        known = 3
+        said = "a tax of a set amount on each unit"
+        flipped = true
     }
 }

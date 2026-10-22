@@ -1929,6 +1929,8 @@ private struct StudyPage: View {
     /// Indexed past papers per syllabus map: papers, questions, questions with a markscheme.
     @State private var papers: [String: (papers: Int, questions: Int, marked: Int)] = [:]
     @State private var paperNote: String?
+    /// Flashcards per subject, and how many they pressed "Again" on last time.
+    @State private var decks: [String: (cards: Int, missed: Int)] = [:]
 
     /// Their subjects from Settings, and TOK, which everyone takes.
     private var subjects: [String] {
@@ -1954,6 +1956,7 @@ private struct StudyPage: View {
         Text("Questions open on the whiteboard: type your answer, or hold right ⌥ and say it. Joe marks it like an examiner and gives a model answer.")
             .font(.system(size: 12)).foregroundStyle(.secondary).padding(.leading, 4)
         reviewCard
+        flashcardsCard
         pastPapersCard
 
         let columns = narrow ? 1 : 2
@@ -1990,6 +1993,8 @@ private struct StudyPage: View {
             }
         }
         .onAppear(perform: reload)
+        // Back from the whiteboard: new marks, cards and mistakes.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in reload() }
     }
 
     private func reload() {
@@ -1998,6 +2003,36 @@ private struct StudyPage: View {
         var counts: [String: (papers: Int, questions: Int, marked: Int)] = [:]
         for pack in Set(subjects.compactMap(StudyBuddy.pack(for:))) { counts[pack] = PastPapers.summary(pack) }
         papers = counts
+        var cards: [String: (cards: Int, missed: Int)] = [:]
+        for subject in subjects { cards[subject] = (cards: Flashcards.cards(subject).count, missed: Flashcards.missed(subject).count) }
+        decks = cards
+    }
+
+    /// Their flashcard decks, one per subject: made after each quiz from the definitions it asked.
+    private var flashcardsCard: some View {
+        let total = decks.values.reduce(0) { $0 + $1.cards }
+        return Card(title: total == 0 ? "Flashcards" : "Flashcards · \(total)", symbol: "rectangle.on.rectangle.angled") {
+            Text(total == 0
+                 ? "After each quiz Joe makes a card for every definition it asked you and every key term you missed. Or make a deck now: Joe writes the definitions you need word for word."
+                 : "Definitions word for word, from your quizzes. The ones you got wrong last time come first.")
+                .font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            ForEach(subjects, id: \.self) { subject in
+                let deck = decks[subject] ?? (cards: 0, missed: 0)
+                HStack(spacing: 10) {
+                    Text(subject).font(.system(size: 13, weight: .medium))
+                    Text(deck.cards == 0 ? "no cards yet" : "\(deck.cards) card\(deck.cards == 1 ? "" : "s")" + (deck.missed > 0 ? " · \(deck.missed) to relearn" : ""))
+                        .font(.system(size: 12)).foregroundStyle(deck.missed > 0 ? Look.accent : .secondary).lineLimit(1)
+                    Spacer()
+                    if deck.cards > 0 {
+                        Button("Open file") { Flashcards.open(subject) }.buttonStyle(PillButton())
+                        Button("Review") { model.actions.ask("Review my \(subject) flashcards.") }.buttonStyle(PillButton(prominent: true))
+                    } else {
+                        Button("Make a deck") { model.actions.ask("Make flashcards for \(subject): the key definitions for the topics I need most, word for word.") }
+                            .buttonStyle(PillButton())
+                    }
+                }
+            }
+        }
     }
 
     /// Spaced repetition: the topics they're about to forget, from the quiz log.

@@ -1855,6 +1855,9 @@ private struct StudyPage: View {
     @State private var paperNote: String?
     /// Flashcards per subject, and how many they pressed "Again" on last time.
     @State private var decks: [String: (cards: Int, missed: Int)] = [:]
+    /// Read from files in `reload`, not while drawing: typing in the box redraws every subject card.
+    @State private var mistakeCounts: [String: Int] = [:]
+    @State private var coverages: [String: (total: Int, done: Int, untouched: [String])] = [:]
 
     /// Their subjects from Settings, and TOK, which everyone takes.
     private var subjects: [String] {
@@ -1930,6 +1933,13 @@ private struct StudyPage: View {
         var cards: [String: (cards: Int, missed: Int)] = [:]
         for subject in subjects { cards[subject] = (cards: Flashcards.cards(subject).count, missed: Flashcards.missed(subject).count) }
         decks = cards
+        var mistakesBySubject: [String: Int] = [:], covered: [String: (total: Int, done: Int, untouched: [String])] = [:]
+        for subject in subjects {
+            mistakesBySubject[subject] = Mistakes.count(subject)
+            covered[subject] = StudyReview.coverage(subject: subject, from: topics)
+        }
+        mistakeCounts = mistakesBySubject
+        coverages = covered
     }
 
     /// Their flashcard decks, one per subject: made after each quiz from the definitions it asked.
@@ -1940,21 +1950,27 @@ private struct StudyPage: View {
                  ? "After each quiz Joe makes a card for every definition it asked you and every key term you missed. Or make a deck now: Joe writes the definitions you need word for word."
                  : "Definitions word for word, from your quizzes. The ones you got wrong last time come first.")
                 .font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            ForEach(subjects, id: \.self) { subject in
+            // A row per deck; subjects without one are in the menu, so the card stays short.
+            ForEach(subjects.filter { (decks[$0]?.cards ?? 0) > 0 }, id: \.self) { subject in
                 let deck = decks[subject] ?? (cards: 0, missed: 0)
                 HStack(spacing: 10) {
                     Text(subject).font(.system(size: 13, weight: .medium))
-                    Text(deck.cards == 0 ? "no cards yet" : "\(deck.cards) card\(deck.cards == 1 ? "" : "s")" + (deck.missed > 0 ? " · \(deck.missed) to relearn" : ""))
+                    Text("\(deck.cards) card\(deck.cards == 1 ? "" : "s")" + (deck.missed > 0 ? " · \(deck.missed) to relearn" : ""))
                         .font(.system(size: 12)).foregroundStyle(deck.missed > 0 ? Look.accent : .secondary).lineLimit(1)
                     Spacer()
-                    if deck.cards > 0 {
-                        Button("Open file") { Flashcards.open(subject) }.buttonStyle(PillButton())
-                        Button("Review") { model.actions.ask("Review my \(subject) flashcards.") }.buttonStyle(PillButton(prominent: true))
-                    } else {
-                        Button("Make a deck") { model.actions.ask("Make flashcards for \(subject): the key definitions for the topics I need most, word for word.") }
-                            .buttonStyle(PillButton())
+                    Button("Open file") { Flashcards.open(subject) }.buttonStyle(PillButton())
+                    Button("Review") { model.actions.ask("Review my \(subject) flashcards.") }.buttonStyle(PillButton(prominent: true))
+                }
+            }
+            let empty = subjects.filter { (decks[$0]?.cards ?? 0) == 0 }
+            if !empty.isEmpty {
+                Menu("Make a deck for…") {
+                    ForEach(empty, id: \.self) { subject in
+                        Button(subject) { model.actions.ask("Make flashcards for \(subject): the key definitions for the topics I need most, word for word.") }
                     }
                 }
+                .menuStyle(.borderlessButton).fixedSize()
+                .font(.system(size: 12.5, weight: .medium))
             }
         }
     }
@@ -1994,6 +2010,12 @@ private struct StudyPage: View {
         }
     }
 
+    /// Indexed past-paper questions for a subject.
+    private func questions(in subject: String) -> Int {
+        guard let pack = StudyBuddy.pack(for: subject) else { return 0 }
+        return papers[pack]?.questions ?? 0
+    }
+
     private static func paperLine(_ count: (papers: Int, questions: Int, marked: Int)?) -> String {
         guard let count, count.questions > 0 else { return "none yet" }
         return "\(count.papers) paper\(count.papers == 1 ? "" : "s") · \(count.questions) questions · \(count.marked) with markscheme"
@@ -2008,7 +2030,8 @@ private struct StudyPage: View {
                  ? "IB papers are sold by the IB, so Joe can't ship them. Add the ones you have (from school, IB Questionbank or a teacher) with their markschemes: Joe splits them into questions, finds each question's topic and markscheme, and asks real questions on what you need to revise."
                  : "Joe asks real questions from these, on what you need to revise, and marks them with the real markscheme.")
                 .font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            ForEach(mapped, id: \.self) { subject in
+            // A row per subject with papers; the others are in the Add menu.
+            ForEach(mapped.filter { questions(in: $0) > 0 }, id: \.self) { subject in
                 let count = StudyBuddy.pack(for: subject).flatMap { papers[$0] }
                 HStack(spacing: 10) {
                     Text(subject).font(.system(size: 13, weight: .medium))
@@ -2024,6 +2047,16 @@ private struct StudyPage: View {
                     Button("Add…") { PastPapers.add(for: subject) { note in paperNote = note; reload() } }
                         .buttonStyle(PillButton())
                 }
+            }
+            let without = mapped.filter { questions(in: $0) == 0 }
+            if !without.isEmpty {
+                Menu("Add papers for…") {
+                    ForEach(without, id: \.self) { subject in
+                        Button(subject) { PastPapers.add(for: subject) { note in paperNote = note; reload() } }
+                    }
+                }
+                .menuStyle(.borderlessButton).fixedSize()
+                .font(.system(size: 12.5, weight: .medium))
             }
             if let paperNote { Text(paperNote).font(.system(size: 11.5)).foregroundStyle(.secondary) }
         }
@@ -2066,7 +2099,7 @@ private struct StudyPage: View {
                 }
             }
             .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
-            let coverage = StudyReview.coverage(subject: subject, from: topics)
+            let coverage = coverages[subject] ?? (total: 0, done: 0, untouched: [])
             if coverage.total > 0 {
                 VStack(alignment: .leading, spacing: 4) {
                     GeometryReader { geometry in
@@ -2088,8 +2121,8 @@ private struct StudyPage: View {
                     }
                 }
             }
-            let mistakes = Mistakes.count(subject)
-            let cards = Flashcards.cards(subject).count
+            let mistakes = mistakeCounts[subject] ?? 0
+            let cards = decks[subject]?.cards ?? 0
             if mistakes > 0 || cards > 0 {
                 HStack(spacing: 12) {
                     if cards > 0 { Button("Flashcards (\(cards))") { model.actions.ask("Review my \(subject) flashcards.") } }

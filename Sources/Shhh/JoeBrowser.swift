@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 
 /// Joe's own browser: a hidden Chrome with its own profile, driven by Chrome DevTools MCP, so
 /// multi-step web work (finding a ManageBac task, reading a portal) happens off screen while the
@@ -17,11 +18,28 @@ enum JoeBrowser {
     /// The browser's own profile: its cookies and sign-ins, apart from the user's own browser.
     static var profile: URL { support.appendingPathComponent("Browser profile", isDirectory: true) }
 
+    /// Node: Homebrew's, or Joe's own copy (a fresh Mac has neither Homebrew nor Node).
     private static var node: String? {
-        ["/opt/homebrew/bin/node", "/usr/local/bin/node"].first(where: FileManager.default.isExecutableFile)
+        ["/opt/homebrew/bin/node", "/usr/local/bin/node", ownNode.appendingPathComponent("bin/node").path]
+            .first(where: FileManager.default.isExecutableFile)
     }
-    private static var npm: String? {
-        ["/opt/homebrew/bin/npm", "/usr/local/bin/npm"].first(where: FileManager.default.isExecutableFile)
+    /// Joe's own Node, unpacked from nodejs.org's official build by `prepare()`. No admin rights needed.
+    private static var ownNode: URL { prefix.appendingPathComponent("node", isDirectory: true) }
+    /// The pinned build and its published SHA-256, per processor.
+    private static let nodeVersion = "v22.20.0"
+    private static var nodeBuild: (name: String, sha256: String) {
+        #if arch(arm64)
+        ("node-\(nodeVersion)-darwin-arm64", "cc04a76a09f79290194c0646f48fec40354d88969bec467789a5d55dd097f949")
+        #else
+        ("node-\(nodeVersion)-darwin-x64", "00df9c5df3e4ec6848c26b70fb47bf96492f342f4bed6b17f12d99b3a45eeecc")
+        #endif
+    }
+    /// npm, run by that node (npm's own launcher looks for node on PATH).
+    private static var npmScript: String? {
+        guard let node else { return nil }
+        let lib = URL(fileURLWithPath: node).resolvingSymlinksInPath().deletingLastPathComponent().deletingLastPathComponent()
+        let script = lib.appendingPathComponent("lib/node_modules/npm/bin/npm-cli.js").path
+        return FileManager.default.fileExists(atPath: script) ? script : nil
     }
     /// The server's script, with npm's .bin link resolved so node can run it directly.
     private static var script: String? {
@@ -38,6 +56,8 @@ enum JoeBrowser {
         "/Applications/Vivaldi.app/Contents/MacOS/Vivaldi",
     ]
     private static var chrome: String? { browsers.first(where: FileManager.default.isExecutableFile) }
+    /// A browser it can drive is installed (onboarding offers to get Chrome otherwise).
+    static var hasChrome: Bool { chrome != nil }
 
     /// Off in Settings, or until `Joe --browser setup` has installed the server.
     static var isEnabled: Bool {
@@ -64,18 +84,29 @@ enum JoeBrowser {
 
     static func run(_ arguments: [String]) -> String {
         switch arguments.first {
-        case "setup": return setup()
-        case "signin": return signIn(Array(arguments.dropFirst()))
+        case "setup": return wait { await prepare() }
+        case "signin": return openSignIn(Array(arguments.dropFirst()))
         case "status": return status()
         default: return "Use: --browser setup | signin [<url>…] | status"
         }
     }
 
+    /// Runs async work from the command line, which has no run loop of its own to wait on.
+    private static func wait(_ work: @escaping @Sendable () async -> String) -> String {
+        let done = DispatchSemaphore(value: 0)
+        nonisolated(unsafe) var result = ""
+        Task.detached {
+            result = await work()
+            done.signal()
+        }
+        done.wait()
+        return result
+    }
+
     private static func status() -> String {
         if !isEnabled { return "Joe's browser is off (Settings)." }
-        if node == nil { return "Joe's browser needs Node.js: brew install node, then Joe --browser setup." }
         if chrome == nil { return "Joe's browser needs Google Chrome (or Brave, Edge or Vivaldi) in Applications." }
-        if script == nil { return "Not set up yet: run Joe --browser setup." }
+        if node == nil || script == nil { return "Not set up yet: run Joe --browser setup." }
         let signedIn = ["Default/Cookies", "Default/Network/Cookies"].contains {
             FileManager.default.fileExists(atPath: profile.appendingPathComponent($0).path)
         }
@@ -83,18 +114,54 @@ enum JoeBrowser {
             + (signedIn ? "" : " Nothing signed in yet: run Joe --browser signin.")
     }
 
-    /// Installs chrome-devtools-mcp into Joe's Application Support folder (about 30 MB).
-    private static func setup() -> String {
-        guard let npm else { return "Needs Node.js first: brew install node." }
+    /// Gets everything the hidden browser needs, if it's missing: Node (from nodejs.org, about 45 MB,
+    /// checked against its published hash) and chrome-devtools-mcp (about 30 MB). One line back.
+    static func prepare() async -> String {
+        guard hasChrome else { return "Joe's browser needs Google Chrome (or Brave, Edge or Vivaldi): install it, then try again." }
+        if node != nil, script != nil { return "Joe's browser is ready." + (isEnabled ? "" : " It's off in Settings.") }
+        if node == nil || npmScript == nil, let failure = await downloadNode() { return failure }
+        guard let node, let npm = npmScript else { return "Couldn't set up Node for Joe's browser." }
         try? FileManager.default.createDirectory(at: prefix, withIntermediateDirectories: true)
-        let (ok, output) = shell(npm, ["install", "--silent", "--no-fund", "--no-audit", "--prefix", prefix.path, "chrome-devtools-mcp@latest"])
+        let (ok, output) = shell(node, [npm, "install", "--silent", "--no-fund", "--no-audit", "--prefix", prefix.path, "chrome-devtools-mcp@latest"])
         guard ok, script != nil else { return "Couldn't install chrome-devtools-mcp:\n\(output.suffix(600))" }
-        return "Installed. " + status() + " New questions to Joe use it."
+        return "Joe's browser is set up." + (isEnabled ? "" : " It's off in Settings.")
+    }
+
+    /// Downloads and unpacks Joe's own Node, or says why it couldn't.
+    private static func downloadNode() async -> String? {
+        let build = nodeBuild
+        guard let url = URL(string: "https://nodejs.org/dist/\(nodeVersion)/\(build.name).tar.gz") else { return "Bad Node address." }
+        let file: URL
+        do {
+            let (downloaded, response) = try await URLSession.shared.download(from: url)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return "Couldn't download Node (nodejs.org answered \((response as? HTTPURLResponse)?.statusCode ?? 0))." }
+            file = downloaded
+        } catch {
+            return "Couldn't download Node: \(error.localizedDescription)"
+        }
+        defer { try? FileManager.default.removeItem(at: file) }
+        guard let data = try? Data(contentsOf: file, options: .mappedIfSafe),
+              SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == build.sha256 else {
+            return "The Node download didn't match its published checksum, so it wasn't used."
+        }
+        let unpack = prefix.appendingPathComponent("node-unpack", isDirectory: true)
+        try? FileManager.default.removeItem(at: unpack)
+        try? FileManager.default.createDirectory(at: unpack, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: unpack) }
+        let (ok, output) = shell("/usr/bin/tar", ["-xzf", file.path, "-C", unpack.path])
+        guard ok else { return "Couldn't unpack Node: \(output.suffix(300))" }
+        try? FileManager.default.removeItem(at: ownNode)
+        do {
+            try FileManager.default.moveItem(at: unpack.appendingPathComponent(build.name), to: ownNode)
+        } catch {
+            return "Couldn't put Node in place: \(error.localizedDescription)"
+        }
+        return nil
     }
 
     /// Opens the profile in a normal window to sign in. It must be closed afterwards: a profile
     /// can only be open in one Chrome at a time, and Joe's hidden one uses it.
-    private static func signIn(_ links: [String]) -> String {
+    static func openSignIn(_ links: [String] = []) -> String {
         guard let chrome else { return status() }
         try? FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
         let pages = links.isEmpty ? ["https://accounts.google.com", "https://managebac.com/login"] : links
@@ -118,7 +185,9 @@ enum JoeBrowser {
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = arguments
         var environment = ProcessInfo.processInfo.environment
-        environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+        // npm's install scripts look for node on PATH: the one running it first.
+        environment["PATH"] = [node.map { URL(fileURLWithPath: $0).deletingLastPathComponent().path }, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+            .compactMap { $0 }.joined(separator: ":")
         process.environment = environment
         let pipe = Pipe()
         process.standardOutput = pipe

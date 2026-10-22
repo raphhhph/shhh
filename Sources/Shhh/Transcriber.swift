@@ -64,8 +64,19 @@ actor Transcriber {
     }
 
     private var loadingChinese = false
-    /// Transcriptions running on Parakeet right now (it mustn't be freed under them).
-    private var parakeetRunning = 0
+    /// One model run at a time, whichever model: warm-ups, live words, the final transcript and its
+    /// retry. The actor alone doesn't do this (it lets another call in while one awaits), and two
+    /// Parakeet runs overlapping on the GPU, in the first seconds after launch when live words, the
+    /// warm-up and a request all use it, aborted Joe in Metal (MPSGraphTensorData initWithMTLBuffer
+    /// on CoreML's async prediction queue, 21 and 23 Oct).
+    private var modelBusy = false
+
+    private func takeModel() async {
+        while modelBusy { try? await Task.sleep(for: .milliseconds(5)) }
+        modelBusy = true
+    }
+
+    private func releaseModel() { modelBusy = false }
 
     private func loadChinese() async {
         guard chinese == nil, !loadingChinese else { return }
@@ -80,7 +91,9 @@ actor Transcriber {
             // Its first run is when macOS compiles it for the Neural Engine (minutes after an
             // update). Done here, on silence, before it's used: a real request used to wait behind it,
             // and every request after that one.
+            await takeModel()
             _ = try? await manager.transcribeDetailed(audio: [Float](repeating: 0, count: 16_000))
+            releaseModel()
             chinese = manager
             // SenseVoice hears English about as well, so Parakeet (1.2 GB on the GPU) goes: it was only
             // there for the first seconds after launch. Not under a transcription still running on it:
@@ -88,8 +101,9 @@ actor Transcriber {
             // aborted Joe a few seconds after launch (a Metal assertion in CoreML, no Joe frames).
             if let parakeet = self.manager {
                 self.manager = nil // nothing new starts on it
-                for _ in 0..<600 where parakeetRunning > 0 { try? await Task.sleep(for: .milliseconds(50)) }
-                if parakeetRunning == 0 { await parakeet.cleanup() } // still busy after 30 s: let it be freed with the Transcriber
+                await takeModel() // a run still going on it finishes first
+                await parakeet.cleanup()
+                releaseModel()
             }
         }
         loadingChinese = false
@@ -145,6 +159,8 @@ actor Transcriber {
         for _ in 0..<250 where Self.languages == .chinese && chinese == nil && loadingChinese {
             try await Task.sleep(for: .milliseconds(100))
         }
+        await takeModel()
+        defer { releaseModel() }
         // English and Chinese: SenseVoice hears everything once it's loaded (Parakeet only covers the
         // first seconds after launch). It takes up to ~100 s at a time, so longer audio goes in pieces.
         if let chinese, manager == nil, samples.count >= 16_000 * 100 {
@@ -172,8 +188,6 @@ actor Transcriber {
         // The model wants at least one second of audio.
         var padded = samples
         if padded.count < 16_000 { padded += [Float](repeating: 0, count: 16_000 - padded.count) }
-        parakeetRunning += 1
-        defer { parakeetRunning -= 1 }
         var state = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
         let result = try await manager.transcribe(padded, decoderState: &state)
         return result.text.trimmingCharacters(in: .whitespacesAndNewlines)

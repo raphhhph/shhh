@@ -3295,7 +3295,7 @@ private struct SettingsPage: View {
                     }
             }
             row("Answers at the notch", "Answers drop down from the notch") { switchOn($notch) { model.actions.setNotch($0) } }
-            row("Alarms at the notch", "The capsule beside the notch", last: true) {
+            row("Alarms at the notch", "The next one's time in the notch band", last: true) {
                 Choice(options: [("full", "Time"), ("icon", "Icon only"), ("soon", "Last hour only"), ("off", "Hidden")], selection: $alarmsAtNotch)
             }
         }

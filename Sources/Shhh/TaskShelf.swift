@@ -94,9 +94,10 @@ enum Subject {
     }
 }
 
-/// The side notch: conversations running (or done) in the background, as a small capsule beside
-/// the notch, like VoiceOS's. A spinner while they work, ✋ when one needs an OK, ✓ when they're
-/// done. Click it for the list; click a task to bring its card back, × to stop or dismiss it.
+/// What Joe is doing, in the notch itself: conversations running (or done) in the background and
+/// the alarms to come take over the notch band. A spinner and the step while they work, ✋ when
+/// one needs an OK, ✓ when they're done, the next alarm's time. Click the band and the list drops
+/// out of the notch; click a task to bring its card back, × to stop or dismiss it.
 @MainActor
 final class TaskShelf {
     struct Item: Identifiable, Equatable {
@@ -117,8 +118,18 @@ final class TaskShelf {
 
     init() {
         model.onToggle = { [weak self] in
-            self?.model.expanded.toggle()
-            self?.place()
+            guard let self else { return }
+            if model.expanded {
+                // Back into the notch, then the window shrinks to the band.
+                model.expanded = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) { [weak self] in
+                    MainActor.assumeIsolated { if self?.model.expanded == false { self?.place() } }
+                }
+            } else {
+                // The window grows first, then the list drops out of the notch inside it.
+                place(expanded: true)
+                DispatchQueue.main.async { [weak self] in self?.model.expanded = true }
+            }
         }
         model.onOpen = { [weak self] id in
             self?.model.expanded = false
@@ -151,37 +162,36 @@ final class TaskShelf {
         }
     }
 
-    /// Hanging from the top of the built-in screen. By default just left of the notch and its
-    /// listening band (the menu bar's right side is busy); the user can drag it anywhere along the
-    /// top, and it stays there. The window is only as big as what's shown, so it never blocks
-    /// clicks around it; the open list grows away from the nearer screen edge.
-    private func place() {
-        guard let panel, let screen = Self.screen, grab == nil else { return } // not while it's being dragged
+    /// Centred on the notch, as the notch band itself (it covers the resting band while it's up).
+    /// The window is only as big as what's shown, so it never blocks clicks around it.
+    private func place(expanded: Bool? = nil) {
+        guard let panel, let screen = Self.screen else { return }
         let notch = Notch.rect(on: screen)
-        let size = size(notch: notch)
-        let collapsedWidth = collapsedSize(notch: notch).width
-        // Where the closed capsule's left edge sits: the user's spot, or beside the notch.
-        let left = Self.savedOffset.map { notch.midX + $0 } ?? notch.minX - RecordingPanel.ear - 6 - collapsedWidth
-        var x = left
-        if model.expanded, left + collapsedWidth / 2 > screen.frame.midX { x = left + collapsedWidth - size.width } // right half: grow leftwards
-        x = min(max(x, screen.frame.minX + 4), screen.frame.maxX - size.width - 4)
-        let frame = NSRect(x: x, y: screen.frame.maxY - size.height, width: size.width, height: size.height)
+        if model.notch != notch.size { model.notch = notch.size }
+        let size = size(notch: notch, expanded: expanded ?? model.expanded)
+        let frame = NSRect(x: notch.midX - size.width / 2, y: screen.frame.maxY - size.height, width: size.width, height: size.height)
         if panel.frame != frame { panel.setFrame(frame, display: true) }
     }
 
-    private func collapsedSize(notch: NSRect) -> NSSize {
-        if model.items.contains(where: { $0.state == .working }) { return NSSize(width: 250, height: notch.height) } // the step it's on
-        let onlyAlarms = model.items.allSatisfy { $0.state == .alarm }
-        return NSSize(width: onlyAlarms && !TaskShelf.alarmIconOnly ? 92 : model.items.count > 1 ? 66 : 50, height: notch.height)
+    /// Either side of the notch: room for the step a task is on, an alarm's time, or just an icon.
+    static func ear(for items: [Item]) -> CGFloat {
+        if items.contains(where: { $0.state == .working }) { return 150 }
+        if items.allSatisfy({ $0.state == .alarm }), !alarmIconOnly { return 64 }
+        return RecordingPanel.ear
     }
 
-    private func size(notch: NSRect) -> NSSize {
-        guard model.expanded else { return collapsedSize(notch: notch) }
+    private func size(notch: NSRect, expanded: Bool) -> NSSize {
+        let band = NSSize(width: notch.width + 2 * Self.ear(for: model.items), height: notch.height)
+        guard expanded else { return band }
         let rows = model.items.reduce(CGFloat(0)) { $0 + ShelfView.height(of: $1) }
         let alarmButtons: CGFloat = model.items.contains { $0.state == .alarm } ? 34 : 0
         let wide = model.items.contains { !$0.steps.isEmpty || !$0.plan.isEmpty }
-        return NSSize(width: wide ? 360 : 290, height: notch.height + rows + alarmButtons + 12)
+        return NSSize(width: max(band.width, wide ? 400 : 340), height: notch.height + rows + alarmButtons + 16)
     }
+
+    /// Whether the list is open (the hover overview stays away meanwhile).
+    var isExpanded: Bool { model.expanded }
+    var isVisible: Bool { panel?.isVisible == true }
 
     /// The screen with the notch (or the main one): the capsule doesn't follow the mouse around.
     private static var screen: NSScreen? {
@@ -194,34 +204,21 @@ final class TaskShelf {
         set { UserDefaults.standard.set(newValue.map(Double.init), forKey: "shelfOffset") }
     }
 
-    // MARK: Dragging
+    // MARK: Clicks
 
-    private var grab: CGFloat?
+    /// Dragging used to slide the capsule along the top of the screen; it lives in the notch now.
+    fileprivate func drag(ended: Bool) {}
 
-    /// Dragging the closed capsule along the top of the screen.
-    fileprivate func drag(ended: Bool) {
-        guard let panel, let screen = Self.screen, !model.expanded else { return }
-        let mouse = NSEvent.mouseLocation.x
-        if grab == nil { grab = mouse - panel.frame.minX }
-        let x = min(max(mouse - (grab ?? 0), screen.frame.minX + 4), screen.frame.maxX - panel.frame.width - 4)
-        panel.setFrameOrigin(NSPoint(x: x, y: panel.frame.minY))
-        if ended {
-            grab = nil
-            Self.savedOffset = x - Notch.rect(on: screen).midX
-        }
-    }
-
-    /// Back beside the notch (double-click).
+    /// A double-click: just closes the list.
     fileprivate func resetPosition() {
         Self.savedOffset = nil
-        model.expanded = false
-        place()
+        if model.expanded { model.onToggle() }
     }
 
     private func makePanel() -> NSPanel {
         let panel = NotchPanel(contentRect: NSRect(x: 0, y: 0, width: 50, height: 38),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
-        panel.level = .statusBar
+        panel.level = .aboveResting // it is the notch band while it's up
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
@@ -266,6 +263,8 @@ private struct Elapsed: View {
 final class ShelfModel: ObservableObject {
     @Published var items: [TaskShelf.Item] = []
     @Published var expanded = false
+    /// The notch's size: the band is built around it.
+    @Published var notch = CGSize(width: 200, height: 32)
     var onToggle: () -> Void = {}
     var onDrag: (_ ended: Bool) -> Void = { _ in }
     var onReset: () -> Void = {}
@@ -277,80 +276,119 @@ private struct ShelfView: View {
     @ObservedObject var model: ShelfModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Click: open the list. Drag: move it along the top. Double-click: back beside the notch.
-            Group {
-                HStack(spacing: 5) {
-                    summaryIcon
-                    if !model.expanded, let working = model.items.first(where: { $0.state == .working }) {
-                        // A task at work: the step it's on, and for how long.
-                        Text(Self.summary(working))
-                            .font(.caption.weight(.semibold)).foregroundStyle(.white)
-                            .lineLimit(1).truncationMode(.tail)
-                        Spacer(minLength: 4)
-                        if let started = working.started { Elapsed(since: started) }
-                        if model.items.count > 1 {
-                            Text("+\(model.items.count - 1)").font(.caption2.weight(.bold)).foregroundStyle(.white.opacity(0.6))
-                        }
-                    } else if model.items.allSatisfy({ $0.state == .alarm }), !TaskShelf.alarmIconOnly, let next = model.items.first {
-                        // The next alarm's time, or a timer's countdown.
-                        Text(next.question.components(separatedBy: " · ").first ?? "")
-                            .font(.caption.weight(.bold).monospacedDigit()).foregroundStyle(.white)
-                    } else if model.items.count > 1 {
-                        Text("\(model.items.count)").font(.caption.weight(.bold)).foregroundStyle(.white)
-                    }
+        GeometryReader { space in
+            let open = model.expanded
+            let ear = TaskShelf.ear(for: model.items)
+            let band = model.notch.width + 2 * ear
+            VStack(alignment: .leading, spacing: 0) {
+                // The band: what's going on, either side of the notch. Click: the list drops out.
+                HStack(spacing: 0) {
+                    leftEar.frame(width: ear)
+                    Color.clear.frame(width: model.notch.width) // behind the notch
+                    rightEar.frame(width: ear)
                 }
-                .padding(.horizontal, model.items.contains { $0.state == .working } && !model.expanded ? 12 : 0)
+                .frame(width: band, height: model.notch.height)
                 .frame(maxWidth: .infinity)
-                .frame(height: 30)
                 .contentShape(Rectangle())
+                .onTapGesture { model.onToggle() } // open: closes it (closed, the window handles the mouse)
+                .help(open ? "Click to close" : "Click for what Joe is doing")
+                list
+                    .padding(.top, 6)
+                    .opacity(open ? 1 : 0)
+                    .scaleEffect(open ? 1 : 0.94, anchor: .top)
+                    .blur(radius: open ? 0 : 6)
+                    .animation(open ? .easeOut(duration: 0.24).delay(0.12) : .easeIn(duration: 0.1), value: open)
             }
-            .onTapGesture { model.onToggle() } // open: closes it (closed, the window handles the mouse)
-            .help("Click to open · drag to move · double-click to put it back")
-            .padding(.top, 4)
-            if model.expanded {
-                ForEach(model.items) { item in
-                    HStack(spacing: 8) {
-                        icon(item.state).frame(width: 16)
-                        Text(item.question)
-                            .font(.callout)
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Button { model.onStop(item.id) } label: {
-                            Image(systemName: "xmark").font(.caption.weight(.bold)).foregroundStyle(.white.opacity(0.6))
-                        }
-                        .buttonStyle(.plain)
-                        .help(item.state == .working ? "Stop" : item.state == .alarm ? "Cancel" : "Dismiss")
-                    }
-                    .frame(height: 34)
-                    .padding(.horizontal, 12)
-                    .contentShape(Rectangle())
-                    .onTapGesture { model.onOpen(item.id) }
-                    if item.state == .working, !item.plan.isEmpty { checklist(item) }
-                    else if item.state == .working, !item.steps.isEmpty { timeline(item) }
-                }
-                if model.items.contains(where: { $0.state == .alarm }) {
-                    // Less of the capsule: just the icon, or nothing until an alarm is under an hour away.
-                    HStack(spacing: 6) {
-                        shelfButton(TaskShelf.alarmIconOnly ? "Show the time" : "Icon only") {
-                            TaskShelf.alarmStyle = TaskShelf.alarmIconOnly ? "full" : "icon"
-                            model.onToggle()
-                        }
-                        shelfButton("Hide until close") {
-                            TaskShelf.alarmStyle = "soon"
-                            model.onToggle()
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                }
+            .frame(width: space.size.width, height: space.size.height, alignment: .top)
+            .background(alignment: .top) {
+                NotchShape(top: NotchShape.shoulder, bottom: open ? 22 : 13)
+                    .fill(Color.black)
+                    .frame(width: open ? space.size.width : band, height: open ? space.size.height : model.notch.height)
+            }
+            .mask(alignment: .top) {
+                NotchShape(top: NotchShape.shoulder, bottom: open ? 22 : 13)
+                    .frame(width: open ? space.size.width : band, height: open ? space.size.height : model.notch.height)
+            }
+            .animation(open ? NotchShape.opening : NotchShape.closing, value: open)
+        }
+        .environment(\.colorScheme, .dark)
+    }
+
+    /// Left of the notch: the state that matters most, and the step a task is on.
+    private var leftEar: some View {
+        HStack(spacing: 5) {
+            summaryIcon
+            if let working = model.items.first(where: { $0.state == .working }) {
+                Text(Self.summary(working))
+                    .font(.caption.weight(.semibold)).foregroundStyle(.white)
+                    .lineLimit(1).truncationMode(.tail)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(Color.black, in: UnevenRoundedRectangle(bottomLeadingRadius: 14, bottomTrailingRadius: 14, style: .continuous))
-        .environment(\.colorScheme, .dark)
+        .padding(.leading, NotchShape.shoulder + 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Right of the notch: how long it's been at it, the next alarm's time, or how many there are.
+    private var rightEar: some View {
+        HStack(spacing: 5) {
+            if let working = model.items.first(where: { $0.state == .working }) {
+                if let started = working.started { Elapsed(since: started) }
+                if model.items.count > 1 {
+                    Text("+\(model.items.count - 1)").font(.caption2.weight(.bold)).foregroundStyle(.white.opacity(0.6))
+                }
+            } else if model.items.allSatisfy({ $0.state == .alarm }), !TaskShelf.alarmIconOnly, let next = model.items.first {
+                // The next alarm's time, or a timer's countdown.
+                Text(next.question.components(separatedBy: " · ").first ?? "")
+                    .font(.caption.weight(.bold).monospacedDigit()).foregroundStyle(.white)
+            } else if model.items.count > 1 {
+                Text("\(model.items.count)").font(.caption.weight(.bold)).foregroundStyle(.white)
+            }
+        }
+        .padding(.trailing, NotchShape.shoulder + 6)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    /// The open list: every task and alarm, with its steps while it works.
+    private var list: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(model.items) { item in
+                HStack(spacing: 8) {
+                    icon(item.state).frame(width: 16)
+                    Text(item.question)
+                        .font(.callout)
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button { model.onStop(item.id) } label: {
+                        Image(systemName: "xmark").font(.caption.weight(.bold)).foregroundStyle(.white.opacity(0.6))
+                    }
+                    .buttonStyle(.plain)
+                    .help(item.state == .working ? "Stop" : item.state == .alarm ? "Cancel" : "Dismiss")
+                }
+                .frame(height: 34)
+                .padding(.horizontal, 12 + NotchShape.shoulder)
+                .contentShape(Rectangle())
+                .onTapGesture { model.onOpen(item.id) }
+                if item.state == .working, !item.plan.isEmpty { checklist(item) }
+                else if item.state == .working, !item.steps.isEmpty { timeline(item) }
+            }
+            if model.items.contains(where: { $0.state == .alarm }) {
+                // Less in the band: just the icon, or nothing until an alarm is under an hour away.
+                HStack(spacing: 6) {
+                    shelfButton(TaskShelf.alarmIconOnly ? "Show the time" : "Icon only") {
+                        TaskShelf.alarmStyle = TaskShelf.alarmIconOnly ? "full" : "icon"
+                        model.onToggle()
+                    }
+                    shelfButton("Hide until close") {
+                        TaskShelf.alarmStyle = "soon"
+                        model.onToggle()
+                    }
+                }
+                .padding(.horizontal, 12 + NotchShape.shoulder)
+                .padding(.vertical, 6)
+            }
+        }
     }
 
     /// The steps a working task has taken: done ones ticked, the one it's on spinning.
@@ -372,8 +410,8 @@ private struct ShelfView: View {
                 .frame(height: ShelfView.stepHeight)
             }
         }
-        .padding(.leading, 36)
-        .padding(.trailing, 12)
+        .padding(.leading, 36 + NotchShape.shoulder)
+        .padding(.trailing, 12 + NotchShape.shoulder)
         .padding(.bottom, 6)
     }
 
@@ -406,8 +444,8 @@ private struct ShelfView: View {
                 .frame(height: ShelfView.stepHeight)
             }
         }
-        .padding(.leading, 36)
-        .padding(.trailing, 12)
+        .padding(.leading, 36 + NotchShape.shoulder)
+        .padding(.trailing, 12 + NotchShape.shoulder)
         .padding(.bottom, 6)
     }
 

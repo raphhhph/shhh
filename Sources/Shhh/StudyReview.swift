@@ -158,6 +158,22 @@ enum StudyReview {
         return (sections.count, sections.count - untouched.count, untouched)
     }
 
+    /// Days in a row with a marked answer (counting from today, or yesterday when today has none
+    /// yet), and answers in the last seven days.
+    static func streak(_ results: [StudyBuddy.Result] = StudyBuddy.results()) -> (days: Int, week: Int) {
+        let days = Set(results.map(\.date))
+        let calendar = Calendar.current
+        var day = calendar.startOfDay(for: Date())
+        if !days.contains(Self.day.string(from: day)) { day = calendar.date(byAdding: .day, value: -1, to: day) ?? day }
+        var count = 0
+        while days.contains(Self.day.string(from: day)) {
+            count += 1
+            day = calendar.date(byAdding: .day, value: -1, to: day) ?? day
+        }
+        let weekAgo = Self.day.string(from: calendar.date(byAdding: .day, value: -6, to: Date()) ?? Date())
+        return (count, results.filter { $0.date >= weekAgo }.count)
+    }
+
     /// For a tutor's or Claude's instructions: what's due, one line each.
     static func lines(_ topics: [Topic], limit: Int = 8) -> String {
         topics.prefix(limit).map {

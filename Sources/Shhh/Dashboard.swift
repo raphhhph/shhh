@@ -450,7 +450,7 @@ private struct DashboardView: View {
                     .environment(\.narrow, content < 820)
                     .environment(\.wide, content >= 1000)
                     .padding(.horizontal, content < 820 ? 24 : 40)
-                    .padding(.top, 20) // the title sits in the title bar row, beside the window buttons
+                    .padding(.top, 56) // clear of the window buttons, level with Joe in the sidebar
                     .padding(.bottom, 36)
                     .frame(maxWidth: model.page == .calendar ? 1500 : 1060, alignment: .leading)
                     .frame(maxWidth: .infinity)
@@ -477,7 +477,7 @@ private struct DashboardView: View {
                 if !compact { Text("Joe").font(.system(size: 18, weight: .bold, design: Look.titleDesign)) }
             }
             .padding(.horizontal, compact ? 0 : 10)
-            .padding(.top, 22) // just under the window buttons
+            .padding(.top, 46)
             .padding(.bottom, 16)
             ForEach(Self.groups.indices, id: \.self) { index in
                 let group = Self.groups[index]

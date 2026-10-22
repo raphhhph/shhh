@@ -253,6 +253,10 @@ private struct StepFrame<Content: View>: View {
             HStack {
                 Button("Back") { model.back() }.buttonStyle(.plain).foregroundStyle(Tint.soft)
                 Spacer()
+                // Never a dead end: whatever isn't done yet can be finished later from Settings.
+                if !canContinue {
+                    Button("Skip for now") { model.next() }.buttonStyle(.plain).foregroundStyle(Tint.soft).padding(.trailing, 14)
+                }
                 Primary(title: continueTitle, enabled: canContinue) { model.next() }
             }
         }
@@ -1126,6 +1130,8 @@ private struct MorningStep: View {
 private struct PermissionsStep: View {
     @ObservedObject var model: OnboardingModel
     @State private var automation = Automation.status
+    /// When they pressed Allow for Accessibility: if it's still off a few seconds later, the fixes show.
+    @State private var askedAccess: Date?
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.5)) { _ in
@@ -1139,10 +1145,14 @@ private struct PermissionsStep: View {
                         // Once refused, macOS won't ask again: only System Settings can turn it on.
                         if mic == .denied { openSettings("Privacy_Microphone") } else { AVCaptureDevice.requestAccess(for: .audio) { _ in } }
                     }
-                    row("hand.raised.fill", "Accessibility", access ? "To type what you say, and press keys for you"
-                            : "Turn Joe on in the list that opens. If it's on but not ticked here, quit and reopen Joe.", access) {
+                    row("hand.raised.fill", "Accessibility", access ? "For the right ⌘ and ⌥ keys, and typing what you say"
+                            : "Turn Joe on in the list that opens. It's what makes the right ⌘ and ⌥ keys work.", access) {
+                        askedAccess = Date()
+                        let prompt = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+                        _ = AXIsProcessTrustedWithOptions(prompt) // puts Joe in the list
                         openSettings("Privacy_Accessibility")
                     }
+                    if !access, let askedAccess, Date().timeIntervalSince(askedAccess) > 5 { accessibilityFix }
                     row("gearshape.2.fill", "Control other apps", "Pause music when an alarm rings, make slides in Keynote", automation == .granted) {
                         if automation == .denied { openSettings("Privacy_Automation") } else {
                             Task.detached { let result = Automation.ask(); await MainActor.run { automation = result } }
@@ -1161,6 +1171,27 @@ private struct PermissionsStep: View {
 
     private func openSettings(_ pane: String) {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")!)
+    }
+
+    /// Joe switched on in System Settings but still not ticked here: usually an entry from another
+    /// copy of Joe, or macOS only noticing after a relaunch. Setup reopens on this step.
+    private var accessibilityFix: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "questionmark.circle").font(.system(size: 15)).foregroundStyle(.orange)
+            Text("Switched on but no tick? Reset clears the old entry: then switch Joe on again. Or relaunch Joe.")
+                .font(.system(size: 12.5)).foregroundStyle(Tint.soft).fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            Button("Reset") {
+                AppLocation.resetAccessibility()
+                askedAccess = Date()
+                openSettings("Privacy_Accessibility")
+            }
+            Button("Relaunch Joe") { AppLocation.relaunch() }
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 13, weight: .semibold))
+        .padding(.horizontal, 14).padding(.vertical, 8)
+        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private func row(_ symbol: String, _ title: String, _ detail: String, _ granted: Bool, _ ask: @escaping () -> Void) -> some View {

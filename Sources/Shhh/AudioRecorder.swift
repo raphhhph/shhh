@@ -47,10 +47,15 @@ final class AudioRecorder {
     /// Some microphones deliver audio late: the iPhone's (Continuity) starts about 3 s behind but
     /// then sends everything. Keep listening until the audio covers how long the key was held,
     /// unless the microphone has stopped for good.
+    /// Any other microphone that started late (AirPods take up to a second to switch to their headset
+    /// mode) won't send what it missed: waiting for it only kept recording after the key was let go,
+    /// and the request waited that long. Those get just the last buffers still on their way.
     func stop(_ recording: Recording, covering duration: TimeInterval, timeout: TimeInterval = 4) async -> [Float] {
         let session = recording.session
-        let deadline = Date().addingTimeInterval(timeout)
-        while session.capturedSeconds < duration - 0.25, !session.hasFailed, Date() < deadline {
+        let catchesUp = recording.input.kind == .iPhone
+        let target = catchesUp ? duration - 0.25 : min(duration - 0.25, session.capturedSeconds + 0.08)
+        let deadline = Date().addingTimeInterval(catchesUp ? timeout : 0.3)
+        while session.capturedSeconds < target, !session.hasFailed, Date() < deadline {
             try? await Task.sleep(for: .milliseconds(50))
         }
         let samples = session.samples

@@ -15,6 +15,8 @@ How a request reaches Claude and comes back: the Claude Code session, the system
 - Prompt caching: volatile context ("What they asked you lately") goes with the **first request**, not the system prompt, so the prompt is identical across requests; `CLAUDE_CODE_PROMPT_CACHE_TTL=1h`. A repeat question dropped from $0.0038 to $0.0013.
 - Replies start with "Subject: …" (the card title); Markdown is rendered (tables/headings only when asked or clearly clearest; never "the card can't show").
 - Quiz marks arrive as a hidden `<mark …/>` tag that the app writes to the quiz log (saves a tool call).
+- **Spare session** (`Spare` in Assistant.swift): one `claude -p` is always started ahead with the usual settings, so a new conversation (typed, pen, several tasks, or a short spoken one) doesn't wait for Claude Code to start; the next one starts 4 s after it's taken. It's thrown away if the settings changed (arguments or environment differ) or it's 2 h old. An unused session (the request went to Spotify, or to Opus) is kept as the spare. Off: `defaults write io.github.tibophlp.shhh spareSession -bool false`.
+- **Latency log**: every request asked with right ⌥ (or typed) writes ms-after-press for each step to `Latency.jsonl` (Joe's folder): micLive, released, audioReady, denoised, transcribed, sent, firstEvent, firstText, firstAudio, done. `Joe --latency` prints medians; `Joe --bench-claude` times Claude Code cold vs started ahead.
 - The study whiteboard uses a **tutor session**: short quiz-only prompt, tools Read/Grep/Glob/Bash only, `--strict-mcp-config` (no connectors) — first question ~6 s, marking ~5 s.
 - Today's Opus requests from 20 Oct were moved out of the totals into `Usage excluded (Opus 2026-10-20).jsonl`.
 

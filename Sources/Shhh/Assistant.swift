@@ -268,7 +268,14 @@ final class Assistant {
         cancel()
         self.onEvent = onEvent
         guard let executable = Self.executable else { return } // reported by ask()
-        session = Session(executable: executable, model: modelOverride, effort: effortOverride, tutor: tutorPrompt, onEvent: { [weak self] in self?.relay($0) })
+        let relay: @MainActor (Event) -> Void = { [weak self] in self?.relay($0) }
+        if modelOverride == nil, effortOverride == nil, tutorPrompt == nil, let spare = Spare.take() {
+            spare.adopt(relay) // already running: the request needn't wait for Claude Code to start
+            session = spare
+        } else {
+            session = Session(executable: executable, model: modelOverride, effort: effortOverride, tutor: tutorPrompt, onEvent: relay)
+        }
+        Spare.refill()
     }
 
     // MARK: Hard jobs
@@ -374,7 +381,8 @@ final class Assistant {
 
     /// Ends the conversation, if any. Its events stop too.
     func cancel() {
-        session?.stop()
+        // Never asked anything (it went to Spotify, or to Opus instead): it waits for the next one.
+        if let session, !Spare.keep(session) { session.stop() }
         session = nil
     }
 
@@ -399,15 +407,62 @@ final class Assistant {
     }
 }
 
+/// One Claude Code started ahead of time with the usual settings, so a new conversation doesn't wait
+/// for it to start (a second or more, longer with connectors and Chrome): the next conversation
+/// takes it and another starts a few seconds later. If the settings changed meanwhile (model,
+/// effort, instructions, vault, API key), it's thrown away and a fresh one is started instead.
+/// Settings → `defaults write io.github.tibophlp.shhh spareSession -bool false` turns it off.
+@MainActor
+enum Spare {
+    static var isEnabled: Bool { UserDefaults.standard.object(forKey: "spareSession") as? Bool ?? true }
+
+    private static var waiting: Session?
+    private static var starting: DispatchWorkItem?
+
+    /// The waiting session, if it's still running and fits the settings now.
+    static func take() -> Session? {
+        guard let session = waiting else { return nil }
+        waiting = nil
+        // Hours old: start afresh (Claude Code may have updated, Chrome restarted).
+        guard session.isRunning, session.isUnused, session.age < 2 * 3600, session.fits() else { session.stop(); return nil }
+        return session
+    }
+
+    /// An unused session from a conversation that didn't need it: kept as the spare if there's none.
+    /// False if it can't be (then the caller stops it).
+    static func keep(_ session: Session) -> Bool {
+        guard isEnabled, waiting == nil, session.isRunning, session.isUnused, session.usualSettings else { return false }
+        session.adopt { _ in }
+        waiting = session
+        return true
+    }
+
+    /// Starts the next spare in a few seconds (not at once: the one just taken is starting up too).
+    static func refill(after delay: TimeInterval = 4) {
+        guard isEnabled, starting == nil else { return }
+        let work = DispatchWorkItem {
+            MainActor.assumeIsolated {
+                starting = nil
+                if let current = waiting, current.isRunning, current.fits() { return }
+                waiting?.stop()
+                waiting = Assistant.executable.map { Session(executable: $0, onEvent: { _ in }) }
+            }
+        }
+        starting = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+}
+
 /// One `claude -p` process, talking JSON lines over stdin and stdout.
 @MainActor
 final class Session {
     private let process = Process()
     private let input = Pipe()
     private let output = Pipe()
-    private let onEvent: @MainActor (Assistant.Event) -> Void
+    private var onEvent: @MainActor (Assistant.Event) -> Void
     private(set) var launchError: String?
     private var stopped = false
+    private let launchedAt = Date()
     private var buffer = Data()
     // The process can exit before its last lines are read: wait for both before calling it a crash.
     private var outputEnded = false
@@ -441,19 +496,50 @@ final class Session {
 
     var isRunning: Bool { !stopped && process.isRunning }
 
-    init(executable: URL, model: Assistant.Model? = nil, effort: Assistant.Effort? = nil, tutor: String? = nil,
-         onEvent: @escaping @MainActor (Assistant.Event) -> Void) {
+    /// Started with the settings chosen in Settings (no stronger model, not the tutor): one that can
+    /// wait as the spare (`Spare`).
+    private(set) var usualSettings = false
+    /// No request sent yet.
+    var isUnused: Bool { requestsSent == 0 }
+    var age: TimeInterval { Date().timeIntervalSince(launchedAt) }
+
+    /// Whether it was started with the settings that would be used now.
+    func fits() -> Bool {
+        usualSettings && process.arguments == Self.arguments(model: nil, effort: nil, tutor: nil)
+            && process.environment == Self.environment()
+    }
+
+    /// Its events go here from now on (a spare session taken by a conversation, or put back).
+    func adopt(_ onEvent: @escaping @MainActor (Assistant.Event) -> Void) {
         self.onEvent = onEvent
-        modelName = (model ?? Assistant.model).rawValue
-        let vault = Assistant.vaultURL
-        let instructions = Instructions(vault: vault)
+    }
+
+    /// The command line for a session with these settings. Also how a session started ahead of time
+    /// (`Spare`) is checked against the settings now: any difference and it isn't used.
+    fileprivate static func arguments(model: Assistant.Model?, effort: Assistant.Effort?, tutor: String?,
+                                      vault: URL? = Assistant.vaultURL, instructions: Instructions? = nil) -> [String] {
+        let instructions = instructions ?? Instructions(vault: vault)
         let autonomy = Assistant.autonomy
         let effort = effort ?? Assistant.effort
-        policy = ToolPolicy(vault: vault, readOnly: instructions.readOnly,
-                            allowedCommands: instructions.allowedCommands, autonomy: autonomy)
-        signal(SIGPIPE, SIG_IGN) // writing to a CLI that just exited must fail, not kill the app
-        process.executableURL = executable
-        process.arguments = [
+        if let tutor {
+            // Tutoring: their notes and Joe's PDF tools only, nothing else loaded.
+            return [
+                "-p",
+                "--input-format", "stream-json",
+                "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+                "--tools", vault == nil ? "Bash" : "Read,Grep,Glob,Bash",
+                "--strict-mcp-config",
+                "--setting-sources", "user",
+                "--permission-mode", "default",
+                "--permission-prompt-tool", "stdio",
+                "--disable-slash-commands",
+                "--no-session-persistence",
+                "--model", AIAccount.model((model ?? Assistant.model).rawValue),
+                "--effort", effort.rawValue,
+                "--system-prompt", tutor,
+            ]
+        }
+        return [
             "-p",
             "--input-format", "stream-json",
             "--output-format", "stream-json", "--verbose", "--include-partial-messages",
@@ -472,25 +558,21 @@ final class Session {
             "--effort", effort.rawValue,
             "--system-prompt", Self.systemPrompt(effort, autonomy: autonomy, instructions: instructions.text, vault: vault),
         ]
-        if let tutor {
-            // Tutoring: their notes and Joe's PDF tools only, nothing else loaded.
-            process.arguments = [
-                "-p",
-                "--input-format", "stream-json",
-                "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-                "--tools", vault == nil ? "Bash" : "Read,Grep,Glob,Bash",
-                "--strict-mcp-config",
-                "--setting-sources", "user",
-                "--permission-mode", "default",
-                "--permission-prompt-tool", "stdio",
-                "--disable-slash-commands",
-                "--no-session-persistence",
-                "--model", AIAccount.model((model ?? Assistant.model).rawValue),
-                "--effort", effort.rawValue,
-                "--system-prompt", tutor,
-            ]
-        }
-                process.environment = Self.environment()
+    }
+
+    init(executable: URL, model: Assistant.Model? = nil, effort: Assistant.Effort? = nil, tutor: String? = nil,
+         onEvent: @escaping @MainActor (Assistant.Event) -> Void) {
+        self.onEvent = onEvent
+        modelName = (model ?? Assistant.model).rawValue
+        let vault = Assistant.vaultURL
+        let instructions = Instructions(vault: vault)
+        policy = ToolPolicy(vault: vault, readOnly: instructions.readOnly,
+                            allowedCommands: instructions.allowedCommands, autonomy: Assistant.autonomy)
+        signal(SIGPIPE, SIG_IGN) // writing to a CLI that just exited must fail, not kill the app
+        process.executableURL = executable
+        process.arguments = Self.arguments(model: model, effort: effort, tutor: tutor, vault: vault, instructions: instructions)
+        process.environment = Self.environment()
+        usualSettings = model == nil && effort == nil && tutor == nil
         // Work in the vault, so note paths are relative to it. Without one, an empty folder, so no
         // project's instructions get picked up.
         let folder = vault ?? FileManager.default.temporaryDirectory.appendingPathComponent("shhh-ask", isDirectory: true)
@@ -530,6 +612,7 @@ final class Session {
         turnStarted = Date()
         requestsSent += 1
         lastSent = request
+        Latency.sent(by: self, sessionAge: Date().timeIntervalSince(launchedAt), model: modelName)
         // The time it's sent, to the second: the system prompt is written once per conversation,
         // so a time there goes stale with every follow-up.
         let sent = Date().formatted(.dateTime.weekday(.wide).day().month(.wide).year().hour().minute().second())
@@ -631,6 +714,7 @@ final class Session {
         let index = event["index"] as? Int ?? -1
         switch event["type"] as? String {
         case "message_start":
+            Latency.mark("firstEvent", from: self)
             // A new message: any earlier text was a lead-in to a tool call.
             answer = ""
             toolInputs = [:]
@@ -652,6 +736,7 @@ final class Session {
             let delta = event["delta"] as? [String: Any] ?? [:]
             switch delta["type"] as? String {
             case "text_delta":
+                Latency.mark("firstText", from: self)
                 answer += delta["text"] as? String ?? ""
                 onEvent(.answer(StudyBuddy.withoutMarks(answer)))
             case "input_json_delta":
@@ -704,6 +789,7 @@ final class Session {
     private func finishTurn() {
         guard !turnDone else { return }
         turnDone = true
+        Latency.finished(from: self)
         pending = []
         // A quiz mark in the reply goes to the quiz log (it's already hidden from the card).
         if answer.contains("<mark") { _ = StudyBuddy.record(answer) }

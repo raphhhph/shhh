@@ -19,6 +19,8 @@ enum CommandLineTool {
       Joe --microphones
       Joe --record <seconds>
       Joe --ask "<request>" ["<follow-up>" …]
+      Joe --latency                (where the time went in the last requests)
+      Joe --bench-claude           (Claude Code's first word: started for the request, and ahead)
     """
 
     /// Runs a test mode and exits if one was requested; returns otherwise.
@@ -373,6 +375,13 @@ enum CommandLineTool {
             MainActor.assumeIsolated { showApproval(args[1], saveTo: args.count > 2 ? args[2] : nil) }
             NSApplication.shared.setActivationPolicy(.accessory)
             NSApplication.shared.run()
+        case ("--latency", 1):
+            // Joe --latency: the median time of each step of the last 20 requests (Latency.jsonl).
+            print(Latency.summary())
+            exit(0)
+        case ("--bench-claude", 1):
+            // Joe --bench-claude: two tiny requests on the chosen model, to time Claude Code itself.
+            run { try await benchClaude() }
         case ("--ask", 2...):
             MainActor.assumeIsolated { ask(Array(args.dropFirst())) }
             NSApplication.shared.setActivationPolicy(.accessory)
@@ -395,6 +404,40 @@ enum CommandLineTool {
             let start = Date()
             let text = try await transcriber.transcribe(fileURL: URL(fileURLWithPath: file))
             print(String(format: "[%.2fs] %@", Date().timeIntervalSince(start), text))
+        }
+    }
+
+    /// How long Claude Code takes to say its first word: once started together with the request (as
+    /// before the spare session), once started a few seconds ahead (the spare). Joe's own settings,
+    /// connectors and Chrome included, so it's what a request really waits for.
+    @MainActor
+    private static func benchClaude() async throws {
+        guard let executable = Assistant.executable else { fail("Claude Code isn't installed.") }
+        print("Model: \(Assistant.model.name), effort \(Assistant.effort.name)")
+        final class Timing { var session: Session?; var sent = Date(); var firstWord: Date?; var failure: String?; var resumed = false }
+        for (label, head) in [("started with the request", 0.0), ("started 8 s ahead", 8.0)] {
+            let timing = Timing()
+            await withCheckedContinuation { (finished: CheckedContinuation<Void, Never>) in
+                timing.session = Session(executable: executable) { event in
+                    switch event {
+                    case .answer: if timing.firstWord == nil { timing.firstWord = Date() }
+                    case .failed(let message): timing.failure = message; fallthrough
+                    case .turnFinished: if !timing.resumed { timing.resumed = true; finished.resume() }
+                    default: break
+                    }
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + head) {
+                    MainActor.assumeIsolated {
+                        timing.sent = Date()
+                        timing.session?.send("Reply with just the word: ok", screenshot: nil)
+                    }
+                }
+            }
+            timing.session?.stop()
+            if let failure = timing.failure { print("\(label): failed: \(failure)"); continue }
+            let word = timing.firstWord.map { String(format: "%.2f s", $0.timeIntervalSince(timing.sent)) } ?? "none"
+            print(String(format: "%@: first word %@ after sending, done %.2f s after sending", label, word,
+                         Date().timeIntervalSince(timing.sent)))
         }
     }
 

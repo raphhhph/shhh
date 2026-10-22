@@ -130,6 +130,12 @@ final class DashboardModel: ObservableObject {
 
     let actions: Actions
     @Published var page: Page = .home
+
+    /// Settings, open on one of its tabs (General, Personality, …).
+    func openSettings(_ tab: String) {
+        UserDefaults.standard.set(tab, forKey: "settingsTab")
+        page = .settings
+    }
     @Published var activity: [Activity] = []
     @Published var stats = ActivityLog.Stats()
     @Published var focus: String?
@@ -444,11 +450,12 @@ private struct DashboardView: View {
                     .environment(\.narrow, content < 820)
                     .environment(\.wide, content >= 1000)
                     .padding(.horizontal, content < 820 ? 24 : 40)
-                    .padding(.top, 44)
+                    .padding(.top, 56) // clear of the window buttons, level with Joe in the sidebar
                     .padding(.bottom, 36)
                     .frame(maxWidth: model.page == .calendar ? 1500 : 1060, alignment: .leading)
                     .frame(maxWidth: .infinity)
                 }
+                .ignoresSafeArea(.container, edges: .top) // or the title bar's height is added on top of the padding
                 .background(Look.page)
             }
         }
@@ -618,12 +625,11 @@ private struct HomePage: View {
             .background(Look.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Look.line))
             .shadow(color: .black.opacity(0.04), radius: 8, y: 2)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(suggestions, id: \.self) { suggestion in
-                        Button { model.actions.ask(suggestion) } label: { Text(suggestion) }
-                            .buttonStyle(ChipButton())
-                    }
+            // Wrapping onto a second line rather than scrolling, so none is cut off at the edge.
+            ChipFlow(spacing: 8) {
+                ForEach(suggestions, id: \.self) { suggestion in
+                    Button { model.actions.ask(suggestion) } label: { Text(suggestion) }
+                        .buttonStyle(ChipButton())
                 }
             }
         }
@@ -633,7 +639,7 @@ private struct HomePage: View {
                 NowNext(slots: model.timeline, now: context.date)
             }
             if !narrow, !model.alarms.isEmpty || model.nowPlaying != nil {
-                status.frame(width: 320)
+                status.frame(width: 300)
             }
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -674,7 +680,8 @@ private struct HomePage: View {
                     }
                 }
             }
-            DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil, stretch: true) { model.page = .calendar }
+            DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil, stretch: true,
+                    connect: { model.openSettings("general") }, start: { model.actions.ask($0.startRequest) }) { model.page = .calendar }
                 .frame(width: narrow ? nil : 320)
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -687,12 +694,17 @@ private struct HomePage: View {
                 .map { Daybook.Slot(start: $0.fireAt, title: $0.title, kind: .alarm) })
         }
 
+        // Kept short: the rest is one click away in History.
         Card(title: "Recent", symbol: "clock") {
             if model.activity.isEmpty {
                 Text("What you dictate and ask shows up here.").font(.system(size: 13)).foregroundStyle(.secondary)
             }
-            ForEach(model.activity.prefix(5)) { entry in
+            ForEach(model.activity.prefix(3)) { entry in
                 ActivityRow(entry: entry)
+            }
+            if model.activity.count > 3 {
+                Button { model.page = .history } label: { Label("All history", systemImage: "arrow.right").labelStyle(.titleAndIcon) }
+                    .buttonStyle(ChipButton())
             }
         }
 
@@ -757,6 +769,45 @@ private struct HomePage: View {
     }
 }
 
+/// Lays its views out left to right, starting a new line when one doesn't fit.
+private struct ChipFlow: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = rows(width: proposal.width ?? .infinity, subviews: subviews)
+        let height = rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(rows.count - 1, 0))
+        return CGSize(width: proposal.width ?? rows.map(\.width).max() ?? 0, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in rows(width: bounds.width, subviews: subviews) {
+            var x = bounds.minX
+            for index in row.indices {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += row.height + spacing
+        }
+    }
+
+    private func rows(width: CGFloat, subviews: Subviews) -> [(indices: [Int], width: CGFloat, height: CGFloat)] {
+        var rows: [(indices: [Int], width: CGFloat, height: CGFloat)] = []
+        for (index, subview) in subviews.enumerated() {
+            let size = subview.sizeThatFits(.unspecified)
+            if let last = rows.last, last.width + spacing + size.width <= width {
+                rows[rows.count - 1].indices.append(index)
+                rows[rows.count - 1].width += spacing + size.width
+                rows[rows.count - 1].height = max(last.height, size.height)
+            } else {
+                rows.append(([index], size.width, size.height))
+            }
+        }
+        return rows
+    }
+}
+
 /// What's on now and what's next, big, with a countdown.
 private struct NowNext: View {
     let slots: [Daybook.Slot]
@@ -791,17 +842,22 @@ private struct NowNext: View {
         return HStack(spacing: 12) {
             RoundedRectangle(cornerRadius: 2.5).fill(color).frame(width: 5)
             VStack(alignment: .leading, spacing: 3) {
-                Text(label.uppercased()).font(.system(size: 10.5, weight: .bold)).foregroundStyle(color)
-                Text(slot.title).font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                // The countdown sits up with the label, so the class name gets the tile's full width.
+                HStack(spacing: 8) {
+                    Text(label.uppercased()).font(.system(size: 10.5, weight: .bold)).foregroundStyle(color)
+                    Spacer(minLength: 4)
+                    Text(countdown).font(.system(size: 11.5, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(color)
+                        .padding(.horizontal, 8).frame(height: 20)
+                        .background(color.opacity(0.12), in: Capsule())
+                }
+                Text(slot.title).font(.system(size: 17, weight: .semibold)).lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text([slot.start.formatted(date: .omitted, time: .shortened) + (slot.end.map { "–" + $0.formatted(date: .omitted, time: .shortened) } ?? ""), slot.detail]
                     .filter { !$0.isEmpty }.joined(separator: " · "))
-                    .font(.system(size: 12.5)).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.system(size: 12.5)).foregroundStyle(.secondary).lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer(minLength: 6)
-            Text(countdown).font(.system(size: 12.5, weight: .semibold).monospacedDigit())
-                .foregroundStyle(color)
-                .padding(.horizontal, 10).frame(height: 26)
-                .background(color.opacity(0.12), in: Capsule())
         }
         .padding(14)
         .frame(maxWidth: .infinity, minHeight: 78, maxHeight: .infinity, alignment: .leading)
@@ -819,13 +875,23 @@ private struct DueSoon: View {
     let deadlines: [CalendarFeed.Item]
     let synced: Bool
     var stretch = false
+    /// Where ManageBac's calendar link goes in: shown while nothing has come in yet.
+    var connect: (() -> Void)?
+    /// "Start": Joe breaks the deadline into steps and plans the first one.
+    var start: ((CalendarFeed.Item) -> Void)?
     var open: () -> Void
+    @State private var hovered: String?
 
     var body: some View {
         Card(title: "Due soon", symbol: "flag", stretch: stretch) {
             if deadlines.isEmpty {
-                Text(synced ? "Nothing due in the next two weeks." : "Sync the calendar to bring in ManageBac.")
+                Text(synced ? "Nothing due in the next two weeks." : "Your ManageBac deadlines show up here once its calendar is linked.")
                     .font(.system(size: 13)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !synced, let connect {
+                    Button(action: connect) { Label("Link ManageBac", systemImage: "link") }
+                        .buttonStyle(PillButton(prominent: true))
+                }
             }
             VStack(spacing: 0) {
                 ForEach(deadlines.prefix(5)) { item in
@@ -837,18 +903,26 @@ private struct DueSoon: View {
                         }
                         .frame(width: 34)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(item.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                            Text(item.title).font(.system(size: 13, weight: .medium)).lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
                             if let group = SubjectGroup.of(item.title) ?? SubjectGroup.of(item.detail) {
                                 Text(group.name).font(.system(size: 11)).foregroundStyle(group.color)
                             }
                         }
                         Spacer(minLength: 4)
-                        Text(days == 0 ? "Today" : days == 1 ? "Tomorrow" : "\(days) days")
-                            .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundStyle(days <= 1 ? Look.deadline : days <= 3 ? Color.orange : .secondary)
+                        if let start, hovered == item.id {
+                            Button { start(item) } label: { Label("Start", systemImage: "play.fill") }
+                                .buttonStyle(PillButton(prominent: true))
+                                .help("Joe breaks it into steps and plans the first one tonight")
+                        } else {
+                            Text(days == 0 ? "Today" : days == 1 ? "Tomorrow" : "\(days) days")
+                                .font(.system(size: 11.5, weight: .semibold))
+                                .foregroundStyle(days <= 1 ? Look.deadline : days <= 3 ? Color.orange : .secondary)
+                        }
                     }
                     .padding(.vertical, 6)
                     .contentShape(Rectangle())
+                    .onHover { inside in hovered = inside ? item.id : (hovered == item.id ? nil : hovered) }
                     .onTapGesture(perform: open)
                 }
             }
@@ -999,13 +1073,10 @@ private struct TodayTimeline: View {
         }
     }
 
-    /// A colour dot that opens the colour picker.
+    /// A colour dot that opens a few colours to choose from.
     private func swatch(_ title: String, _ hex: Binding<String>) -> some View {
         HStack(spacing: 5) {
-            ColorPicker("", selection: Binding(get: { Color(hex: hex.wrappedValue) }, set: { hex.wrappedValue = $0.hex }), supportsOpacity: false)
-                .labelsHidden()
-                .scaleEffect(0.7)
-                .frame(width: 22, height: 18)
+            SwatchPicker(hex: hex)
             Text(title).font(.system(size: 12)).foregroundStyle(.secondary)
         }
         .help("Click the colour to change it")
@@ -1018,8 +1089,9 @@ private struct TodayTimeline: View {
         let past = end < now
         let lit = selected == slot.id || hovered == slot.id
         return VStack(alignment: .leading, spacing: 1) {
-            if width > 30 {
-                Text(Self.short(slot.title)).font(.system(size: 11, weight: .semibold)).lineLimit(1)
+            if width > 22 {
+                Text(Self.short(slot.title, fitting: width - 10)).font(.system(size: 11, weight: .semibold)).lineLimit(1)
+                    .minimumScaleFactor(0.7) // shrinks a little before it cuts a word ("Busines")
             }
             if width > 44, !slot.detail.isEmpty {
                 Text(slot.detail).font(.system(size: 9.5, weight: .medium)).opacity(0.8).lineLimit(1)
@@ -1063,8 +1135,11 @@ private struct TodayTimeline: View {
     }
 
     /// "Maths AI HL" → "Maths", "Chinese B" → "Chinese": what fits in a block.
-    private static func short(_ title: String) -> String {
-        title.count <= 7 ? title : String(title.split(separator: " ").first ?? Substring(title))
+    /// The block's label: the whole title when short, else its first word, cut (without "…") to what
+    /// fits, so a short class reads "Adv" rather than "A…". About 7.5 pt a letter at this size, to be safe.
+    private static func short(_ title: String, fitting width: CGFloat) -> String {
+        let word = title.count <= 7 ? title : String(title.split(separator: " ").first ?? Substring(title))
+        return String(word.prefix(max(1, Int(width / 5)))) // about the narrowest a letter gets at 0.7 scale
     }
 
     private static func times(_ slot: Daybook.Slot) -> String {
@@ -1148,14 +1223,7 @@ private struct HistoryPage: View {
     var body: some View {
         PageTitle(title: "History", subtitle: "Everything you've dictated and asked · on this Mac only")
         HStack(spacing: 10) {
-            Picker("", selection: $kind) {
-                Text("All").tag("all")
-                Text("Dictation").tag("dictation")
-                Text("Joe").tag("ask")
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 240)
+            Segmented(options: [("all", "All"), ("dictation", "Dictation"), ("ask", "Joe")], selection: $kind)
             Spacer()
             SearchField(text: $search)
         }
@@ -1276,7 +1344,7 @@ private struct HistoryRow: View {
                 if continuing {
                     HStack(spacing: 8) {
                         TextField("Ask a follow-up…", text: $followUp)
-                            .textFieldStyle(.roundedBorder)
+                            .joeField()
                             .onSubmit(send)
                         Button("Send", action: send).buttonStyle(PillButton(prominent: true)).disabled(followUp.isEmpty)
                     }
@@ -1354,14 +1422,8 @@ private struct UsagePage: View {
             PageTitle(title: "Usage", subtitle: (AIAccount.usesAPIKey ? "Billed to your API key, per request." : "On your Claude plan. Costs show what the same use would cost on the API.")
                 + (currency == "CNY" ? " RMB at ¥\(String(format: "%.1f", Self.yuanPerDollar)) per $1." : ""))
             Spacer()
-            Picker("", selection: $currency) {
-                Text("USD $").tag("USD")
-                Text("RMB ¥").tag("CNY")
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 150)
-            .padding(.top, 6)
+            Segmented(options: [("USD", "USD $"), ("CNY", "RMB ¥")], selection: $currency)
+                .padding(.top, 6)
         }
         let calendar = Calendar.current
         let today = entries.filter { calendar.isDateInToday($0.date) }
@@ -1540,7 +1602,8 @@ private struct CalendarPage: View {
                 } else {
                     if let selected { detail(selected) }
                     Card { week(dates, items, now) }
-                    DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil) {}
+                    DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil, connect: { model.openSettings("general") },
+                    start: { model.actions.ask($0.startRequest) }) {}
                 }
             }
         }
@@ -1787,7 +1850,8 @@ private struct CalendarPage: View {
     private func rail(_ now: Date) -> some View {
         VStack(spacing: 16) {
             if let selected { detail(selected) }
-            DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil) {}
+            DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil, connect: { model.openSettings("general") },
+                    start: { model.actions.ask($0.startRequest) }) {}
             Card(title: "Subjects", symbol: "square.grid.2x2") {
                 VStack(alignment: .leading, spacing: 7) {
                     ForEach(SubjectGroup.allCases, id: \.self) { group in
@@ -2027,16 +2091,15 @@ private struct PointsCalculator: View {
                     RoundedRectangle(cornerRadius: 2).fill(SubjectGroup.of(subject)?.color ?? Look.accent).frame(width: 4, height: 16)
                     Text(subject).font(.system(size: 13))
                     Spacer()
-                    Picker("", selection: grade(subject)) { ForEach((1...7).reversed(), id: \.self) { Text("\($0)").tag($0) } }
-                        .pickerStyle(.segmented).labelsHidden().frame(width: 230)
+                    Segmented(options: (1...7).reversed().map { ($0, "\($0)") }, selection: grade(subject))
                 }
             }
             HStack(spacing: 16) {
                 Text("TOK").font(.system(size: 13))
-                Picker("", selection: $tok) { ForEach(["A", "B", "C", "D", "E"], id: \.self) { Text($0).tag($0) } }.pickerStyle(.segmented).labelsHidden().frame(width: 170)
+                Segmented(options: ["A", "B", "C", "D", "E"].map { ($0, $0) }, selection: $tok)
                 Spacer()
                 Text("EE").font(.system(size: 13))
-                Picker("", selection: $ee) { ForEach(["A", "B", "C", "D", "E"], id: \.self) { Text($0).tag($0) } }.pickerStyle(.segmented).labelsHidden().frame(width: 170)
+                Segmented(options: ["A", "B", "C", "D", "E"].map { ($0, $0) }, selection: $ee)
             }
             ForEach(problems, id: \.self) { Text($0).font(.system(size: 12)).foregroundStyle(.red) }
             Text("Also needed for a diploma: CAS completed, at least 12 points from HL subjects and 9 from SL, and no academic misconduct.")
@@ -2127,14 +2190,8 @@ private struct AlarmsPage: View {
     var body: some View {
         PageTitle(title: "Alarms", subtitle: "They ring loudly on this Mac (lid open), with Stop and Snooze, and on your iPhone through Reminders.")
         Card(title: "New", symbol: "plus") {
-            Picker("", selection: $kind) {
-                Label("Alarm", systemImage: "alarm").tag(Alarm.Kind.alarm)
-                Label("Timer", systemImage: "timer").tag(Alarm.Kind.timer)
-                Label("Reminder", systemImage: "bell").tag(Alarm.Kind.reminder)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: 320)
+            Segmented(options: [(Alarm.Kind.alarm, "Alarm"), (.timer, "Timer"), (.reminder, "Reminder")],
+                      symbols: ["alarm", "timer", "bell"], selection: $kind)
 
             if kind == .timer {
                 HStack(spacing: 6) {
@@ -2142,15 +2199,14 @@ private struct AlarmsPage: View {
                         Button("\(value) min") { minutes = value }.buttonStyle(PillButton(prominent: minutes == value))
                     }
                 }
-                Stepper(value: $minutes, in: 1...720) {
-                    Text("\(minutes) minutes").font(.system(size: 13, weight: .medium).monospacedDigit())
+                HStack(spacing: 8) {
+                    Button { minutes = max(1, minutes - 1) } label: { Image(systemName: "minus") }.buttonStyle(PillButton())
+                    Text("\(minutes) minutes").font(.system(size: 13, weight: .medium).monospacedDigit()).frame(minWidth: 86)
+                    Button { minutes = min(720, minutes + 1) } label: { Image(systemName: "plus") }.buttonStyle(PillButton())
                 }
             } else {
                 HStack(alignment: .center, spacing: 22) {
-                    DatePicker("", selection: $time, displayedComponents: .hourAndMinute)
-                        .datePickerStyle(.stepperField)
-                        .labelsHidden()
-                        .controlSize(.large)
+                    TimeDial(time: $time)
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 5) {
                             ForEach(Self.dayLetters, id: \.0) { day, letter in
@@ -2174,7 +2230,7 @@ private struct AlarmsPage: View {
             }
             HStack(spacing: 10) {
                 TextField(kind == .timer ? "Label: pasta, focus…" : kind == .reminder ? "What to remind you about" : "Label: Go to school, gym…", text: $label)
-                    .textFieldStyle(.roundedBorder)
+                    .joeField()
                     .onSubmit(set)
                 Button(kind == .timer ? "Start timer" : "Set \(kind.rawValue)", action: set)
                     .buttonStyle(PillButton(prominent: true))
@@ -2209,7 +2265,7 @@ private struct AlarmsPage: View {
         Card(title: "Or type it", symbol: "text.cursor") {
             HStack {
                 TextField("Timer for 25 minutes · alarm at 6:30 every weekday · remind me at 3pm to submit the form", text: $request)
-                    .textFieldStyle(.roundedBorder)
+                    .joeField()
                     .onSubmit(add)
                 Button("Set", action: add).buttonStyle(PillButton()).disabled(request.isEmpty)
             }
@@ -2302,12 +2358,7 @@ private struct NotesPage: View {
                 .buttonStyle(PillButton(prominent: true))
             Text("Or say “take notes, this is a lecture”.").font(.system(size: 12.5)).foregroundStyle(.secondary)
             Spacer()
-            Picker("", selection: $kind) {
-                ForEach(["All", "Lecture", "Meeting", "Notes"], id: \.self) { Text($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 280)
+            Segmented(options: ["All", "Lecture", "Meeting", "Notes"].map { ($0, $0) }, selection: $kind)
         }
         let shown = model.notes.filter { kind == "All" || $0.kind.hasPrefix(kind) }
         let calendar = Calendar.current
@@ -2393,8 +2444,8 @@ private struct DictionaryPage: View {
 
         Card(title: "Add", symbol: "plus") {
             HStack(spacing: 10) {
-                TextField("Spelled: Ammiel, ManageBac, WellPrepped", text: $word).textFieldStyle(.roundedBorder).onSubmit(add)
-                TextField("Joe hears (optional): manage back", text: $heardAs).textFieldStyle(.roundedBorder).onSubmit(add)
+                TextField("Spelled: Ammiel, ManageBac, WellPrepped", text: $word).joeField().onSubmit(add)
+                TextField("Joe hears (optional): manage back", text: $heardAs).joeField().onSubmit(add)
                 Button("Add", action: add).buttonStyle(PillButton(prominent: true)).disabled(word.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             Text("Leave “Joe hears” empty and he fixes anything that sounds close. Fill it in and he swaps those exact words every time.")
@@ -2402,7 +2453,7 @@ private struct DictionaryPage: View {
         }
 
         Card(title: "Try it", symbol: "wand.and.stars") {
-            TextField("Type a sentence the way Joe might mishear it…", text: $trial).textFieldStyle(.roundedBorder)
+            TextField("Type a sentence the way Joe might mishear it…", text: $trial).joeField()
             if !trial.isEmpty {
                 let fixed = Vocabulary.apply(trial)
                 HStack(alignment: .top, spacing: 8) {
@@ -2543,7 +2594,7 @@ private struct MusicPage: View {
             .font(.system(size: 18))
             HStack {
                 TextField("Play… (a song, artist, album, or “my liked songs”)", text: $request)
-                    .textFieldStyle(.roundedBorder)
+                    .joeField()
                     .onSubmit(play)
                 Button("Play", action: play).disabled(request.isEmpty)
             }
@@ -2626,6 +2677,336 @@ private struct PillButton: ButtonStyle {
     }
 }
 
+private extension View {
+    /// A text field in Joe's style: a soft capsule like `Choice`, instead of the stock square border.
+    func joeField() -> some View {
+        textFieldStyle(.plain)
+            .font(.system(size: 13))
+            .padding(.horizontal, 12)
+            .frame(height: 30)
+            .background(Color.primary.opacity(0.06), in: Capsule())
+            .overlay(Capsule().strokeBorder(Look.line))
+    }
+}
+
+/// Joe's on/off switch: a capsule in the theme's accent with a knob that springs across.
+private struct JoeSwitch: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Capsule()
+            .fill(configuration.isOn ? Look.accent : Color.primary.opacity(0.13))
+            .overlay(Capsule().strokeBorder(configuration.isOn ? Color.clear : Look.line))
+            .frame(width: 36, height: 21)
+            .overlay(alignment: configuration.isOn ? .trailing : .leading) {
+                Circle()
+                    .fill(.white)
+                    .shadow(color: .black.opacity(0.22), radius: 1.5, y: 1)
+                    .padding(2.5)
+            }
+            .contentShape(Capsule())
+            .onTapGesture { withAnimation(.spring(response: 0.28, dampingFraction: 0.72)) { configuration.isOn.toggle() } }
+            .accessibilityElement()
+            .accessibilityAddTraits(.isButton)
+            .accessibilityValue(configuration.isOn ? "On" : "Off")
+    }
+}
+
+/// The alarm time, big: hours and minutes each with a step up and down (minutes by five). Joe's
+/// take on the stepper date field.
+private struct TimeDial: View {
+    @Binding var time: Date
+
+    var body: some View {
+        let parts = Calendar.current.dateComponents([.hour, .minute], from: time)
+        HStack(spacing: 2) {
+            column(String(format: "%02d", parts.hour ?? 0), step: { shift(hours: $0) })
+            Text(":").font(.system(size: 30, weight: .semibold)).foregroundStyle(.secondary).padding(.bottom, 3)
+            column(String(format: "%02d", parts.minute ?? 0), step: { shift(minutes: $0 * 5) })
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Look.line))
+    }
+
+    private func column(_ value: String, step: @escaping (Int) -> Void) -> some View {
+        VStack(spacing: 0) {
+            Button { step(1) } label: { Image(systemName: "chevron.up").frame(width: 44, height: 16).contentShape(Rectangle()) }
+            Text(value).font(.system(size: 30, weight: .semibold).monospacedDigit())
+                .contentTransition(.numericText())
+            Button { step(-1) } label: { Image(systemName: "chevron.down").frame(width: 44, height: 16).contentShape(Rectangle()) }
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 11, weight: .bold))
+        .foregroundStyle(.secondary)
+    }
+
+    /// Wraps within the day, like a clock: 23 + 1 is 00, the date stays.
+    private func shift(hours: Int = 0, minutes: Int = 0) {
+        let calendar = Calendar.current
+        let parts = calendar.dateComponents([.hour, .minute], from: time)
+        let total = ((parts.hour ?? 0) * 60 + (parts.minute ?? 0) + hours * 60 + minutes) % 1440
+        let wrapped = (total + 1440) % 1440
+        withAnimation(.snappy) {
+            time = calendar.date(bySettingHour: wrapped / 60, minute: wrapped % 60, second: 0, of: time) ?? time
+        }
+    }
+}
+
+/// A colour dot; click it for a row of colours that sit well beside the subject colours.
+private struct SwatchPicker: View {
+    @Binding var hex: String
+    @State private var open = false
+    private static let colours = ["#FF9420", "#F25C54", "#E84A8A", "#9B6BF2", "#4A7DFF", "#2BB3C0", "#3DBE6B", "#8E8E93"]
+
+    var body: some View {
+        Button { open.toggle() } label: {
+            Circle().fill(Color(hex: hex)).frame(width: 12, height: 12)
+                .overlay(Circle().strokeBorder(Color.primary.opacity(0.15)))
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $open, arrowEdge: .bottom) {
+            HStack(spacing: 8) {
+                ForEach(Self.colours, id: \.self) { colour in
+                    Button { hex = colour; open = false } label: {
+                        Circle().fill(Color(hex: colour)).frame(width: 20, height: 20)
+                            .overlay(Circle().strokeBorder(Color.primary.opacity(hex.uppercased() == colour ? 0.8 : 0), lineWidth: 2).padding(-3))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(12)
+        }
+    }
+}
+
+/// A row of choices in a soft tray, the current one raised like a card. Joe's segmented control.
+private struct Segmented<Value: Hashable>: View {
+    let options: [(value: Value, title: String)]
+    var symbols: [String] = []
+    @Binding var selection: Value
+    /// Bigger, for the Settings tabs.
+    var large = false
+    @Namespace private var raised
+
+    var body: some View {
+        HStack(spacing: large ? 4 : 2) {
+            ForEach(options.indices, id: \.self) { index in
+                let option = options[index]
+                let current = option.value == selection
+                Button { withAnimation(.easeOut(duration: 0.18)) { selection = option.value } } label: {
+                    HStack(spacing: 6) {
+                        if index < symbols.count { Image(systemName: symbols[index]).foregroundStyle(current ? Look.accent : .secondary) }
+                        Text(option.title)
+                    }
+                    .font(.system(size: large ? 13 : 12.5, weight: current ? .semibold : .medium))
+                    .foregroundStyle(current ? .primary : .secondary)
+                    .padding(.horizontal, large ? 12 : 10)
+                    .frame(minWidth: large ? nil : 26)
+                    .frame(height: large ? 30 : 24)
+                    .background {
+                        if current {
+                            RoundedRectangle(cornerRadius: large ? 8 : 6, style: .continuous)
+                                .fill(Look.card)
+                                .overlay(RoundedRectangle(cornerRadius: large ? 8 : 6, style: .continuous).strokeBorder(Look.line))
+                                .shadow(color: .black.opacity(0.06), radius: 2, y: 1)
+                                .matchedGeometryEffect(id: "raised", in: raised)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(large ? 4 : 3)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: large ? 11 : 9, style: .continuous))
+        .fixedSize()
+    }
+}
+
+/// One line of a Settings card: what it is, a short note, and its control on the right. Lights up
+/// softly under the pointer.
+private struct SettingsRow<Content: View>: View {
+    let label: String
+    let detail: String?
+    let last: Bool
+    let content: Content
+    @State private var hovering = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(label).font(.system(size: 13.5, weight: .medium))
+                    if let detail { Text(detail).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1) }
+                }
+                Spacer(minLength: 12)
+                content
+            }
+            .padding(.vertical, 11)
+            .padding(.horizontal, 10)
+            .background(hovering ? Color.primary.opacity(0.035) : .clear, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .padding(.horizontal, -10)
+            .onHover { hovering = $0 }
+            if !last { Rectangle().fill(Look.line).frame(height: 1) }
+        }
+    }
+}
+
+/// Settings → Notch → Edit: the overview's widgets as tiles in a little notch. Drag a tile to move
+/// it, drag it down (or tap its minus) to take it off; drag one up from the tray (or tap it) to add it.
+private struct WidgetEditor: View {
+    @Binding var widgets: [NotchOverview.Widget]
+    /// Folds the editor away again (it opens in place in Settings, not as a sheet: the sheet never
+    /// appeared from inside the settings list).
+    var done: () -> Void = {}
+    /// The tile being dragged, so the others make room for it as it passes.
+    @State private var dragging: NotchOverview.Widget?
+    @State private var overTray = false
+
+    private var unused: [NotchOverview.Widget] { NotchOverview.Widget.allCases.filter { !widgets.contains($0) } }
+    private var full: Bool { widgets.count >= NotchOverview.maxWidgets }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Drag to arrange. Up to \(NotchOverview.maxWidgets) fit side by side.")
+                .font(.system(size: 13)).foregroundStyle(.secondary)
+
+            notch
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text(overTray ? "Drop here to take it off" : full ? "More widgets · the overview is full" : "More widgets")
+                    .font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    if unused.isEmpty {
+                        Text("All of them are in the overview.").font(.system(size: 12.5)).foregroundStyle(.tertiary)
+                    }
+                    ForEach(unused) { widget in
+                        Button { add(widget) } label: {
+                            Label(widget.title, systemImage: widget.symbol)
+                                .font(.system(size: 12.5, weight: .medium))
+                                .labelStyle(TitleIconLabel())
+                                .padding(.horizontal, 12)
+                                .frame(height: 30)
+                                .background(Look.card, in: Capsule())
+                                .overlay(Capsule().strokeBorder(Look.line))
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(full)
+                        .opacity(full ? 0.5 : 1)
+                        .draggable(widget.rawValue)
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+            }
+            .padding(14)
+            .background(overTray ? Look.accent.opacity(0.08) : Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(overTray ? Look.accent.opacity(0.5) : Look.line, style: StrokeStyle(lineWidth: 1, dash: overTray ? [4, 3] : [])))
+            .dropDestination(for: String.self) { items, _ in
+                guard let widget = items.first.flatMap(NotchOverview.Widget.init) else { return false }
+                withAnimation(.snappy) { widgets.removeAll { $0 == widget } }
+                dragging = nil
+                return true
+            } isTargeted: { overTray = $0 && dragging != nil }
+
+            HStack {
+                Button("Reset") { withAnimation(.snappy) { widgets = [.clock, .nextClass, .dueSoon, .tasks, .music] } }
+                    .buttonStyle(PillButton())
+                Spacer()
+                Button("Done") { done() }.buttonStyle(PillButton(prominent: true)).keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(.vertical, 16)
+        .frame(maxWidth: 640, alignment: .leading)
+        .tint(Look.accent)
+    }
+
+    /// The overview as it drops from the notch, in miniature.
+    private var notch: some View {
+        VStack(spacing: 0) {
+            UnevenRoundedRectangle(bottomLeadingRadius: 8, bottomTrailingRadius: 8, style: .continuous)
+                .fill(Color.black)
+                .frame(width: 120, height: 14)
+            HStack(spacing: 8) {
+                if widgets.isEmpty {
+                    Text("Drag widgets here").font(.system(size: 12.5)).foregroundStyle(.white.opacity(0.45))
+                        .frame(maxWidth: .infinity, minHeight: 92)
+                }
+                ForEach(widgets) { widget in tile(widget) }
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 4)
+            .padding(.bottom, 12)
+        }
+        .frame(maxWidth: .infinity)
+        .background(Color.black, in: UnevenRoundedRectangle(bottomLeadingRadius: 22, bottomTrailingRadius: 22, style: .continuous))
+        .environment(\.colorScheme, .dark)
+        // Dropped on the strip itself, past the last tile: it goes on the end.
+        .dropDestination(for: String.self) { items, _ in
+            guard let widget = items.first.flatMap(NotchOverview.Widget.init) else { return false }
+            withAnimation(.snappy) {
+                if !widgets.contains(widget), !full { widgets.append(widget) }
+            }
+            dragging = nil
+            return true
+        }
+    }
+
+    private func tile(_ widget: NotchOverview.Widget) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Image(systemName: widget.symbol).font(.system(size: 17, weight: .medium)).foregroundStyle(Look.accent)
+            Spacer(minLength: 0)
+            Text(widget.title).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, minHeight: 92, maxHeight: 92, alignment: .topLeading)
+        .background(Color.white.opacity(dragging == widget ? 0.03 : 0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .strokeBorder(Color.white.opacity(dragging == widget ? 0.25 : 0), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+        .overlay(alignment: .topTrailing) {
+            Button { remove(widget) } label: {
+                Image(systemName: "minus.circle.fill")
+                    .font(.system(size: 14))
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, Color.white.opacity(0.25))
+            }
+            .buttonStyle(.plain)
+            .padding(5)
+            .help("Take \(widget.title) off")
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        // The payload is made as the drag starts: note which tile is moving.
+        .draggable({ dragging = widget; return widget.rawValue }())
+        .dropDestination(for: String.self) { items, _ in
+            guard let dropped = items.first.flatMap(NotchOverview.Widget.init) else { return false }
+            withAnimation(.snappy) {
+                if !widgets.contains(dropped), !full, let index = widgets.firstIndex(of: widget) { widgets.insert(dropped, at: index) }
+            }
+            dragging = nil
+            return true
+        } isTargeted: { over in
+            // A tile from the strip passing over another: they trade places as it goes, like the home screen.
+            guard over, let moving = dragging, moving != widget,
+                  let from = widgets.firstIndex(of: moving), let to = widgets.firstIndex(of: widget) else { return }
+            withAnimation(.snappy) { widgets.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to) }
+        }
+    }
+
+    private func add(_ widget: NotchOverview.Widget) {
+        guard !full, !widgets.contains(widget) else { return }
+        dragging = nil
+        withAnimation(.snappy) { widgets.append(widget) }
+    }
+
+    private func remove(_ widget: NotchOverview.Widget) {
+        dragging = nil
+        withAnimation(.snappy) { widgets.removeAll { $0 == widget } }
+    }
+}
+
 private struct SettingsPage: View {
     @ObservedObject var model: DashboardModel
     @AppStorage("writingStyle") private var writingStyle = WritingStyle.casual.rawValue
@@ -2645,6 +3026,7 @@ private struct SettingsPage: View {
     @AppStorage("liveCaption") private var liveWords = true
     @AppStorage("notchOverview") private var overviewOn = true
     @State private var overviewWidgets = NotchOverview.widgets.map(\.rawValue)
+    @State private var editingWidgets = false
     @AppStorage("chineseVoice") private var chineseVoice = "zf_001"
     @AppStorage("modelMirrorChina") private var chinaMirror = false
     @AppStorage("profileSchool") private var profileSchool = ""
@@ -2659,7 +3041,7 @@ private struct SettingsPage: View {
                 .font(.system(size: 13, weight: .medium))
                 .multilineTextAlignment(.trailing)
                 .padding(.horizontal, 12)
-                .frame(width: 280, height: 28)
+                .frame(minWidth: 280, maxWidth: 440, minHeight: 28, maxHeight: 28)
                 .background(Color.primary.opacity(0.06), in: Capsule())
                 .overlay(Capsule().strokeBorder(Look.line))
         }
@@ -2702,7 +3084,6 @@ private struct SettingsPage: View {
         newLink = ""
         Task { await CalendarFeed.refreshLinks() }
     }
-    @AppStorage("alarmsAtNotch") private var alarmsAtNotch = "full"
 
     private static let tabs: [(id: String, title: String, symbol: String)] = [
         ("general", "General", "gearshape"),
@@ -2716,23 +3097,7 @@ private struct SettingsPage: View {
         PageTitle(title: "Settings")
             .onAppear { login = SMAppService.mainApp.status == .enabled }
 
-        HStack(spacing: 4) {
-            ForEach(Self.tabs, id: \.id) { item in
-                Button { withAnimation(.easeOut(duration: 0.15)) { tab = item.id } } label: {
-                    Label(item.title, systemImage: item.symbol)
-                        .font(.system(size: 13, weight: tab == item.id ? .semibold : .medium))
-                        .padding(.horizontal, 12)
-                        .frame(height: 30)
-                        .background(tab == item.id ? Look.card : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(tab == item.id ? Look.line : .clear))
-                        .foregroundStyle(tab == item.id ? .primary : .secondary)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(4)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        Segmented(options: Self.tabs.map { ($0.id, $0.title) }, symbols: Self.tabs.map(\.symbol), selection: $tab, large: true)
 
         switch tab {
         case "personality": personality
@@ -2807,32 +3172,17 @@ private struct SettingsPage: View {
         section("Notch", "rectangle.topthird.inset.filled") {
             row("Overview on hover", "Rest the pointer on the notch: time, next class, what's due, your tasks, music") { switchOn($overviewOn) }
             row("Overview widgets", overviewWidgets.map { NotchOverview.Widget(rawValue: $0)?.title ?? $0 }.joined(separator: " · ")) {
-                Menu {
-                    ForEach(NotchOverview.Widget.allCases) { widget in
-                        Button {
-                            if overviewWidgets.contains(widget.rawValue) { overviewWidgets.removeAll { $0 == widget.rawValue } }
-                            else { overviewWidgets.append(widget.rawValue) }
-                            NotchOverview.widgets = overviewWidgets.compactMap(NotchOverview.Widget.init)
-                        } label: {
-                            if overviewWidgets.contains(widget.rawValue) { Label(widget.title, systemImage: "checkmark") } else { Text(widget.title) }
-                        }
-                    }
-                    Divider()
-                    ForEach(Array(overviewWidgets.enumerated()), id: \.offset) { index, raw in
-                        if index > 0 {
-                            Button("Move \(NotchOverview.Widget(rawValue: raw)?.title ?? raw) left") {
-                                overviewWidgets.swapAt(index, index - 1)
-                                NotchOverview.widgets = overviewWidgets.compactMap(NotchOverview.Widget.init)
-                            }
-                        }
-                    }
-                } label: { Text("Choose…") }
-                .menuStyle(.borderlessButton).fixedSize()
+                Button(editingWidgets ? "Done" : "Edit…") { withAnimation(.snappy) { editingWidgets.toggle() } }
+                    .buttonStyle(PillButton(prominent: editingWidgets))
             }
-            row("Answers at the notch", "Answers drop down from the notch") { switchOn($notch) { model.actions.setNotch($0) } }
-            row("Alarms at the notch", "The capsule beside the notch", last: true) {
-                Choice(options: [("full", "Time"), ("icon", "Icon only"), ("soon", "Last hour only"), ("off", "Hidden")], selection: $alarmsAtNotch)
+            if editingWidgets {
+                WidgetEditor(widgets: Binding(
+                    get: { overviewWidgets.compactMap(NotchOverview.Widget.init) },
+                    set: { overviewWidgets = $0.map(\.rawValue); NotchOverview.widgets = $0 }),
+                             done: { withAnimation(.snappy) { editingWidgets = false } })
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
+            row("Answers at the notch", "Answers drop down from the notch", last: true) { switchOn($notch) { model.actions.setNotch($0) } }
         }
         section("Joe", "power") {
             row("Quit Joe", "Dictation and the notch stop until you open Joe again", last: true) {
@@ -2924,7 +3274,7 @@ private struct SettingsPage: View {
                 row("API key", AIAccount.maskedKey.map { "Saved: \($0). New conversations use it." } ?? "From console.anthropic.com → API keys", last: true) {
                     HStack(spacing: 8) {
                         SecureField("sk-ant-…", text: $apiKeyDraft)
-                            .textFieldStyle(.roundedBorder)
+                            .joeField()
                             .frame(width: 220)
                         Button("Save") { AIAccount.save(apiKeyDraft); apiKeyDraft = ""; model.settingsVersion += 1 }
                             .buttonStyle(PillButton(prominent: true))
@@ -2939,18 +3289,18 @@ private struct SettingsPage: View {
             }
             row("Endpoint", "OpenRouter, or any Anthropic-compatible base URL (LiteLLM, a gateway, a local server)") {
                 TextField("https://openrouter.ai/api", text: $customEndpoint)
-                    .textFieldStyle(.roundedBorder).frame(width: 260)
+                    .joeField().frame(width: 260)
             }
             row("API key", AIAccount.maskedOpenRouterKey.map { "Saved: \($0)" } ?? "OpenRouter: openrouter.ai → Keys") {
                 HStack(spacing: 8) {
-                    SecureField("sk-or-…", text: $openRouterDraft).textFieldStyle(.roundedBorder).frame(width: 220)
+                    SecureField("sk-or-…", text: $openRouterDraft).joeField().frame(width: 220)
                     Button("Save") { AIAccount.save(openRouterDraft, as: "openRouterKey"); openRouterDraft = ""; model.settingsVersion += 1 }
                         .buttonStyle(PillButton(prominent: true)).disabled(openRouterDraft.count < 20)
                 }
             }
             row("Model", "An OpenRouter model ID, e.g. openai/…, deepseek/…, qwen/…; openrouter/auto picks one", last: true) {
                 TextField("openrouter/auto", text: $openRouterModel)
-                    .textFieldStyle(.roundedBorder).frame(width: 260)
+                    .joeField().frame(width: 260)
             }
         }
         section("Brain", "cpu") {
@@ -2994,26 +3344,13 @@ private struct SettingsPage: View {
     }
 
     private func row<Content: View>(_ label: String, _ detail: String? = nil, last: Bool = false, @ViewBuilder _ content: () -> Content) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(label).font(.system(size: 13.5, weight: .medium))
-                    if let detail { Text(detail).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1) }
-                }
-                Spacer(minLength: 12)
-                content()
-            }
-            .padding(.vertical, 10)
-            if !last { Rectangle().fill(Look.line).frame(height: 1) }
-        }
+        SettingsRow(label: label, detail: detail, last: last, content: content())
     }
 
     private func switchOn(_ value: Binding<Bool>, _ changed: ((Bool) -> Void)? = nil) -> some View {
         Toggle("", isOn: Binding(get: { value.wrappedValue }, set: { value.wrappedValue = $0; changed?($0) }))
-            .toggleStyle(.switch)
-            .tint(Look.accent)
+            .toggleStyle(JoeSwitch())
             .labelsHidden()
-            .controlSize(.small)
     }
 
     private func permission(_ label: String, _ detail: String, _ granted: Bool, _ pane: String, last: Bool = false,
@@ -3052,7 +3389,8 @@ extension Dashboard {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-        let view = NSHostingView(rootView: DashboardView(model: model))
+        // The window's own colour behind it, as on screen: Classic's see-through page drew grey in the bitmap.
+        let view = NSHostingView(rootView: DashboardView(model: model).background(Color(nsColor: .windowBackgroundColor)))
         window.contentView = view
         window.orderFrontRegardless()
         // Let the page load its data and settle before drawing it.

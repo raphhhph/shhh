@@ -176,6 +176,34 @@ final class NoteSaver {
         session.savedAt = Date()
     }
 
+    /// An answer from the card, kept as a note of its own in `Notes` ("Save to notes" on the card),
+    /// so an explanation Joe gave can be revised from later. Returns the note's title, or nil when
+    /// there's no vault.
+    static func saveAnswer(_ answer: String, question: String?, subject: String?) -> String? {
+        guard let root else { return nil }
+        let date = Date()
+        let topic = [subject, question].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty }
+        let title = fileName(String((topic ?? "Joe's answer \(date.formatted(date: .omitted, time: .shortened))").prefix(80)))
+        let url = unique(root.appendingPathComponent(Kind.notes.folder, isDirectory: true), name: "\(day(date)) \(title)")
+        let summary = (question ?? title).replacingOccurrences(of: "\"", with: "'").replacingOccurrences(of: "\n", with: " ")
+        let text = """
+            ---
+            summary: "\(summary)"
+            type: notes
+            date: \(day(date))
+            source: Joe answer
+            ---
+            # \(title)
+
+            \(question.map { "> \($0)\n\n" } ?? "")\(answer.trimmingCharacters(in: .whitespacesAndNewlines))
+
+            """
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        guard (try? text.write(to: url, atomically: true, encoding: .utf8)) != nil else { return nil }
+        rebuildIndex(root)
+        return title
+    }
+
     /// A saved note without its frontmatter and title: the notes themselves.
     private static func body(of text: String) -> String {
         var lines = text.components(separatedBy: "\n")

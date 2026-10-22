@@ -274,6 +274,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hotkey.onRelease = { [weak self] _ in self?.finishRecording() }
         hotkey.onCancel = { [weak self] _ in self?.cancelRecording() }
         answerPanel.onClose = { [weak self] in self?.closeCard() }
+        answerPanel.onFollowUp = { [weak self] in self?.followUpTyped($0) }
         answerPanel.onStopSpeaking = { [weak self] in
             self?.speech.stop()
             self?.answerPanel.setSpeaking(false)
@@ -310,6 +311,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         overview.canShow = { [weak self] in
             guard let self else { return false }
             return self.state == .idle && !self.answerPanel.isVisible && !self.alarms.isRinging && !self.pen.isOpen
+                && !self.shelf.isExpanded // its list is open at the notch
         }
         overview.start()
         // ManageBac and Google calendar links: read at launch and every half hour.
@@ -491,6 +493,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if Assistant.needsStrongModel(text) { task.assistant.useStrongModel() }
         if Self.wantsBackground(text) { task.background = true }
         task.assistant.ask(text, screenshot: screenshot)
+    }
+
+    /// A follow-up tapped on the card (Simpler, Example, Quiz me): the same conversation carries on,
+    /// as when you hold right ⌥ while it's open. A new conversation if that one can't.
+    private func followUpTyped(_ text: String) {
+        if openStudy(text) { return } // the card's "Quiz me" chip: on the whiteboard, like a spoken quiz
+        guard let task = focused, task.canFollowUp else { askTyped(text); return }
+        task.beginTurn(text)
+        answerPanel.beginTurn(question: text)
+        task.assistant.ask(text, screenshot: nil)
+        acknowledgeIfSlow(task)
     }
 
     /// "… in the background", "… while I do something else".
@@ -1151,25 +1164,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshResting()
     }
 
-    /// The side notch shows up once something is carrying on in the background, and then lists every
-    /// task, the one on the card too, by its subject (or the request, until there is one).
+    /// The notch band shows what Joe is doing once something carries on in the background, and its
+    /// list has every task, the one on the card too, by its subject (or the request, until there is one).
     private func refreshShelf() {
-        // Alarms and timers to come: the next time, or a timer's countdown.
-        let style = TaskShelf.alarmStyle
-        let shown = alarms.pending.filter { alarm in
-            style == "off" ? false : style == "soon" ? alarm.kind == .timer || alarm.fireAt.timeIntervalSinceNow < 3600 : true
-        }
-        let alarmItems = shown.map { alarm in
-            let seconds = Int(alarm.fireAt.timeIntervalSinceNow.rounded())
-            let label = alarm.kind == .alarm || seconds >= 3600 ? alarm.when
-                : String(format: "%d:%02d", max(0, seconds) / 60, max(0, seconds) % 60)
-            return TaskShelf.Item(id: alarm.id, question: "\(label) · \(alarm.title)", state: .alarm)
-        }
+        // Alarms stay out of the notch (Raph, Oct 2026): the hover overview's Next alarm has them.
         guard tasks.contains(where: { $0 !== focused }) else {
-            shelf.update(alarmItems)
+            shelf.update([])
             return
         }
-        shelf.update(alarmItems + tasks.map { task in
+        shelf.update(tasks.map { task in
             let state: TaskShelf.Item.State = task.approval != nil ? .needsOK
                 : task.error != nil ? .failed
                 : task.isWorking ? .working : .done

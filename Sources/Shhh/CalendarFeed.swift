@@ -15,6 +15,13 @@ enum CalendarFeed {
         var allDay = false
         var kind: Kind
         var id: String { "\(kind.rawValue) \(start.timeIntervalSince1970) \(title)" }
+
+        /// What "Start" on a deadline asks Joe: the steps, and the first one tonight.
+        var startRequest: String {
+            let due = start.formatted(.dateTime.weekday(.wide).day().month(.wide))
+            return "Help me get started on \"\(title)\"" + (detail.isEmpty ? "" : " (\(detail))")
+                + ", due \(due). Look at what it asks for (ManageBac and my notes), break it into steps with rough times, and put the first step in tonight's plan."
+        }
     }
 
     /// Where Joe saves the Google Calendar and ManageBac items.

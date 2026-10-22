@@ -6,7 +6,7 @@ import SwiftUI
 @MainActor
 final class RecordingPanel {
     /// At the notch: how far the pill sticks out on each side of it.
-    static let ear: CGFloat = 46
+    static let ear: CGFloat = 56 // room either side of the notch, so the band doesn't look squeezed
     /// Whether the current pill hangs from the notch (it then closes back into it).
     private var atNotch = false
     private let model = PillModel()
@@ -134,13 +134,12 @@ private struct PillView: View {
             let full = notchWidth + 2 * RecordingPanel.ear
             let radius: CGFloat = model.open ? 13 : 10
             ZStack {
-                UnevenRoundedRectangle(bottomLeadingRadius: radius, bottomTrailingRadius: radius, style: .continuous)
+                NotchShape(top: NotchShape.shoulder, bottom: radius)
                     .fill(Color.black)
                     .frame(width: model.open ? full : notchWidth)
+                    .padding(.bottom, model.open ? 0 : NotchShape.tuck)
                 HStack(spacing: 0) {
-                    Image(systemName: "sparkle")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.orange)
+                    JoeMark()
                         .frame(width: RecordingPanel.ear)
                     Color.clear.frame(width: notchWidth) // behind the notch
                     Group {
@@ -158,11 +157,11 @@ private struct PillView: View {
                     .frame(width: RecordingPanel.ear)
                 }
                 .opacity(model.open ? 1 : 0)
-                .animation(model.open ? .easeOut(duration: 0.2).delay(0.08) : .easeIn(duration: 0.15), value: model.open)
+                .animation(model.open ? .easeOut(duration: 0.14).delay(0.03) : .easeIn(duration: 0.08), value: model.open)
             }
             .frame(width: full)
             .frame(maxHeight: .infinity)
-            .animation(model.open ? .timingCurve(0.16, 1, 0.3, 1, duration: 0.46) : .timingCurve(0.5, 0, 0.75, 0, duration: 0.3),
+            .animation(model.open ? NotchShape.opening : NotchShape.closing,
                        value: model.open)
         } else {
             ZStack {

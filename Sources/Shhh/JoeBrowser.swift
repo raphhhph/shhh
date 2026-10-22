@@ -34,12 +34,12 @@ enum JoeBrowser {
         ("node-\(nodeVersion)-darwin-x64", "00df9c5df3e4ec6848c26b70fb47bf96492f342f4bed6b17f12d99b3a45eeecc")
         #endif
     }
-    /// npm, run by that node (npm's own launcher looks for node on PATH).
+    /// npm's script, run by `node` (npm's own launcher looks for node on PATH): Homebrew's
+    /// (in its lib folder, not the Cellar), or the one inside Joe's own Node.
     private static var npmScript: String? {
-        guard let node else { return nil }
-        let lib = URL(fileURLWithPath: node).resolvingSymlinksInPath().deletingLastPathComponent().deletingLastPathComponent()
-        let script = lib.appendingPathComponent("lib/node_modules/npm/bin/npm-cli.js").path
-        return FileManager.default.fileExists(atPath: script) ? script : nil
+        ["/opt/homebrew/lib", "/usr/local/lib", ownNode.appendingPathComponent("lib").path]
+            .map { $0 + "/node_modules/npm/bin/npm-cli.js" }
+            .first(where: FileManager.default.fileExists)
     }
     /// The server's script, with npm's .bin link resolved so node can run it directly.
     private static var script: String? {

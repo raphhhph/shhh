@@ -242,6 +242,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - Launch and quit
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AppLocation.offerMove() // run from the disk image: permissions wouldn't stick
         ModelDownloads.apply() // Hugging Face or the China mirror, before any model loads
         // Stopped while a model was downloading or loading last time: an unfinished download carries
         // on, a broken one starts over (ModelGuard decides).
@@ -656,6 +657,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if lastOwnVoice == nil, elapsed > 6 {
                 handsFree = false
                 cancelRecording() // never heard them: someone else said it, or they didn't go on
+                toast.show("That didn't sound like you, so I left it", symbol: "person.wave.2", tint: .orange)
             } else if let last = lastOwnVoice, Date().timeIntervalSince(last) > 1.8 || quiet > 1.3 {
                 handsFree = false
                 finishRecording()
@@ -668,6 +670,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !heardSpeech, elapsed > 5 {
             handsFree = false
             cancelRecording()
+            toast.show("I didn't hear anything after “Hey Joe”. Say it all in one go.", symbol: "ear", tint: .orange)
         } else if (heardSpeech && quiet > 1.3) || elapsed > 40 {
             handsFree = false
             finishRecording()
@@ -689,7 +692,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         handsFreeTake = false
         guard speechReady, AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             loadSpeechModel() // retry now if an earlier load failed
-            NSSound.beep() // the menu explains what's missing
+            NSSound.beep()
+            // Said, not only in the menu: "Hey Joe" otherwise looks like it heard and did nothing.
+            toast.show(AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
+                       ? "I can't use the microphone: turn Joe on in System Settings → Privacy → Microphone"
+                       : "\(speechStatus). Try again in a moment.", symbol: "mic.slash.fill", tint: .orange)
             return
         }
         state = .recording
@@ -1437,7 +1444,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if handsFreeTake {
                 // "Hey Joe": only the parts in their voice (nil: no voiceprint yet, keep it all).
                 if let own = await VoicePrint.shared.keepOwnVoice(samples) {
-                    guard own.count >= 16_000 / 2 else { return } // none of it was them
+                    guard own.count >= 16_000 / 2 else { // none of it was them
+                        toast.show("That didn't sound like you, so I left it", symbol: "person.wave.2", tint: .orange)
+                        return
+                    }
                     samples = own
                 }
             } else if samples.count >= 32_000 {
@@ -1454,6 +1464,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 text = try await withTimeout(40 + seconds) { try await transcriber.transcribe(heard) } // may wait for Chinese just after launch
             } catch {
                 NSSound.beep()
+                toast.show("Speech recognition got stuck. Try again.", symbol: "exclamationmark.triangle.fill", tint: .orange)
                 if error is WatchdogError, transcriber === self.transcriber { reloadSpeechModel() }
                 return
             }
@@ -1472,7 +1483,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             if handsFreeTake { text = EndListener.withoutEndPhrase(text) } // "…, end prompt"
             if asking {
-                guard !text.isEmpty else { return }
+                guard !text.isEmpty else {
+                    toast.show("I didn't catch any words. Try again a bit closer to the mic.", symbol: "ear", tint: .orange)
+                    return
+                }
                 lastTranscript = text
                 onboarding.heard(text) // the tour's "try it" step
                 guard var task = focused else { return }

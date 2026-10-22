@@ -253,6 +253,10 @@ private struct StepFrame<Content: View>: View {
             HStack {
                 Button("Back") { model.back() }.buttonStyle(.plain).foregroundStyle(Tint.soft)
                 Spacer()
+                // Never a dead end: whatever isn't done yet can be finished later from Settings.
+                if !canContinue {
+                    Button("Skip for now") { model.next() }.buttonStyle(.plain).foregroundStyle(Tint.soft).padding(.trailing, 14)
+                }
                 Primary(title: continueTitle, enabled: canContinue) { model.next() }
             }
         }
@@ -1111,22 +1115,42 @@ private struct MorningStep: View {
     }
 }
 
-/// Each permission ticks itself off the moment it's granted (checked every half second).
+/// Each permission ticks itself off the moment it's granted (checked every half second). Asked for
+/// here, all at once, so a macOS prompt never interrupts later: an alarm ringing at 7:00 used to be
+/// the first thing to ask for control of System Events.
 private struct PermissionsStep: View {
     @ObservedObject var model: OnboardingModel
+    @State private var automation = Automation.status
+    /// When they pressed Allow for Accessibility: if it's still off a few seconds later, the fixes show.
+    @State private var askedAccess: Date?
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.5)) { _ in
-            let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+            let mic = AVCaptureDevice.authorizationStatus(for: .audio)
             let access = AXIsProcessTrusted()
-            StepFrame(model: model, title: "Two quick permissions", subtitle: "So I can hear you and type for you. Nothing is recorded unless you hold a key.",
-                      canContinue: mic && access) {
-                VStack(spacing: 14) {
-                    row("mic.fill", "Microphone", "To hear you while you hold a key", mic) {
-                        AVCaptureDevice.requestAccess(for: .audio) { _ in }
+            let reminders = EKEventStore.authorizationStatus(for: .reminder)
+            StepFrame(model: model, title: "A few permissions", subtitle: "So I can hear you, type for you and keep your alarms. Nothing is recorded unless you hold a key.",
+                      canContinue: mic == .authorized && access) {
+                VStack(spacing: 10) {
+                    row("mic.fill", "Microphone", "To hear you while you hold a key", mic == .authorized) {
+                        // Once refused, macOS won't ask again: only System Settings can turn it on.
+                        if mic == .denied { openSettings("Privacy_Microphone") } else { AVCaptureDevice.requestAccess(for: .audio) { _ in } }
                     }
-                    row("hand.raised.fill", "Accessibility", "To type what you say, and press keys for you", access) {
-                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+                    row("hand.raised.fill", "Accessibility", access ? "For the right ⌘ and ⌥ keys, and typing what you say"
+                            : "Turn Joe on in the list that opens. It's what makes the right ⌘ and ⌥ keys work.", access) {
+                        askedAccess = Date()
+                        let prompt = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+                        _ = AXIsProcessTrustedWithOptions(prompt) // puts Joe in the list
+                        openSettings("Privacy_Accessibility")
+                    }
+                    if !access, let askedAccess, Date().timeIntervalSince(askedAccess) > 5 { accessibilityFix }
+                    row("gearshape.2.fill", "Control other apps", "Pause music when an alarm rings, make slides in Keynote", automation == .granted) {
+                        if automation == .denied { openSettings("Privacy_Automation") } else {
+                            Task.detached { let result = Automation.ask(); await MainActor.run { automation = result } }
+                        }
+                    }
+                    row("checklist", "Reminders (optional)", "Your alarms on your iPhone, and asking Joe from it", reminders == .fullAccess) {
+                        if reminders == .notDetermined { ReminderMirror.store.requestFullAccessToReminders { _, _ in } } else { openSettings("Privacy_Reminders") }
                     }
                     row("rectangle.dashed", "Screen Recording (optional)", "So I can see what you mean by “this”", CGPreflightScreenCaptureAccess()) {
                         CGRequestScreenCaptureAccess()
@@ -1136,29 +1160,80 @@ private struct PermissionsStep: View {
         }
     }
 
+    private func openSettings(_ pane: String) {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")!)
+    }
+
+    /// Joe switched on in System Settings but still not ticked here: usually an entry from another
+    /// copy of Joe, or macOS only noticing after a relaunch. Setup reopens on this step.
+    private var accessibilityFix: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "questionmark.circle").font(.system(size: 15)).foregroundStyle(.orange)
+            Text("Switched on but no tick? Reset clears the old entry: then switch Joe on again. Or relaunch Joe.")
+                .font(.system(size: 12.5)).foregroundStyle(Tint.soft).fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            Button("Reset") {
+                AppLocation.resetAccessibility()
+                askedAccess = Date()
+                openSettings("Privacy_Accessibility")
+            }
+            Button("Relaunch Joe") { AppLocation.relaunch() }
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 13, weight: .semibold))
+        .padding(.horizontal, 14).padding(.vertical, 8)
+        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
     private func row(_ symbol: String, _ title: String, _ detail: String, _ granted: Bool, _ ask: @escaping () -> Void) -> some View {
-        HStack(spacing: 16) {
-            Image(systemName: symbol).font(.system(size: 20)).foregroundStyle(Tint.accent)
-                .frame(width: 44, height: 44).background(Tint.accent.opacity(0.14), in: Circle())
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.system(size: 16, weight: .semibold))
-                Text(detail).font(.system(size: 13)).foregroundStyle(Tint.soft)
+        HStack(spacing: 14) {
+            Image(systemName: symbol).font(.system(size: 17)).foregroundStyle(Tint.accent)
+                .frame(width: 38, height: 38).background(Tint.accent.opacity(0.14), in: Circle())
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 15, weight: .semibold))
+                Text(detail).font(.system(size: 12.5)).foregroundStyle(Tint.soft).lineLimit(2)
             }
             Spacer()
             if granted {
-                Image(systemName: "checkmark.circle.fill").font(.system(size: 26)).foregroundStyle(.green)
+                Image(systemName: "checkmark.circle.fill").font(.system(size: 24)).foregroundStyle(.green)
                     .transition(.scale.combined(with: .opacity))
             } else {
                 Button("Allow", action: ask)
                     .buttonStyle(.plain)
                     .font(.system(size: 13.5, weight: .semibold))
-                    .padding(.horizontal, 18).frame(height: 34)
+                    .padding(.horizontal, 18).frame(height: 32)
                     .background(Color.white.opacity(0.12), in: Capsule())
             }
         }
-        .padding(16)
-        .background(Tint.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.horizontal, 14).padding(.vertical, 9)
+        .background(Tint.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .animation(.spring(response: 0.35, dampingFraction: 0.6), value: granted)
+    }
+}
+
+/// Permission to send Apple events to System Events (Joe uses it to see what's running, pause
+/// Spotify for an alarm and click Keynote's dialogs). macOS asks the first time one is sent.
+private enum Automation {
+    enum Status { case granted, denied, unknown }
+
+    static var status: Status { check(ask: false) }
+
+    /// Starts System Events if needed and sends it one harmless event, which brings up macOS's
+    /// prompt the first time. Blocks while the prompt is up: call it off the main thread.
+    static func ask() -> Status {
+        var error: NSDictionary?
+        _ = NSAppleScript(source: "tell application \"System Events\" to count processes")?.executeAndReturnError(&error)
+        return check(ask: false)
+    }
+
+    private static func check(ask: Bool) -> Status {
+        let target = NSAppleEventDescriptor(bundleIdentifier: "com.apple.systemevents")
+        guard let desc = target.aeDesc else { return .unknown }
+        switch AEDeterminePermissionToAutomateTarget(desc, AEEventClass(typeWildCard), AEEventID(typeWildCard), ask) {
+        case noErr: return .granted
+        case -1743: return .denied  // errAEEventNotPermitted
+        default: return .unknown // not asked yet, or System Events isn't running
+        }
     }
 }
 
@@ -1221,6 +1296,7 @@ private struct ClaudeStep: View {
                     .padding(.horizontal, 18).padding(.vertical, 14)
                     .background(Tint.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 }
+                if claude.isReady, !useAPIKey { BrowserCard() }
                 if claude.needsCode {
                     HStack(spacing: 10) {
                         TextField("Paste the code from the Claude page", text: $code)
@@ -1264,6 +1340,61 @@ private struct ClaudeStep: View {
         case .failed(let message): message
         case .checking: ""
         }
+    }
+}
+
+/// Joe's own Chrome profile, which Claude drives in the background for ManageBac and Google pages.
+/// Set up here so it isn't a Terminal command later: Node and the browser tools come down into
+/// Application Support, then one sign-in in that profile. Optional, so it never blocks Continue.
+private struct BrowserCard: View {
+    @State private var ready = JoeBrowser.isReady
+    @State private var working = false
+    @State private var signedIn = false
+    @State private var note = ""
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "globe").font(.system(size: 18)).foregroundStyle(Tint.accent).frame(width: 32)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("My own browser (optional)").font(.system(size: 14.5, weight: .semibold))
+                Text(detail).font(.system(size: 12.5)).foregroundStyle(Tint.soft).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            if working {
+                ProgressView().controlSize(.small)
+            } else if !JoeBrowser.hasChrome {
+                pill("Get Chrome") { NSWorkspace.shared.open(URL(string: "https://www.google.com/chrome/")!) }
+            } else if !ready {
+                pill("Set up") { run { note = await Task.detached { await JoeBrowser.prepare() }.value; ready = JoeBrowser.isReady } }
+            } else if !signedIn {
+                pill("Sign in") { run { note = await Task.detached { JoeBrowser.openSignIn() }.value; signedIn = true } }
+            } else {
+                Label("Ready", systemImage: "checkmark.circle.fill").font(.system(size: 13)).foregroundStyle(.green)
+            }
+        }
+        .padding(.horizontal, 18).padding(.vertical, 14)
+        .background(Tint.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var detail: String {
+        if working { return note.isEmpty ? "Setting up, about a minute…" : note }
+        if !JoeBrowser.hasChrome { return "I use a Chrome window of my own to open ManageBac and Google pages for you. Install Chrome, then come back here." }
+        if !ready { return note.isEmpty ? "I use a Chrome window of my own to open ManageBac and Google pages for you. One click, no Terminal." : note }
+        if !signedIn { return "Sign in to Google and ManageBac in the window I open, then quit it with ⌘Q so I can use it." }
+        return "Signed in. Quit that Chrome window with ⌘Q if it's still open."
+    }
+
+    private func run(_ work: @escaping @MainActor () async -> Void) {
+        working = true; note = ""
+        Task { @MainActor in await work(); working = false }
+    }
+
+    private func pill(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .font(.system(size: 13.5, weight: .semibold))
+            .padding(.horizontal, 18).frame(height: 34)
+            .background(Color.white.opacity(0.12), in: Capsule())
     }
 }
 

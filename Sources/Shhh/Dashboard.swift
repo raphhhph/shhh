@@ -1954,7 +1954,7 @@ private struct StudyPage: View {
     }
 
     var body: some View {
-        PageTitle(title: "Study", subtitle: "Joe quizzes you on the IB syllabus, from your own notes and textbooks, and marks you like an examiner.")
+        PageTitle(title: "Study", subtitle: "Joe quizzes you on the IB syllabus on the whiteboard and marks you like an examiner.")
         HStack(spacing: 10) {
             Image(systemName: "graduationcap.fill").font(.system(size: 15)).foregroundStyle(Look.accent)
             TextField("Quiz me on… (a subject, a topic, or “my weakest topic”)", text: $request)
@@ -1962,6 +1962,10 @@ private struct StudyPage: View {
                 .font(.system(size: 14))
                 .onSubmit(start)
             Button("Start", action: start).buttonStyle(PillButton(prominent: !request.isEmpty)).disabled(request.isEmpty)
+            // A blank board to work on with Joe: draw, ask, or have him draw a diagram.
+            Button { model.actions.ask("Open the whiteboard") } label: { Label("Whiteboard", systemImage: "pencil.and.scribble") }
+                .buttonStyle(PillButton())
+                .help("Answer by typing, or hold right ⌥ and say it")
         }
         .padding(.horizontal, 16)
         .frame(height: 50)
@@ -3463,6 +3467,7 @@ private struct SettingsPage: View {
         ("Download models from", "china mirror hugging face download vpn", "advanced"),
         ("Memory vault", "vault obsidian folder memory", "advanced"),
         ("Instructions", "instructions standing notes rules", "advanced"),
+        ("Joe runs on", "chatgpt claude engine openai", "advanced"),
     ]
 
     @State private var query = ""

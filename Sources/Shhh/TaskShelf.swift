@@ -119,7 +119,7 @@ final class TaskShelf {
             if model.expanded {
                 // Back into the notch, then the window shrinks to the band.
                 model.expanded = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) { [weak self] in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) { [weak self] in
                     MainActor.assumeIsolated { if self?.model.expanded == false { self?.place() } }
                 }
             } else {
@@ -294,7 +294,7 @@ private struct ShelfView: View {
                     .opacity(open ? 1 : 0)
                     .scaleEffect(open ? 1 : 0.94, anchor: .top)
                     .blur(radius: open ? 0 : 6)
-                    .animation(open ? .easeOut(duration: 0.24).delay(0.12) : .easeIn(duration: 0.1), value: open)
+                    .animation(open ? .easeOut(duration: 0.16).delay(0.04) : .easeIn(duration: 0.08), value: open)
             }
             .frame(width: space.size.width, height: space.size.height, alignment: .top)
             .background(alignment: .top) {

@@ -156,7 +156,7 @@ private struct PillView: View {
                     .frame(width: RecordingPanel.ear)
                 }
                 .opacity(model.open ? 1 : 0)
-                .animation(model.open ? .easeOut(duration: 0.2).delay(0.08) : .easeIn(duration: 0.15), value: model.open)
+                .animation(model.open ? .easeOut(duration: 0.14).delay(0.03) : .easeIn(duration: 0.08), value: model.open)
             }
             .frame(width: full)
             .frame(maxHeight: .infinity)

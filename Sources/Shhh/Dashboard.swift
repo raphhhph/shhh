@@ -2221,37 +2221,51 @@ private struct MYPCalculator: View {
         })
     }
 
-    private func total(_ subject: String, count: Int) -> Int { (0..<count).reduce(0) { $0 + level(subject, $1).wrappedValue } }
-
     var body: some View {
         let project = Profile.mypYear == 5 ? ["Personal Project"] : []
         Card(title: "Predicted MYP grades", symbol: "function") {
             ForEach(subjects + project, id: \.self) { subject in
                 let isProject = subject == "Personal Project"
-                let names = isProject ? MYP.personalProject : (MYP.group(for: subject)?.criteria ?? ["A", "B", "C", "D"])
-                let sum = total(subject, count: names.count)
-                // The Personal Project is out of 24; scale it to the 32-point boundaries.
-                let grade = MYP.grade(total: isProject ? Int((Double(sum) * 32 / 24).rounded()) : sum)
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        RoundedRectangle(cornerRadius: 2).fill(SubjectGroup.of(subject)?.color ?? Look.accent).frame(width: 4, height: 16)
-                        Text(subject).font(.system(size: 13, weight: .medium))
-                        Spacer()
-                        Text("\(sum)/\(names.count * 8) → \(grade)").font(.system(size: 13, weight: .semibold).monospacedDigit())
-                            .foregroundStyle(grade >= 6 ? Color.green : grade >= 4 ? Color.primary : Color.orange)
-                    }
-                    ForEach(names.indices, id: \.self) { index in
-                        HStack {
-                            Text("\(["A", "B", "C", "D"][index]) \(names[index])").font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
-                            Spacer()
-                            Picker("", selection: level(subject, index)) { ForEach(0...8, id: \.self) { Text("\($0)").tag($0) } }
-                                .pickerStyle(.segmented).labelsHidden().frame(width: 260)
-                        }
-                    }
-                }
+                MYPSubjectRow(subject: subject, isProject: isProject,
+                              names: isProject ? MYP.personalProject : (MYP.group(for: subject)?.criteria ?? ["A", "B", "C", "D"]),
+                              level: { level(subject, $0) })
             }
             Text("Grade from the total of the criteria: 1–5 → 1, 6–9 → 2, 10–14 → 3, 15–18 → 4, 19–23 → 5, 24–27 → 6, 28–32 → 7. Schools and sessions can adjust boundaries.")
                 .font(.system(size: 11.5)).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// One subject in the MYP calculator: its criteria pickers and the grade they make.
+private struct MYPSubjectRow: View {
+    let subject: String
+    let isProject: Bool
+    let names: [String]
+    let level: (Int) -> Binding<Int>
+
+    private var sum: Int { names.indices.reduce(0) { $0 + level($1).wrappedValue } }
+    // The Personal Project is out of 24; scale it to the 32-point boundaries.
+    private var grade: Int { MYP.grade(total: isProject ? Int((Double(sum) * 32 / 24).rounded()) : sum) }
+    private var gradeColor: Color { grade >= 6 ? .green : grade >= 4 ? .primary : .orange }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                RoundedRectangle(cornerRadius: 2).fill(SubjectGroup.of(subject)?.color ?? Look.accent).frame(width: 4, height: 16)
+                Text(subject).font(.system(size: 13, weight: .medium))
+                Spacer()
+                Text("\(sum)/\(names.count * 8) → \(grade)").font(.system(size: 13, weight: .semibold).monospacedDigit()).foregroundStyle(gradeColor)
+            }
+            ForEach(names.indices, id: \.self) { index in criterion(index) }
+        }
+    }
+
+    private func criterion(_ index: Int) -> some View {
+        HStack {
+            Text(["A", "B", "C", "D"][index] + " " + names[index]).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+            Spacer()
+            Picker("", selection: level(index)) { ForEach(0...8, id: \.self) { Text(String($0)).tag($0) } }
+                .pickerStyle(.segmented).labelsHidden().frame(width: 260)
         }
     }
 }

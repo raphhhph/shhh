@@ -1920,6 +1920,7 @@ private struct StudyPage: View {
     @Environment(\.narrow) private var narrow
     @State private var request = ""
     @State private var results: [StudyBuddy.Result] = []
+    @State private var pastPapersOpen = false
 
     /// Their subjects from Settings, and TOK, which everyone takes.
     private var subjects: [String] {
@@ -1929,7 +1930,7 @@ private struct StudyPage: View {
     }
 
     var body: some View {
-        PageTitle(title: "Study", subtitle: "Joe quizzes you on the IB syllabus, from your own notes and textbooks, and marks you like an examiner.")
+        PageTitle(title: "Study", subtitle: "Joe quizzes you on the IB syllabus on the whiteboard and marks you like an examiner.")
         HStack(spacing: 10) {
             Image(systemName: "graduationcap.fill").font(.system(size: 15)).foregroundStyle(Look.accent)
             TextField("Quiz me on… (a subject, a topic, or “my weakest topic”)", text: $request)
@@ -1937,17 +1938,15 @@ private struct StudyPage: View {
                 .font(.system(size: 14))
                 .onSubmit(start)
             Button("Start", action: start).buttonStyle(PillButton(prominent: !request.isEmpty)).disabled(request.isEmpty)
+            // A blank board to work on with Joe: draw, ask, or have him draw a diagram.
+            Button { model.actions.ask("Open the whiteboard") } label: { Label("Whiteboard", systemImage: "pencil.and.scribble") }
+                .buttonStyle(PillButton())
+                .help("Answer by typing, or hold right ⌥ and say it")
         }
         .padding(.horizontal, 16)
         .frame(height: 50)
         .background(Look.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Look.line))
-        Text("Questions open on the whiteboard: type your answer, or hold right ⌥ and say it. Joe marks it like an examiner and gives a model answer.")
-            .font(.system(size: 12)).foregroundStyle(.secondary).padding(.leading, 4)
-        Card(title: "Real past papers", symbol: "doc.text.magnifyingglass") {
-            Text("IB papers are sold by the IB, so Joe can't ship them. Put the ones you have (from school, IB Questionbank or a teacher) in your notes under _files/School/<subject>/Past papers, with their markschemes, and Joe asks those real questions and marks with the real markscheme. Otherwise he writes questions in the exact style of each paper.")
-                .font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        }
 
         let columns = narrow ? 1 : 2
         let rows = stride(from: 0, to: subjects.count, by: columns).map { Array(subjects[$0..<min($0 + columns, subjects.count)]) }
@@ -1959,8 +1958,6 @@ private struct StudyPage: View {
                 }
             }
         }
-
-        if !Profile.programme.uppercased().contains("MYP") { PointsCalculator(subjects: subjects.filter { StudyBuddy.pack(for: $0) != "Theory of Knowledge" }) }
 
         Card(title: "Recent answers", symbol: "checkmark.seal") {
             if results.isEmpty {
@@ -1983,6 +1980,19 @@ private struct StudyPage: View {
             }
         }
         .onAppear { results = StudyBuddy.results() }
+
+        if !Profile.programme.uppercased().contains("MYP") { PointsCalculator(subjects: subjects.filter { StudyBuddy.pack(for: $0) != "Theory of Knowledge" }) }
+
+        // How real papers get in: rarely needed, so folded away.
+        DisclosureGroup(isExpanded: $pastPapersOpen) {
+            Text("IB papers are sold by the IB, so Joe can't ship them. Put the ones you have (from school, IB Questionbank or a teacher) in your notes under _files/School/<subject>/Past papers, with their markschemes, and Joe asks those real questions and marks with the real markscheme. Otherwise he writes questions in the exact style of each paper.")
+                .font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 6)
+        } label: {
+            Label("Using real past papers", systemImage: "doc.text.magnifyingglass").font(.system(size: 12.5, weight: .medium))
+        }
+        .tint(.secondary)
+        .padding(.horizontal, 4)
     }
 
     private func card(_ subject: String) -> some View {

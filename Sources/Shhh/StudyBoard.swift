@@ -998,8 +998,8 @@ struct SketchPad: View {
 // MARK: - Preview
 
 extension StudyBoard {
-    /// `Joe --board-preview <file.png> [sketch]`: the whiteboard with a sample question and mark.
-    static func preview(to file: URL, sketch: Bool, deck: Bool = false, done: @escaping () -> Void) {
+    /// `Joe --board-preview <file.png> [sketch|deck|diagram]`: the whiteboard with a sample question and mark (diagram: Joe explaining with a drawn diagram).
+    static func preview(to file: URL, sketch: Bool, deck: Bool = false, diagram: Bool = false, done: @escaping () -> Void) {
         DiagramClock.instant = true
         let board = StudyBoard()
         board.model.preview(StudyBoardModel.parse("""
@@ -1025,6 +1025,26 @@ extension StudyBoard {
             **Tax incidence** :: how the burden of a tax is split between consumers and producers
             </cards>
             """), subject: "Economics HL", sketching: sketch)
+        // `diagram`: explain mode, with Joe's diagram at the top where the snapshot sees it (in the quiz
+        // sample it's below the window's height).
+        if diagram {
+            board.model.preview(StudyBoardModel.parse("""
+                Here's a specific tax: supply shifts up by the tax.
+                <diagram title="Specific tax">
+                axes "Quantity" "Price"
+                line D 10,90 90,15
+                line S 10,15 90,80 blue
+                line "S + tax" 10,40 70,89 red dashed
+                arrow 64,61 64,80 red
+                point E1 53,50 x="Q1" y="P1"
+                point E2 38,63 x="Q2" y="Pc"
+                point "" 38,38 y="Pp"
+                area 0,63 38,63 38,38 0,38 orange "Tax revenue"
+                text 78,30 "Welfare loss"
+                </diagram>
+                <lesson title="2.7 Indirect taxes">A **specific tax** is a fixed amount per unit. Supply shifts up by the tax: consumers pay Pc, producers keep Pp.</lesson>
+                """), subject: "Economics HL", sketching: false, mode: .explain)
+        }
         if deck {
             board.model.previewDeck([Flashcards.Card(term: "Specific tax", definition: "A fixed amount of tax per unit of a good, shifting supply up by the amount of the tax."),
                                      Flashcards.Card(term: "Tax incidence", definition: "How the burden of a tax is split between consumers and producers.")])
@@ -1058,7 +1078,8 @@ extension StudyBoard {
 }
 
 extension StudyBoardModel {
-    func preview(_ items: [Item], subject: String, sketching: Bool) {
+    func preview(_ items: [Item], subject: String, sketching: Bool, mode: Mode = .quiz) {
+        self.mode = mode
         self.subject = subject
         self.items = items
     }

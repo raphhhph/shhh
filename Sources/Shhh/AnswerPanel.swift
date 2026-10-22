@@ -884,10 +884,10 @@ private struct Island<Band: View, PeekLine: View, Content: View>: View {
     @ViewBuilder let content: Content
     @State private var shown: CGFloat = 0
 
-    static var opening: Animation { .timingCurve(0.16, 1, 0.3, 1, duration: 0.46) }
-    static var closing: Animation { .timingCurve(0.5, 0, 0.75, 0, duration: 0.22) }
-    /// Following the reply as it streams: the same curve, quicker.
-    static var growing: Animation { .timingCurve(0.16, 1, 0.3, 1, duration: 0.32) }
+    static var opening: Animation { NotchShape.opening }
+    static var closing: Animation { NotchShape.closing }
+    /// Following the reply as it streams: the same spring, settling sooner.
+    static var growing: Animation { NotchShape.growing }
 
     var body: some View {
         GeometryReader { space in
@@ -898,15 +898,17 @@ private struct Island<Band: View, PeekLine: View, Content: View>: View {
                 : notch.width + 2 * RecordingPanel.ear
             let peeking = open && peek && !expanded
             let radius: CGFloat = !open ? min(10, notch.height / 3) : expanded ? 30 : peek ? 18 : 13
-            let shape = UnevenRoundedRectangle(bottomLeadingRadius: radius, bottomTrailingRadius: radius, style: .continuous)
+            // Shoulders curving into the screen's top edge, like the iPhone's notch.
+            let shape = NotchShape(top: NotchShape.shoulder, bottom: radius)
             let shapeHeight = max(shown, notch.height)
             let solid = min(1, (notch.height + 2) / max(shapeHeight, 1)) // where the notch ends
             content
                 .frame(width: AnswerPanel.width, height: space.size.height, alignment: .top)
                 .frame(width: space.size.width, height: space.size.height, alignment: .top)
                 .opacity(dropped ? 1 : 0)
-                .scaleEffect(dropped ? 1 : 0.97, anchor: .top)
-                .animation(listening ? nil : dropped ? .easeOut(duration: 0.2).delay(0.08) : .easeIn(duration: 0.1), value: dropped)
+                .scaleEffect(dropped ? 1 : 0.94, anchor: .top)
+                .blur(radius: dropped ? 0 : 6)
+                .animation(listening ? nil : dropped ? .easeOut(duration: 0.24).delay(0.12) : .easeIn(duration: 0.1), value: dropped)
                 .background(alignment: .top) {
                     ZStack {
                         Rectangle().fill(.ultraThinMaterial)

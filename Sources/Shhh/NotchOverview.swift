@@ -107,7 +107,8 @@ final class NotchOverview {
         panel.isMovable = false
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        panel.contentView = NSHostingView(rootView: OverviewView(model: model, notchHeight: notch.height, music: { [weak self] command in
+        model.isOpen = false
+        panel.contentView = NSHostingView(rootView: OverviewView(model: model, notchHeight: notch.height, notchWidth: notch.width, music: { [weak self] command in
             self?.data.music(command)
         }, ask: { [weak self] request in
             // The answer card takes over the notch.
@@ -129,17 +130,27 @@ final class NotchOverview {
         panel.orderFrontRegardless()
         NotchSpace.pin(panel)
         self.panel = panel
+        DispatchQueue.main.async { [weak self] in self?.model.isOpen = true } // grows out of the notch
     }
 
+    /// Shrinks back into the notch, then goes.
     func hide() {
-        panel?.orderOut(nil)
-        panel = nil
+        guard let panel else { return }
+        self.panel = nil
+        model.isOpen = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            // Unless it was opened again meanwhile (a new panel then shows the model).
+            if self?.panel !== panel { panel.orderOut(nil) }
+        }
     }
 }
 
 @MainActor
 private final class OverviewModel: ObservableObject {
     @Published var widgets: [NotchOverview.Widget] = []
+    /// Out of the notch. Flipped after the panel is up, so it grows down from the notch, and back
+    /// before the panel goes, so it shrinks into it.
+    @Published var isOpen = false
     @Published var nextClass: Daybook.Slot?
     /// The soonest deadline for that class's subject, so the bag gets packed with it in mind.
     @Published var classDue: CalendarFeed.Item?
@@ -176,6 +187,8 @@ private final class OverviewModel: ObservableObject {
 private struct OverviewView: View {
     @ObservedObject var model: OverviewModel
     let notchHeight: CGFloat
+    /// The hardware notch's width: where the island starts from and goes back to.
+    var notchWidth: CGFloat = 200
     var music: (Spotify.Command) -> Void
     var ask: (String) -> Void = { _ in }
     /// Starts a focus timer of so many minutes.
@@ -193,18 +206,31 @@ private struct OverviewView: View {
     ]
 
     var body: some View {
-        VStack(spacing: 0) {
-            Color.clear.frame(height: notchHeight) // the notch itself
-            HStack(alignment: .top, spacing: 10) {
-                ForEach(model.widgets) { widget in tile(widget) }
+        GeometryReader { space in
+            let open = model.isOpen
+            let shape = NotchShape(top: NotchShape.shoulder, bottom: open ? 26 : min(10, notchHeight / 3))
+            let width = open ? space.size.width : notchWidth + 2 * NotchShape.shoulder
+            let height = open ? space.size.height : notchHeight
+            VStack(spacing: 0) {
+                Color.clear.frame(height: notchHeight) // the notch itself
+                HStack(alignment: .top, spacing: 10) {
+                    ForEach(model.widgets) { widget in tile(widget) }
+                }
+                .padding(.horizontal, 14 + NotchShape.shoulder)
+                .padding(.top, 6)
+                .padding(.bottom, 14)
+                Spacer(minLength: 0)
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 6)
-            .padding(.bottom, 14)
-            Spacer(minLength: 0)
+            .frame(width: space.size.width, height: space.size.height, alignment: .top)
+            // The tiles come in just behind the shape, and leave first.
+            .opacity(open ? 1 : 0)
+            .scaleEffect(open ? 1 : 0.9, anchor: .top)
+            .blur(radius: open ? 0 : 8)
+            .animation(open ? .easeOut(duration: 0.28).delay(0.1) : .easeIn(duration: 0.12), value: open)
+            .background(alignment: .top) { shape.fill(Color.black).frame(width: width, height: height) }
+            .mask(alignment: .top) { shape.frame(width: width, height: height) }
+            .animation(open ? NotchShape.opening : NotchShape.closing, value: open)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black, in: UnevenRoundedRectangle(bottomLeadingRadius: 24, bottomTrailingRadius: 24, style: .continuous))
         .environment(\.colorScheme, .dark)
     }
 
@@ -345,7 +371,8 @@ extension NotchOverview {
         data.reload()
         model.fill(from: data, tasks: ["Consolidating Econ notes"])
         model.widgets = [.clock, .nextClass, .dueSoon, .ask, .focus] // a full row, as wide as on screen
-        let host = NSHostingView(rootView: OverviewView(model: model, notchHeight: 32, music: { _ in }))
+        model.isOpen = true
+        let host = NSHostingView(rootView: OverviewView(model: model, notchHeight: 32, notchWidth: 200, music: { _ in }))
         let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 780, height: 190), styleMask: [.borderless], backing: .buffered, defer: false)
         window.backgroundColor = .gray
         window.contentView = host

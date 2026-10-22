@@ -12,6 +12,7 @@ Everything Joe draws over other apps: the resting notch band, the recording pill
 - `RecordingPanel.swift` (pill), `LiveCaption.swift`, `TaskShelf.swift` (background tasks capsule), `Toast.swift`, `ScreenPen.swift` (draw over the screen; "Ask Joe about this" sends a screenshot), `ScreenPointer.swift` (point tags on screen from Claude's replies).
 
 ## Decisions
+- One look and one motion for everything hung from the notch (resting band, listening pill, answer island, greeting, overview): `NotchShape` (rounded bottom, plus small concave shoulders where it meets the screen's top edge, like the iPhone) and the `NotchShape.opening` / `.closing` / `.growing` springs. Contents fade, scale and unblur in just after the shape opens and go first when it closes. The overview grows out of the notch (`OverviewModel.isOpen`) and shrinks back before its panel goes.
 - Panels are recreated each time (a reused window could stay hidden behind full-screen apps) and pinned with `NotchSpace`.
 - Two monitors: the alarm card measures its content (`fittingSize` before `sizingOptions = []`), or it grew onto the monitor above.
 - The overview never opens while recording, with the answer card up, an alarm ringing, or the pen open.

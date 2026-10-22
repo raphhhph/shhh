@@ -24,6 +24,12 @@ if [ -n "$IDENTITY" ]; then
   codesign --force --timestamp --options runtime --sign "$IDENTITY" "$APP/Contents/Frameworks/llama.framework"
   codesign --force --timestamp --options runtime --entitlements Resources/Joe.entitlements --sign "$IDENTITY" "$APP"
   codesign --verify --deep --strict "$APP"
+elif security find-certificate -c "Shhh Local Signing" >/dev/null 2>&1; then
+  # No Developer ID: the local certificate instead of ad-hoc, so the Accessibility switch a friend
+  # turns on still counts after they install a newer test build (ad-hoc changes with every build).
+  codesign --force --sign "Shhh Local Signing" "$APP/Contents/Frameworks/llama.framework"
+  codesign --force --sign "Shhh Local Signing" "$APP"
+  codesign --verify --deep --strict "$APP"
 fi
 
 # The disk image: a window with Joe, an arrow onto Applications and a first-open guide.

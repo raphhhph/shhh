@@ -95,7 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     /// While a spoken request works (Chrome, Gmail, a routine), Joe says what he's doing as he goes
-    /// ("Opening mail.google.com.", "Writing a draft."), so it never feels like he's gone quiet:
+    /// ("Opening Gmail.", "Writing a draft.", a routine's next step), so it never feels like he's gone quiet:
     /// a new step at most every 5 s, never the same line twice, up to 6 a request, and only between
     /// sentences of the reply, never over them.
     private func narrate(_ status: String, for task: AssistantTask) {
@@ -854,7 +854,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             task.status = status
             if let status { task.addStep(status) }
             if let status { narrate(status, for: task) }
-        case .plan(let plan): task.plan = plan
+        case .plan(let plan):
+            // A routine's plan: the step now under way is the best line to say ("Checking ManageBac").
+            if let step = plan.first(where: { $0.state == .inProgress }), !task.plan.contains(step) { narrate(step.text, for: task) }
+            task.plan = plan
         case .answer(let text): task.reply = text
         case .approval(let approval): task.approval = approval
         case .didAct: break

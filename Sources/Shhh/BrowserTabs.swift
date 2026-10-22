@@ -48,62 +48,89 @@ enum BrowserTabs {
 
     private struct Tab { let browser: String; let window: Int; let index: Int; let title: String; let url: String }
 
-    /// Every tab of every running Chromium browser.
-    private static func tabs() -> [Tab] {
+    /// Every tab of every running Chromium browser, and the browsers that refused to answer.
+    /// Inside a browser's `tell`, the word `tab` means its tab class, not the tab character, so
+    /// the separator is set before it. Titles and addresses come a window at a time (one Apple
+    /// event each instead of one per tab).
+    private static func tabs() -> (tabs: [Tab], failures: [String]) {
         var all: [Tab] = []
+        var failures: [String] = []
         for browser in chromium where !NSRunningApplication.runningApplications(withBundleIdentifier: browser.id).isEmpty {
             let source = """
+                set sep to character id 9
                 set out to ""
                 tell application "\(browser.name)"
                     repeat with w from 1 to count of windows
-                        repeat with t from 1 to count of tabs of window w
-                            set out to out & w & tab & t & tab & (title of tab t of window w) & tab & (URL of tab t of window w) & linefeed
+                        set titles to title of every tab of window w
+                        set links to URL of every tab of window w
+                        repeat with t from 1 to count of titles
+                            set out to out & w & sep & t & sep & (item t of titles) & sep & (item t of links) & linefeed
                         end repeat
                     end repeat
                 end tell
                 return out
                 """
-            for line in (script(source) ?? "").split(separator: "\n") {
-                let parts = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
-                guard parts.count == 4, let w = Int(parts[0]), let t = Int(parts[1]) else { continue }
-                all.append(Tab(browser: browser.name, window: w, index: t, title: parts[2], url: parts[3]))
+            switch evaluate(source) {
+            case .success(let text):
+                for line in text.split(separator: "\n") {
+                    let parts = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+                    guard parts.count == 4, let w = Int(parts[0]), let t = Int(parts[1]) else { continue }
+                    all.append(Tab(browser: browser.name, window: w, index: t, title: parts[2], url: parts[3]))
+                }
+            case .failure(let error):
+                failures.append(error.code == -1743
+                    ? "Joe isn't allowed to read \(browser.name): turn on \(browser.name) under Joe in System Settings > Privacy & Security > Automation."
+                    : "\(browser.name) didn't answer (\(error.message)).")
             }
         }
-        return all
+        return (all, failures)
     }
 
     private static func list() -> String {
-        let all = tabs()
-        guard !all.isEmpty else { return "No open tabs in Vivaldi, Chrome, Brave, Edge or Arc (Safari isn't read)." }
-        return all.prefix(80).map { "\($0.browser) · \($0.title) · \($0.url)" }.joined(separator: "\n")
+        let (all, failures) = tabs()
+        guard !all.isEmpty else {
+            return failures.isEmpty ? "No open tabs in Vivaldi, Chrome, Brave, Edge or Arc (Safari isn't read)." : failures.joined(separator: "\n")
+        }
+        return (all.prefix(80).map { "\($0.browser) · \($0.title) · \($0.url)" } + failures).joined(separator: "\n")
     }
 
     /// Tabs whose title or address has every word.
-    private static func matching(_ words: String) -> [Tab] {
+    private static func matching(_ words: String) -> (tabs: [Tab], failures: [String]) {
         let keys = words.lowercased().split(separator: " ").map(String.init)
-        return tabs().filter { tab in keys.allSatisfy { (tab.title + " " + tab.url).lowercased().contains($0) } }
+        let (all, failures) = tabs()
+        return (all.filter { tab in keys.allSatisfy { (tab.title + " " + tab.url).lowercased().contains($0) } }, failures)
     }
 
     private static func find(_ words: String) -> String {
-        let found = matching(words)
-        return found.isEmpty ? "No open tab matches “\(words)”."
+        let (found, failures) = matching(words)
+        return found.isEmpty ? (["No open tab matches “\(words)”."] + failures).joined(separator: "\n")
             : found.prefix(20).map { "\($0.browser) · \($0.title) · \($0.url)" }.joined(separator: "\n")
     }
 
     /// Makes the matching tab the current one in its window, without bringing the browser forward.
     private static func show(_ words: String) -> String {
-        let found = matching(words)
-        guard let tab = found.first else { return "No open tab matches “\(words)”." }
+        let (found, failures) = matching(words)
+        guard let tab = found.first else { return (["No open tab matches “\(words)”."] + failures).joined(separator: "\n") }
         guard script("tell application \"\(tab.browser)\" to set active tab index of window \(tab.window) to \(tab.index)") != nil else {
             return "\(tab.browser) didn't switch tabs."
         }
         return "“\(tab.title)” is now the current tab in \(tab.browser)\(found.count > 1 ? " (\(found.count - 1) other tabs also matched)" : "")."
     }
 
-    private static func script(_ source: String) -> String? {
-        if !Thread.isMainThread { return DispatchQueue.main.sync { script(source) } }
+    private struct ScriptError: Error { let code: Int; let message: String }
+
+    private static func evaluate(_ source: String) -> Result<String, ScriptError> {
+        if !Thread.isMainThread { return DispatchQueue.main.sync { evaluate(source) } }
         var error: NSDictionary?
         let result = NSAppleScript(source: source)?.executeAndReturnError(&error)
-        return error == nil ? (result?.stringValue ?? "") : nil
+        if let error {
+            return .failure(ScriptError(code: error[NSAppleScript.errorNumber] as? Int ?? 0,
+                                        message: error[NSAppleScript.errorMessage] as? String ?? "AppleScript error"))
+        }
+        return .success(result?.stringValue ?? "")
+    }
+
+    private static func script(_ source: String) -> String? {
+        try? evaluate(source).get()
     }
 }

@@ -164,6 +164,11 @@ final class StudyBoardModel: ObservableObject {
 
     var isActive: Bool { assistant != nil || (mode == .cards && !deck.isEmpty) }
 
+    /// Questions set so far this session.
+    var questionCount: Int {
+        items.filter { if case .question = $0 { return true } else { return false } }.count
+    }
+
     /// Marks so far this session.
     var score: (Int, Int) {
         items.reduce((0, 0)) { total, item in
@@ -706,7 +711,9 @@ private struct StudyBoardView: View {
             Image(systemName: "graduationcap.fill").foregroundStyle(accent).font(.system(size: 16))
             VStack(alignment: .leading, spacing: 1) {
                 Text(model.subject.isEmpty ? "Study" : model.subject).font(.system(size: 16, weight: .bold))
-                Text(model.mode == .cards ? "Flashcards" + (model.deck.isEmpty ? "" : " · \(model.deck.count) to go") : model.mode == .exam ? "Exam question" : model.mode == .explain ? "Ask anything: Joe draws it" : "Quiz").font(.system(size: 11.5)).foregroundStyle(.secondary)
+                Text(model.mode == .cards ? "Flashcards" + (model.deck.isEmpty ? "" : " · \(model.deck.count) to go")
+                     : model.mode == .exam ? "Exam question" : model.mode == .explain ? "Ask anything: Joe draws it"
+                     : "Quiz" + (model.questionCount > 0 ? " · question \(model.questionCount)" : "")).font(.system(size: 11.5)).foregroundStyle(.secondary)
             }
             Spacer()
             if model.mode == .exam, let since = model.questionSince {

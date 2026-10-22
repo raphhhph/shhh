@@ -428,8 +428,7 @@ private struct AnswerView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: "sparkle")
-                .foregroundStyle(.orange)
+            JoeMark(size: 13)
             if let subject = model.subject, !subject.isEmpty {
                 Text(subject).font(.callout.weight(.semibold)).lineLimit(1)
             }
@@ -475,9 +474,7 @@ private struct AnswerView: View {
     /// and close while it's open.
     private func band(notch: CGSize) -> some View {
         HStack(spacing: 0) {
-            Image(systemName: "sparkle")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.orange)
+            JoeMark()
                 .frame(width: model.expanded ? nil : RecordingPanel.ear) // where it sits at rest
                 .opacity(model.listening ? 0 : 1) // the listening band's ✦ is the one showing
                 .animation(nil, value: model.listening)

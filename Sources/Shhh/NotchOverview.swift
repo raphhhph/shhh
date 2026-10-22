@@ -246,6 +246,11 @@ private struct OverviewView: View {
                         Text(context.date.formatted(.dateTime.weekday(.wide).day().month(.abbreviated))).font(.system(size: 11)).foregroundStyle(.white.opacity(0.6))
                     }
                 }
+                // The next alarm lives here now that it's no longer in the notch band.
+                if !model.widgets.contains(.alarm), let alarm = model.alarm {
+                    Label("\(alarm.when) · \(alarm.title)", systemImage: "alarm.fill")
+                        .font(.system(size: 11, weight: .medium)).foregroundStyle(.orange).lineLimit(1)
+                }
             case .nextClass:
                 if let slot = model.nextClass {
                     Text(slot.title).font(.system(size: 13.5, weight: .semibold)).lineLimit(2)

@@ -6,7 +6,7 @@ import SwiftUI
 @MainActor
 final class RecordingPanel {
     /// At the notch: how far the pill sticks out on each side of it.
-    static let ear: CGFloat = 46
+    static let ear: CGFloat = 56 // room either side of the notch, so the band doesn't look squeezed
     /// Whether the current pill hangs from the notch (it then closes back into it).
     private var atNotch = false
     private let model = PillModel()
@@ -138,9 +138,7 @@ private struct PillView: View {
                     .fill(Color.black)
                     .frame(width: model.open ? full : notchWidth)
                 HStack(spacing: 0) {
-                    Image(systemName: "sparkle")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.orange)
+                    JoeMark()
                         .frame(width: RecordingPanel.ear)
                     Color.clear.frame(width: notchWidth) // behind the notch
                     Group {

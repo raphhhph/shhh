@@ -163,9 +163,7 @@ private struct RestingView: View {
                 .fill(Color.black)
                 .frame(width: model.open ? notchWidth + 2 * RestingNotch.ear : notchWidth)
             HStack(spacing: 0) {
-                Image(systemName: "sparkle")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.orange)
+                JoeMark()
                     .frame(width: RestingNotch.ear)
                 Spacer()
             }
@@ -240,7 +238,7 @@ private struct GreetingView: View {
             VStack(spacing: 0) {
                 Color.clear.frame(height: notchHeight)
                 HStack(spacing: 9) {
-                    Image(systemName: "sparkle").font(.system(size: 13, weight: .semibold)).foregroundStyle(.orange)
+                    JoeMark()
                     Text(model.line).font(.system(size: 13.5, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -290,6 +288,37 @@ struct NotchShape: Shape {
         path.addLine(to: CGPoint(x: rect.maxX - top, y: rect.minY + top))
         // Right shoulder, back up to the screen edge.
         path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY), control: CGPoint(x: rect.maxX - top, y: rect.minY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+/// Joe's logo, the four-pointed orange star from the app icon, drawn so it stays crisp at any
+/// size: points with softly pinched sides, a warm gradient and a faint glow. Used at the notch in
+/// place of the system ✦.
+struct JoeMark: View {
+    var size: CGFloat = 14
+
+    var body: some View {
+        JoeStar()
+            .fill(LinearGradient(colors: [Color(red: 1, green: 0.72, blue: 0.28), Color(red: 1, green: 0.52, blue: 0.06)],
+                                 startPoint: .top, endPoint: .bottom))
+            .frame(width: size, height: size)
+            .shadow(color: Color.orange.opacity(0.55), radius: size * 0.22)
+    }
+}
+
+/// The star's outline: four points joined by curves pulled in toward the middle.
+struct JoeStar: Shape {
+    func path(in rect: CGRect) -> Path {
+        let c = CGPoint(x: rect.midX, y: rect.midY)
+        let pinch = min(rect.width, rect.height) * 0.1 // how far the sides are pulled in
+        var path = Path()
+        path.move(to: CGPoint(x: c.x, y: rect.minY))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX, y: c.y), control: CGPoint(x: c.x + pinch, y: c.y - pinch))
+        path.addQuadCurve(to: CGPoint(x: c.x, y: rect.maxY), control: CGPoint(x: c.x + pinch, y: c.y + pinch))
+        path.addQuadCurve(to: CGPoint(x: rect.minX, y: c.y), control: CGPoint(x: c.x - pinch, y: c.y + pinch))
+        path.addQuadCurve(to: CGPoint(x: c.x, y: rect.minY), control: CGPoint(x: c.x - pinch, y: c.y - pinch))
         path.closeSubpath()
         return path
     }

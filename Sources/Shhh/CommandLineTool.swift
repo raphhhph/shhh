@@ -302,7 +302,8 @@ enum CommandLineTool {
         case ("--board-preview", 2...):
             MainActor.assumeIsolated {
                 NSApplication.shared.setActivationPolicy(.accessory)
-                StudyBoard.preview(to: URL(fileURLWithPath: args[1]), sketch: args.dropFirst(2).contains("sketch"), deck: args.dropFirst(2).contains("deck")) { exit(0) }
+                StudyBoard.preview(to: URL(fileURLWithPath: args[1]), sketch: args.dropFirst(2).contains("sketch"), deck: args.dropFirst(2).contains("deck"),
+                                   diagram: args.dropFirst(2).contains("diagram")) { exit(0) }
             }
             NSApplication.shared.run()
             exit(0)

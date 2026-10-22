@@ -149,6 +149,9 @@ final class StudyBoardModel: ObservableObject {
     @Published var flipped = false {
         didSet { if flipped, !oldValue, readAloud, let card = deck.first { speak(BoardMath.speakable(card.definition)) } }
     }
+    /// The question they're on in exam mode: when it was set, and the time the real paper gives it.
+    @Published private(set) var questionSince: Date?
+    @Published private(set) var questionMinutes: Int?
     /// What they said for this card (right ⌥), shown above the definition to compare.
     @Published private(set) var said: String?
 
@@ -179,6 +182,7 @@ final class StudyBoardModel: ObservableObject {
         draft = ""
         startedAt = Date()
         DiagramClock.drawn = []
+        questionSince = nil
         if mode == .cards { shuffleDeck(); return }
         let assistant = Assistant()
         assistant.tutorPrompt = Self.tutorPrompt(subject: subject, mode: mode)
@@ -248,6 +252,8 @@ final class StudyBoardModel: ObservableObject {
     func submit(_ text: String, spoken: Bool = false, image: Data? = nil, onYourDiagram: Bool = false) {
         if mode == .cards { said = text; flipped = true; return }
         var text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Said while Joe is still marking: kept in the box to send, not lost.
+        if isBusy, spoken, !text.isEmpty { draft = draft.isEmpty ? text : draft + " " + text; return }
         guard !text.isEmpty || image != nil, assistant != nil, !isBusy else { return }
         items.append(.answer(text: text, spoken: spoken, image: image))
         draft = ""
@@ -294,6 +300,14 @@ final class StudyBoardModel: ObservableObject {
         case .turnFinished:
             let parsed = Self.parse(reply)
             items += parsed
+            // The exam clock: from the new question until it's marked.
+            if parsed.contains(where: { if case .question = $0 { return true } else { return false } }) {
+                questionSince = Date()
+                questionMinutes = reply.range(of: #"<question\b[^>]*\btime="\d+""#, options: .regularExpression)
+                    .flatMap { Int(reply[$0].components(separatedBy: "time=\"").last?.dropLast() ?? "") }
+            } else if parsed.contains(where: { switch $0 { case .feedback, .summary: true; default: false } }) {
+                questionSince = nil
+            }
             live = []
             isBusy = false
             status = nil
@@ -514,7 +528,7 @@ final class StudyBoardModel: ObservableObject {
             \(mode == .explain
                 ? "Explain mode: no quiz. They ask questions, by voice or typing, and you answer like a teacher at a whiteboard: first the <diagram> when one helps (always for an economics diagram), then <lesson title=\"…\">the explanation in Markdown: definitions word for word, the steps of the diagram, what to write in an exam to get the marks</lesson>. Before it, at most two short sentences outside the tags, said aloud. Follow-ups build on what's on the board (\"now add a subsidy\": draw the whole diagram again with it). When they say \"quiz me\", switch to quiz mode: " + quizRules
                 : mode == .exam
-                ? "Exam mode: one full question in the style of a real paper for this subject (with parts (a), (b)…, a stimulus or data where the paper has one, marks per part). Mark it part by part; long parts with markbands. Then the summary."
+                ? "Exam mode: one full question in the style of a real paper for this subject (with parts (a), (b)…, a stimulus or data where the paper has one, marks per part), with time=\"<minutes>\" in the question tag: the time the real paper allows for those marks. Mark it part by part; long parts with markbands. Then the summary, saying whether they'd have finished in time."
                 : quizRules)
             - "hint": a hint, not the answer. "skip": the model answer and 0 marks (a feedback tag with score 0), then go on. "end": the summary now. \
             Any other question from them: answer it briefly, then carry on.
@@ -691,6 +705,18 @@ private struct StudyBoardView: View {
                 Text(model.mode == .cards ? "Flashcards" + (model.deck.isEmpty ? "" : " · \(model.deck.count) to go") : model.mode == .exam ? "Exam question" : model.mode == .explain ? "Ask anything: Joe draws it" : "Quiz").font(.system(size: 11.5)).foregroundStyle(.secondary)
             }
             Spacer()
+            if model.mode == .exam, let since = model.questionSince {
+                TimelineView(.periodic(from: since, by: 1)) { context in
+                    let seconds = Int(context.date.timeIntervalSince(since))
+                    let over = model.questionMinutes.map { seconds > $0 * 60 } ?? false
+                    Text(String(format: "%d:%02d", seconds / 60, seconds % 60) + (model.questionMinutes.map { " / \($0) min" } ?? ""))
+                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(over ? Color.orange : Color.secondary)
+                        .padding(.horizontal, 10).frame(height: 26)
+                        .background(Color.primary.opacity(0.06), in: Capsule())
+                        .help("Time on this question, and what the real paper allows")
+                }
+            }
             let (score, total) = model.score
             if total > 0 {
                 Text("\(score)/\(total)").font(.system(size: 15, weight: .bold).monospacedDigit())
@@ -778,6 +804,15 @@ private struct StudyBoardView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(total > 0 ? "Session: \(score)/\(total)" : "Session summary").font(.system(size: 16, weight: .bold))
                 BoardText(text, size: 13.5, spacing: 0)
+                // What next, without typing: the session's own advice, as buttons.
+                if !model.isBusy {
+                    HStack(spacing: 8) {
+                        Button("Another quiz") { model.start(subject: model.subject, request: "Another quiz: five new questions, starting with what I just got wrong.", mode: .quiz) }
+                        Button("Teach me my weakest topic") { model.start(subject: model.subject, request: "Teach me the weakest topic from my last session with a short lesson, then test me on it.", mode: .quiz) }
+                        if model.mode != .exam { Button("Exam question") { model.start(subject: model.subject, request: nil, mode: .exam) } }
+                    }
+                    .buttonStyle(.bordered).controlSize(.small).padding(.top, 4)
+                }
             }
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -963,8 +998,8 @@ struct SketchPad: View {
 // MARK: - Preview
 
 extension StudyBoard {
-    /// `Joe --board-preview <file.png> [sketch]`: the whiteboard with a sample question and mark.
-    static func preview(to file: URL, sketch: Bool, deck: Bool = false, done: @escaping () -> Void) {
+    /// `Joe --board-preview <file.png> [sketch|deck|diagram]`: the whiteboard with a sample question and mark (diagram: Joe explaining with a drawn diagram).
+    static func preview(to file: URL, sketch: Bool, deck: Bool = false, diagram: Bool = false, done: @escaping () -> Void) {
         DiagramClock.instant = true
         let board = StudyBoard()
         board.model.preview(StudyBoardModel.parse("""
@@ -990,6 +1025,26 @@ extension StudyBoard {
             **Tax incidence** :: how the burden of a tax is split between consumers and producers
             </cards>
             """), subject: "Economics HL", sketching: sketch)
+        // `diagram`: explain mode, with Joe's diagram at the top where the snapshot sees it (in the quiz
+        // sample it's below the window's height).
+        if diagram {
+            board.model.preview(StudyBoardModel.parse("""
+                Here's a specific tax: supply shifts up by the tax.
+                <diagram title="Specific tax">
+                axes "Quantity" "Price"
+                line D 10,90 90,15
+                line S 10,15 90,80 blue
+                line "S + tax" 10,40 70,89 red dashed
+                arrow 64,61 64,80 red
+                point E1 53,50 x="Q1" y="P1"
+                point E2 38,63 x="Q2" y="Pc"
+                point "" 38,38 y="Pp"
+                area 0,63 38,63 38,38 0,38 orange "Tax revenue"
+                text 78,30 "Welfare loss"
+                </diagram>
+                <lesson title="2.7 Indirect taxes">A **specific tax** is a fixed amount per unit. Supply shifts up by the tax: consumers pay Pc, producers keep Pp.</lesson>
+                """), subject: "Economics HL", sketching: false, mode: .explain)
+        }
         if deck {
             board.model.previewDeck([Flashcards.Card(term: "Specific tax", definition: "A fixed amount of tax per unit of a good, shifting supply up by the amount of the tax."),
                                      Flashcards.Card(term: "Tax incidence", definition: "How the burden of a tax is split between consumers and producers.")])
@@ -1023,7 +1078,8 @@ extension StudyBoard {
 }
 
 extension StudyBoardModel {
-    func preview(_ items: [Item], subject: String, sketching: Bool) {
+    func preview(_ items: [Item], subject: String, sketching: Bool, mode: Mode = .quiz) {
+        self.mode = mode
         self.subject = subject
         self.items = items
     }

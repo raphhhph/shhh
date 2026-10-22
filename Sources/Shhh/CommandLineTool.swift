@@ -495,12 +495,13 @@ enum CommandLineTool {
         ("My economics I A is due on Friday. New paragraph. I still need a diagram.", "My economics IA is due on Friday.\n\nI still need a diagram."),
         ("Notes for the test. New bullet supply and demand. New bullet market failure.", "Notes for the test.\n- Supply and demand.\n- Market failure."),
         ("The essay is about Keynes. Scratch that. The essay is about Hayek.", "The essay is about Hayek."),
+        ("Read chapter four. New paragraph. The quiz is on Friday, scratch that, the quiz is on Monday.", "Read chapter four.\n\nThe quiz is on Monday."),
         ("Is biology H L harder than biology S L?", "Is biology HL harder than biology SL?"),
         ("Remind me to revise math A A before the mock exams.", "Remind me to revise Math AA before the mock exams."),
         ("Ask my M Y P coordinator about the personal project.", "Ask my MYP coordinator about the personal project."),
     ]
 
-    /// Each sentence spoken by the Mac's voice, transcribed, run through dictation, and scored: word
+    /// Each one spoken by the Mac's voice, transcribed, run through dictation, and scored: word
     /// error rate before and after Joe's fixes, and whether the line breaks came out right. A machine
     /// voice is cleaner than a student in a classroom, so this is for comparing changes, not a promise.
     private static func dictationTest(voice: String?) async throws {

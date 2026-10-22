@@ -16,7 +16,7 @@ enum SpokenCommands {
     /// The text with the spoken breaks made real. Other punctuation before the words stays; the
     /// punctuation after them goes.
     static func apply(_ text: String, capitalize: Bool) -> String {
-        var text = scratched(text, capitalize: capitalize)
+        var text = text
         for (words, insert, comma) in commands {
             let after = #")\b[,.;:!?]?[ \t]*"#
             text = text.replacingOccurrences(of: #",[ \t]*\b(?:"# + words + after, with: comma + insert,
@@ -24,6 +24,9 @@ enum SpokenCommands {
             text = text.replacingOccurrences(of: #"[ \t]*\b(?:"# + words + after, with: insert,
                                              options: [.regularExpression, .caseInsensitive])
         }
+        // After the breaks, so "scratch that" takes back only the paragraph or bullet it's in, not
+        // everything said before it (it stops at a line break).
+        text = scratched(text, capitalize: capitalize)
         guard capitalize, text.contains("\n") else { return text }
         // A new line or bullet starts with a capital, like a sentence.
         var result = ""
@@ -53,7 +56,8 @@ enum SpokenCommands {
             var before = text[..<found.lowerBound]
             while before.last == " " { before = before.dropLast() }
             if let last = before.last, ".!?".contains(last) { before = before.dropLast() }
-            let cut = before.lastIndex { ".!?\n".contains($0) }.map { before.index(after: $0) } ?? before.startIndex
+            var cut = before.lastIndex { ".!?\n".contains($0) }.map { before.index(after: $0) } ?? before.startIndex
+            if text[cut...].hasPrefix("- ") { cut = text.index(cut, offsetBy: 2) } // a bullet keeps its dash
             let kept = String(text[..<cut])
             var rest = String(text[found.upperBound...])
             // What comes next starts a sentence now ("Keynes, scratch that the essay…").

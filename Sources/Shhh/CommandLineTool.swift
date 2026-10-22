@@ -232,6 +232,10 @@ enum CommandLineTool {
             // Joe --slides inspect <deck.pptx> | apply <deck.pptx> <plan.json>: edits a copy of a deck.
             print(Slides.run(Array(args.dropFirst())))
             exit(0)
+        case ("--tab", 2...):
+            // Joe --tab open <url>… | list | find "<words>" | show "<words>": browser tabs, in the background.
+            print(BrowserTabs.run(Array(args.dropFirst())))
+            exit(0)
         case ("--workspace", 2):
             // Shhh --workspace "<name>": switches Vivaldi to that workspace (for routines).
             print(Workspace.switchTo(args[1]))

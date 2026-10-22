@@ -13,6 +13,7 @@ Joe acting on other apps and services.
 - After titling, `onTitled` (AppDelegate) tidies the note in the background: a recorded meeting (5+ speaker lines, 200+ words) keeps its transcript word for word under Summary/Decisions/Actions; everything else of 60+ words is condensed (grouped by topic, filler gone, every fact kept). Joe's Undo keeps the original for a week.
 - Opening the notepad: `AppDelegate.isNotepadRequest` (also "open up a notebook" / "a note", what speech recognition heard on 20-21 Oct), voice and typed. Claude's fallback: `Joe --notepad "<words>"` posts a distributed notification the app opens it on.
 - `ScreenControl.swift`, `ScreenCapture.swift`, `ScreenContext.swift`, `ScreenPointer.swift`, `FileCommands.swift`, `UndoJournal.swift`, `Workspace.swift` (Vivaldi workspaces): clicking/typing/moving files with undo; blocked apps (password managers, System Settings security panes).
+- `BrowserTabs.swift`: `Joe --tab open|list|find|show`: pages open in the default browser in the background (`activates = false`), tabs read and switched by Chrome-style AppleScript (Vivaldi, Chrome, Brave, Edge, Arc; not Safari). The prompt sends "open my ManageBac" and the like here instead of the Chrome tools or clicks. First use asks once for Automation permission per browser.
 - `Slides.swift` + `Resources/slides.py` (python/node tooling in App Support), `MathDoc.swift` + `Resources/mathdoc.js` (typeset worked solutions), `Textbook.swift` (PDF index/find/text).
 
 ## Decisions

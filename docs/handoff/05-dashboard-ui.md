@@ -11,7 +11,7 @@ The dashboard window: pages Home, Calendar, Study, History, Routines, Alarms, No
 ## Design system (keep it consistent)
 - Tokens in `Look`: accent, sidebar, card, page, line, deadline, personal, `titleDesign`. Four **themes** (Settings → General → Style): Classic (orange), Midnight (navy + gold, forces dark), Paper (warm, serif titles), Ocean (blue, rounded). `.id(theme)` on the root redraws on change.
 - Controls: `Choice` (pill menu), `PillButton`, `JoeSwitch` (on/off, accent capsule with a springy knob; every Settings switch), `Segmented` (soft tray with the current option raised; Settings tabs, History, Usage, Alarms, Notes, points calculator; no stock `.pickerStyle(.segmented)` left), `SettingsRow` (hover highlight). Use these rather than stock controls.
-- Pages start 20 pt from the top, so the page title sits in the title-bar row beside the window buttons (the sidebar keeps its 46 pt).
+- Pages start 56 pt from the top, clear of the window buttons and level with Joe in the sidebar (46 pt plus the title bar).
 - Cards: 16 pt continuous corners, 1 pt line, 18 pt padding; side-by-side cards use `stretch: true` + `.fixedSize(horizontal: false, vertical: true)` to end level.
 - IB subject colours (`SubjectGroup`): language blue, acquisition teal, societies gold, sciences green, maths violet, arts pink, core slate; personal events orange; deadlines red.
 - Calendar: tinted blocks with a coloured edge, weekends hidden when empty, alarms as a small line, right rail (details, Due soon, subject key) when wide.

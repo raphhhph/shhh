@@ -31,6 +31,12 @@ final class AnswerPanel {
         if model.speaking != speaking { model.speaking = speaking }
     }
 
+    /// Other tasks still running: shown on the card's band while it has the notch (the task band
+    /// steps aside for it).
+    func setBackground(_ count: Int) {
+        if model.background != count { model.background = count }
+    }
+
     static let width: CGFloat = 480
     /// At the notch, once the answer is done: the subject on one line under the notch, with room
     /// above and below (the tick stays in the band, beside the notch).
@@ -182,7 +188,7 @@ final class AnswerPanel {
     private func watchHover() {
         hoverTimer?.invalidate()
         let notch = self.notch
-        let timer = Timer(timeInterval: 0.08, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 0.04, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, self.panel.isVisible else { return }
                 let mouse = NSEvent.mouseLocation
@@ -319,6 +325,8 @@ final class AnswerModel: ObservableObject {
 
     /// Joe is reading the answer out loud: the card shows a stop button.
     @Published var speaking = false
+    /// Other tasks still working, while the card covers the task band.
+    @Published var background = 0
     var onStopSpeaking: () -> Void = {}
 
     /// Whether there's something to show: the reply, an error, an action waiting for an OK, or just
@@ -487,8 +495,16 @@ private struct AnswerView: View {
             Spacer(minLength: notch.width) // behind the notch
             if model.expanded {
                 // Spaced like the header's, not packed against the edge.
-                HStack(spacing: 14) { buttons }
-                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.8))
+                HStack(spacing: 14) {
+                    if model.background > 0 {
+                        Text("\(model.background) more working")
+                            .font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.55))
+                            .lineLimit(1)
+                            .help("Close this card to see them at the notch")
+                    }
+                    buttons
+                }
+                .font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.8))
             } else if model.error != nil {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 13, weight: .semibold))

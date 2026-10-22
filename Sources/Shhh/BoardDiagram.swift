@@ -127,22 +127,25 @@ enum DiagramClock {
 
 struct BoardDiagramView: View {
     let diagram: BoardDiagram
+    /// Which card on the board this is, so the same diagram drawn again is drawn again.
+    var key = ""
+    /// Its card, with a way to draw on it (the board), or just the drawing (under the sketch pad).
+    var onDrawOn: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if !diagram.title.isEmpty {
-                Label(diagram.title, systemImage: "chart.xyaxis.line").font(.system(size: 13, weight: .bold)).foregroundStyle(.secondary)
-            }
-            GeometryReader { geometry in
-                // Room for the price axis's marks on the left, the curve labels on the right.
-                let plot = CGRect(x: 56, y: 22, width: max(100, geometry.size.width - 56 - 70), height: max(100, geometry.size.height - 22 - 40))
-                ZStack(alignment: .topLeading) {
-                    ForEach(Array(diagram.pieces.enumerated()), id: \.offset) { index, piece in
-                        DiagramPiece(piece: piece, plot: plot, key: "\(diagram.title)#\(index)#\(piece.source)")
-                    }
+            HStack {
+                if !diagram.title.isEmpty {
+                    Label(diagram.title, systemImage: "chart.xyaxis.line").font(.system(size: 13, weight: .bold)).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if let onDrawOn, !diagram.pieces.isEmpty {
+                    Button(action: onDrawOn) { Label("Draw on this", systemImage: "pencil.tip") }
+                        .buttonStyle(.bordered).controlSize(.small)
+                        .help("Copy this diagram onto your sketch pad, add your shift or labels, and send it with your answer")
                 }
             }
-            .frame(height: 320)
+            DiagramDrawing(diagram: diagram, key: key).frame(height: 320)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -151,12 +154,39 @@ struct BoardDiagramView: View {
     }
 }
 
+/// The drawing alone, filling its frame. Not animated: under the sketch pad, and in the picture sent to Joe.
+struct DiagramDrawing: View {
+    let diagram: BoardDiagram
+    var key = ""
+    var animated = true
+
+    var body: some View {
+        GeometryReader { geometry in
+            // Room for the price axis's marks on the left, the curve labels on the right.
+            let plot = CGRect(x: 56, y: 22, width: max(100, geometry.size.width - 56 - 70), height: max(100, geometry.size.height - 22 - 40))
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(diagram.pieces.enumerated()), id: \.offset) { index, piece in
+                    DiagramPiece(piece: piece, plot: plot, key: "\(key)#\(diagram.title)#\(index)#\(piece.source)", animated: animated)
+                }
+            }
+        }
+    }
+}
+
 /// One command of the diagram, drawn in with a stroke and its labels fading in.
 private struct DiagramPiece: View {
     let piece: BoardDiagram.Piece
     let plot: CGRect
     let key: String
-    @State private var progress: CGFloat = 0
+    @State private var progress: CGFloat
+
+    init(piece: BoardDiagram.Piece, plot: CGRect, key: String, animated: Bool) {
+        self.piece = piece
+        self.plot = plot
+        self.key = key
+        // An image renderer never calls onAppear, so a still drawing starts finished.
+        _progress = State(initialValue: animated && !DiagramClock.instant ? 0 : 1)
+    }
 
     private var color: Color { BoardDiagram.colors[piece.color] ?? .primary }
 
@@ -186,7 +216,7 @@ private struct DiagramPiece: View {
     }
 
     private func draw() {
-        guard !DiagramClock.instant, !DiagramClock.drawn.contains(key) else { progress = 1; return }
+        guard progress < 1, !DiagramClock.drawn.contains(key) else { progress = 1; return }
         DiagramClock.drawn.insert(key)
         let durations: [BoardDiagram.Kind: Double] = [.text: 0.3, .box: 0.3, .point: 0.4, .area: 0.4]
         let duration = durations[piece.kind] ?? 0.7

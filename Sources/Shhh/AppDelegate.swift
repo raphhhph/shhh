@@ -551,7 +551,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let request = AlarmRequest.parse(text) { alarms.handle(request); return }
         if openStudy(text) { return }
         if screenshot == nil, openPen(text) { return }
-        if !notepad.isVisible, Self.isNotepadRequest(text) { openNotepad(for: text); return }
+        if Self.isOpenNotepadCommand(text) || (!notepad.isVisible && Self.isNotepadRequest(text)) { openNotepad(for: text); return }
         if let music = Spotify.quick(in: text) {
             Task.detached { [weak self] in
                 let result = Spotify.run(music)
@@ -1419,12 +1419,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// "Help me take notes", "open a notepad", and how speech recognition hears "open the notepad":
     /// "open up a notebook", "open up a note" (both went to Claude, which opened Obsidian instead).
     static func isNotepadRequest(_ text: String) -> Bool {
-        if text.range(of: #"\b((take|taking|start|make) (some |my )?notes|note ?pad|(open|show) (a |my |the )?notes|(record|transcribe) (this|the|my) (lecture|class|lesson|meeting|call|seminar))\b"#,
-                      options: [.regularExpression, .caseInsensitive]) != nil { return true }
-        // The whole request is "open (up) a notebook / a note / Joe's notes", nothing about Obsidian or a file.
+        text.range(of: #"\b((take|taking|start|make) (some |my )?notes|note ?pad|(open|show) (a |my |the )?notes|(record|transcribe) (this|the|my) (lecture|class|lesson|meeting|call|seminar))\b"#,
+                   options: [.regularExpression, .caseInsensitive]) != nil || isOpenNotepadCommand(text)
+    }
+
+    /// The whole request is "open (up) the notepad / a notebook / a note / Joe's notes", nothing about
+    /// Obsidian or a file. This one also brings an open notepad forward.
+    static func isOpenNotepadCommand(_ text: String) -> Bool {
         let filler = #"(?:hey|hi|yo|ok|okay|so|um|uh|joe|jo|can you|could you|please|just|now|real quick)"#
         let open = #"(?:open|bring up|pull up|show|start|get|give me)(?: up| me)?"#
-        let thing = #"(?:a |my |the |your |joe'?s |a new |new )?(?:note ?books?|notes?|note pads?|writing pad|scratch ?pad)"#
+        let thing = #"(?:a |my |the |your |joe'?s |a new |new )?(?:note ?books?|notes?|note ?pads?|writing pad|scratch ?pad)"#
         return text.range(of: #"^\W*(?:\#(filler)\W+)*\#(open) \#(thing)(?:\W+(?:please|thanks|thank you|joe))*\W*$"#,
                           options: [.regularExpression, .caseInsensitive]) != nil
     }
@@ -1691,7 +1695,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 // "Help me take notes for Econ": the notepad opens, nothing goes to Claude. The last
                 // notes are in the vault already, so these start fresh.
-                if !notepad.isVisible, Self.isNotepadRequest(text) {
+                // Already open but behind other windows: "open the notepad" brings it forward.
+                if Self.isOpenNotepadCommand(text) || (!notepad.isVisible && Self.isNotepadRequest(text)) {
                     openNotepad(for: text)
                     return
                 }

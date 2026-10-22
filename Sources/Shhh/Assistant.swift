@@ -62,6 +62,13 @@ final class Assistant {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "assistantEffort") }
     }
 
+    /// The effort a conversation on the chosen model starts with. Haiku at Medium answers at Low:
+    /// on Raph's Mac (22 Oct) a calendar question showed its first words about 2 s sooner (3.7–4.0 s
+    /// against 6.0 s). Big jobs get Opus at Medium anyway (`useStrongModel`).
+    static var sessionEffort: Effort {
+        model == .haiku && effort == .medium ? .low : effort
+    }
+
     /// How much the assistant may do without asking. Spending money is blocked either way.
     enum Autonomy: String, CaseIterable {
         /// Reading, notes and Gmail drafts are free; everything else asks.
@@ -520,7 +527,7 @@ final class Session {
                                       vault: URL? = Assistant.vaultURL, instructions: Instructions? = nil) -> [String] {
         let instructions = instructions ?? Instructions(vault: vault)
         let autonomy = Assistant.autonomy
-        let effort = effort ?? Assistant.effort
+        let effort = effort ?? Assistant.sessionEffort
         if let tutor {
             // Tutoring: their notes and Joe's PDF tools only, nothing else loaded.
             return [

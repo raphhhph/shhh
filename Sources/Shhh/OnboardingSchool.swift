@@ -42,16 +42,37 @@ extension CalendarFeed {
         ("Dance", ["dance"]),
     ]
 
-    /// "Economics HL", "Math AI SL"… in the order they first appear on the student's ManageBac
-    /// tasks, at most six. HL or SL when the class name says, otherwise SL.
+    /// Words a subject's tasks use without naming it ("Taxes", "Accounts and Finance Summative"),
+    /// tried after the class names. ManageBac's feed has no class field.
+    private static let typicalWords: [(subject: String, words: [String])] = [
+        ("Economics", ["tax", "taxes", "supply", "demand", "elasticity", "gdp", "inflation", "unemployment", "fiscal",
+                       "monetary", "tariff", "subsidy", "externality", "market failure"]),
+        ("Business Management", ["accounts and finance", "marketing", "stakeholder", "stakeholders", "swot", "cash flow",
+                                 "break-even", "human resource", "human resources"]),
+        ("ESS", ["ecosystem", "ecosystems", "biodiversity", "sustainability", "pollution", "biome", "biomes"]),
+        ("English A Lang & Lit", ["graphic novel", "poem", "poetry", "novel", "individual oral", "io"]),
+        ("Math AI", ["calculus", "derivative", "derivatives", "integration", "trigonometry", "probability", "statistics"]),
+    ]
+
+    /// "Economics", "Chinese B SL"… in the order they first appear on the student's ManageBac
+    /// tasks, at most six: the class named in the title, then in the notes, then Chinese writing
+    /// (their Chinese class), then a subject's typical words. HL or SL only when the task says
+    /// (MYP has no levels; the School step treats a name without one as SL for the Diploma).
     static func subjectGuesses() -> [String] {
+        guard let data = try? Data(contentsOf: feedCache),
+              let entries = try? JSONSerialization.jsonObject(with: data) as? [[String: String]] else { return [] }
         var found: [String] = []
-        for item in linkItems() where item.kind == .deadline {
-            let text = "\(item.title) \(item.detail)"
-            // One subject per task: the first that matches.
-            guard let subject = subjectWords.first(where: { entry in entry.words.contains { has(text, $0) } })?.subject,
-                  !found.contains(where: { $0.hasPrefix(subject + " ") }) else { continue }
-            found.append("\(subject) \(has(text, "hl") ? "HL" : "SL")")
+        for entry in entries where entry["kind"] == "deadline" {
+            let title = entry["title"] ?? "", notes = (entry["notes"] ?? "") + " " + (entry["detail"] ?? "")
+            func named(_ text: String, in list: [(subject: String, words: [String])]) -> String? {
+                list.first { item in item.words.contains { has(text, $0) } }?.subject
+            }
+            let chinese = (title + notes).unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) } ? "Chinese B" : nil
+            guard let subject = named(title, in: subjectWords) ?? named(notes, in: subjectWords) ?? chinese
+                    ?? named(title, in: typicalWords) ?? named(notes, in: typicalWords),
+                  !found.contains(where: { $0 == subject || $0.hasPrefix(subject + " ") }) else { continue }
+            let level = has(title, "hl") ? " HL" : has(title, "sl") ? " SL" : ""
+            found.append(subject + level)
             if found.count == 6 { break }
         }
         return found

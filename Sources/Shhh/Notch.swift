@@ -162,6 +162,7 @@ private struct RestingView: View {
             NotchShape(top: NotchShape.shoulder, bottom: model.open ? 13 : 10)
                 .fill(Color.black)
                 .frame(width: model.open ? notchWidth + 2 * RestingNotch.ear : notchWidth)
+                .padding(.bottom, model.open ? 0 : NotchShape.tuck)
             HStack(spacing: 0) {
                 JoeMark()
                     .frame(width: RestingNotch.ear)
@@ -217,7 +218,7 @@ final class NotchGreeting {
 
     func hide() {
         model.open = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             MainActor.assumeIsolated { if self?.model.open == false { self?.panel?.orderOut(nil) } }
         }
     }
@@ -245,7 +246,7 @@ private struct GreetingView: View {
                 .opacity(model.open ? 1 : 0)
                 .animation(model.open ? .easeOut(duration: 0.16).delay(0.05) : .easeIn(duration: 0.08), value: model.open)
             }
-            .frame(width: model.open ? geometry.size.width : band, height: model.open ? geometry.size.height : notchHeight)
+            .frame(width: model.open ? geometry.size.width : band, height: model.open ? geometry.size.height : notchHeight - NotchShape.tuck)
             .background(Color.black, in: NotchShape(top: NotchShape.shoulder, bottom: model.open ? 20 : 10))
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .animation(model.open ? NotchShape.opening : NotchShape.closing, value: model.open)
@@ -262,6 +263,9 @@ struct NotchShape: Shape {
 
     /// The shoulders' size, the same on every band so they line up as one swaps for another.
     static let shoulder: CGFloat = 10
+    /// How far a closed band sits inside the notch's bottom edge, so it finishes out of sight
+    /// behind the camera instead of leaving a notch-sized black piece until its window goes.
+    static let tuck: CGFloat = 5
     /// One motion for everything that comes out of the notch, like the Dynamic Island: a spring
     /// with a little give opening, a firmer, quicker one going back in.
     static let opening = Animation.spring(response: 0.28, dampingFraction: 0.8)

@@ -539,7 +539,9 @@ final class Session {
                 "--system-prompt", tutor,
             ]
         }
-        return [
+        // Connectors Joe never uses stay out: their tools slowed every turn (see `Connectors`).
+        let unused = Connectors.unused
+        return (unused.isEmpty ? [] : ["--disallowedTools", unused.joined(separator: ",")]) + [
             "-p",
             "--input-format", "stream-json",
             "--output-format", "stream-json", "--verbose", "--include-partial-messages",
@@ -620,8 +622,9 @@ final class Session {
         // What they asked lately comes with the first request, not in the system prompt: it changes
         // after every request, and there it would stop Claude reusing the instructions from its cache.
         if requestsSent == 1 {
-            let recent = Daybook.recentRequests
-            if !recent.isEmpty { request = "<context>\n\(recent)\n</context>\n\n" + request }
+            // And what Joe knows of their calendar, so "what's on tomorrow?" needs no connector call.
+            let context = [Daybook.recentRequests, usualSettings ? QuickContext.calendar : ""].filter { !$0.isEmpty }
+            if !context.isEmpty { request = "<context>\n\(context.joined(separator: "\n\n"))\n</context>\n\n" + request }
         }
         let content: Any = screenshot.map { image in [
             ["type": "image", "source": ["type": "base64", "media_type": "image/jpeg", "data": image.base64EncodedString()]],
@@ -689,7 +692,10 @@ final class Session {
         switch message["type"] as? String {
         case "system":
             // The CLI starts on the request: what came before was its own setup for the turn.
-            if message["subtype"] as? String == "init" { Latency.mark("cliInit", from: self) }
+            if message["subtype"] as? String == "init" {
+                Latency.mark("cliInit", from: self)
+                Connectors.learn(message) // the next sessions leave out the ones Joe doesn't use
+            }
         case "stream_event":
             if let event = message["event"] as? [String: Any] { handle(event: event) }
         case "control_request":

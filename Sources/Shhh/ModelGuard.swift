@@ -61,15 +61,27 @@ enum ModelGuard {
         defaults.set(error.localizedDescription, forKey: "modelFailed.\(model.rawValue)")
     }
 
-    /// At launch: a model that was loading when Joe last stopped (it crashed on it). Its files are
-    /// removed so it downloads again; returns it to say so.
+    /// At launch: a model that was loading when Joe last stopped (it crashed on it, or Joe was quit).
+    /// Still downloading then (FluidAudio keeps unfinished files as `.partial`, and only moves a file
+    /// into place once it's checked): everything is kept, so the next try carries on where it
+    /// stopped instead of fetching 500 MB again. Already downloaded (it crashed loading): its files
+    /// are removed so it downloads again cleanly. Returns it to say so.
     static func recoverFromCrash() -> Model? {
         guard let raw = defaults.string(forKey: "modelLoading"), let model = Model(rawValue: raw) else { return nil }
         defaults.removeObject(forKey: "modelLoading")
         defaults.removeObject(forKey: "modelReady.\(raw)")
-        for folder in model.folders { try? FileManager.default.removeItem(at: folder) }
-        defaults.set("The download was broken, so it was removed. Download it again.", forKey: "modelFailed.\(raw)")
+        if model.folders.contains(where: hasPartialDownload) {
+            defaults.set("The download was interrupted. Press Retry: it carries on from where it stopped.", forKey: "modelFailed.\(raw)")
+        } else {
+            for folder in model.folders { try? FileManager.default.removeItem(at: folder) }
+            defaults.set("The download was broken, so it was removed. Download it again.", forKey: "modelFailed.\(raw)")
+        }
         return model
+    }
+
+    private static func hasPartialDownload(in folder: URL) -> Bool {
+        guard let files = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: nil) else { return false }
+        return files.contains { ($0 as? URL)?.pathExtension == "partial" }
     }
 
     // MARK: Status, for the onboarding's "Get Joe ready"

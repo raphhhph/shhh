@@ -244,10 +244,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         ModelDownloads.apply() // Hugging Face or the China mirror, before any model loads
         Daybook.addDefaultRoutines() // the routines Joe runs by himself, on a new Mac too
-        // Crashed while loading a model last time (a broken download): its files go, it downloads again.
+        // Stopped while a model was downloading or loading last time: an unfinished download carries
+        // on, a broken one starts over (ModelGuard decides).
         if let broken = ModelGuard.recoverFromCrash() {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
-                MainActor.assumeIsolated { self?.toast.show("\(broken.title): the download was broken, so it's downloading again", symbol: "arrow.down.circle", tint: .orange) }
+                MainActor.assumeIsolated { self?.toast.show("\(broken.title) didn't finish last time, so it's downloading again", symbol: "arrow.down.circle", tint: .orange) }
             }
         }
         AppAppearance.apply() // light, dark or the Mac's
@@ -943,14 +944,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         answerPanel.beginTurn(question: "Good morning")
         if SpeechOutput.speakBriefing, SpeechOutput.engine == .off { speech.useForThisReply(.lifelike) }
         Daybook.archiveIfOld()
+        Daybook.buildLocally() // classes, events, deadlines and carried tasks, without Claude
         task.assistant.ask(Assistant.vaultURL == nil ? """
             [Morning briefing: I've just opened my Mac.] Greet me by name: "Good morning, <my name>." Then, \
             from my calendars, in a few short lines: my first period today (subject, time, room), anything \
             due today or tomorrow on ManageBac, and anything else on my calendar today besides classes. If \
             I have no classes today, just say good morning and that there's no school today.
             """ : """
-            [Morning briefing: I've just opened my Mac.] First build today's Daybook, unless it's already \
-            built for today (how: your instructions). Then greet me by name: "Good morning, <my name>." and in a \
+            [Morning briefing: I've just opened my Mac.] First finish today's Daybook if your instructions \
+            say parts of it are still to fill (or build it, if there's none for today). Then greet me by name: \
+            "Good morning, <my name>." and in a \
             few short lines: my first period (subject, time, room) or that there's no school today, my top three \
             tasks, anything due today or tomorrow, the emails that need me, and today's regular meetings from my \
             patterns.

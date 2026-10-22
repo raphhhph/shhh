@@ -877,9 +877,11 @@ private struct ConnectStep: View {
                 // Lessons aren't in the ManageBac link: a picture of the timetable gives Joe today's classes,
                 // Now and Next, and the Daybook's lessons.
                 card(icon: "tablecells", tint: .purple, title: "Your timetable",
-                     detail: "A photo, screenshot or PDF of your class timetable. I'll read it once; it takes a minute or two.") {
+                     detail: hasTimetable && timetableStatus == nil
+                        ? "Already saved: your classes show on Home and in Calendar. Choose a new file only if it changed."
+                        : "A photo, screenshot or PDF of your class timetable. I'll read it once; it takes a minute or two.") {
                     HStack(spacing: 10) {
-                        Primary(title: importing ? "Reading…" : "Choose a file", enabled: !importing) { chooseTimetable() }.frame(width: 160)
+                        Primary(title: importing ? "Reading…" : hasTimetable ? "Replace it" : "Choose a file", enabled: !importing) { chooseTimetable() }.frame(width: 160)
                         TextField("Rotating timetable? Today's day, e.g. Day 3", text: $dayToday)
                             .textFieldStyle(.plain).padding(.horizontal, 12).frame(height: 36)
                             .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
@@ -941,6 +943,10 @@ private struct ConnectStep: View {
             linkStatus = nil
             withAnimation { found = summary() }
         }
+    }
+
+    private var hasTimetable: Bool {
+        Daybook.timetableURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
     }
 
     private func chooseTimetable() {
@@ -1046,7 +1052,8 @@ private struct MorningStep: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(existing == nil ? "Wake me up at" : "Your wake-up alarm").font(.system(size: 15, weight: .semibold))
                         DatePicker("", selection: $time, displayedComponents: .hourAndMinute)
-                            .labelsHidden().datePickerStyle(.field).frame(width: 110)
+                            .labelsHidden().datePickerStyle(.stepperField).font(.system(size: 22, weight: .semibold).monospacedDigit())
+                            .fixedSize()
                     }
                     Spacer()
                     Picker("", selection: $schoolDays) {

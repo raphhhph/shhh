@@ -219,7 +219,11 @@ final class DashboardModel: ObservableObject {
             let done = line.hasPrefix("- [x]") || line.hasPrefix("- [X]")
             let body = String(line.dropFirst(6))
             let parts = body.components(separatedBy: " — ")
-            found.append((line, parts[0], parts.dropFirst().joined(separator: " — "), done))
+            // The Daybook's own markers ("· new", "· carried 2×") aren't part of the task's name (a done
+            // task showed them struck through).
+            let name = parts[0].replacingOccurrences(of: #"\s*·\s*(new|carried \d+×)"#, with: "", options: .regularExpression)
+            let detail = parts.dropFirst().joined(separator: " — ")
+            found.append((line, name, detail, done))
         }
         if found.map({ "\($0.0)\($0.3)" }) != tasks.map({ "\($0.line)\($0.done)" }) { tasks = found }
     }

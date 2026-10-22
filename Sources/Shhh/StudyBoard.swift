@@ -384,7 +384,7 @@ final class StudyBoardModel: ObservableObject {
 
     static func tutorPrompt(subject: String, mode: Mode) -> String {
         // MYP students are marked on criteria A–D, out of 8, not on DP marks.
-        let myp = Profile.programme.uppercased().contains("MYP")
+        let myp = Profile.isMYP
         let pack = myp ? "MYP" : StudyBuddy.pack(for: subject)
         let map = pack.flatMap { try? String(contentsOf: StudyBuddy.syllabus.appendingPathComponent($0 + ".md"), encoding: .utf8) } ?? ""
         let terms = (try? String(contentsOf: StudyBuddy.syllabus.appendingPathComponent("Command terms.md"), encoding: .utf8)) ?? ""
@@ -394,7 +394,7 @@ final class StudyBoardModel: ObservableObject {
             .map { "- \($0.topic): \($0.score)/\($0.total) \($0.note)" }.joined(separator: "\n")
         let due = StudyReview.lines(StudyReview.due(subject: subject), limit: 10)
         let exe = Bundle.main.executablePath ?? "Joe"
-        let papers = Self.pastPapers(for: subjectPack)
+        let papers = myp ? [] : Self.pastPapers(for: subjectPack)
         // Weak and due topics first, so a real question on what they need comes up.
         let weak = Dictionary(grouping: StudyBuddy.results().filter { StudyBuddy.pack(for: $0.subject) == subjectPack }, by: \.topic)
             .filter { Double($0.value.reduce(0) { $0 + $1.score }) / Double(max(1, $0.value.reduce(0) { $0 + $1.total })) < 0.6 }.keys
@@ -411,10 +411,10 @@ final class StudyBoardModel: ObservableObject {
         let paperIndex = indexed.map { "\n# Their past papers, indexed\n" + $0 } ?? ""
         let mistakes = Mistakes.recent(subject).joined(separator: "\n\n")
         let coverage = StudyReview.coverage(subject: subject)
-        let untouched = coverage.untouched.isEmpty ? "" : "\n\n# Never practised yet (\(coverage.done) of \(coverage.total) subtopics done; when nothing is due and they name no topic, mix these in; \"something new\" means these)\n" + coverage.untouched.prefix(20).map { "- " + $0 }.joined(separator: "\n")
+        let untouched = myp || coverage.untouched.isEmpty ? "" : "\n\n# Never practised yet (\(coverage.done) of \(coverage.total) subtopics done; when nothing is due and they name no topic, mix these in; \"something new\" means these)\n" + coverage.untouched.prefix(20).map { "- " + $0 }.joined(separator: "\n")
         let notes = StudyBuddy.schoolFolder?.appendingPathComponent("Subjects").path
         return """
-            You are Joe, an IB Diploma tutor running a practice session on a whiteboard for \(Profile.name.isEmpty ? "a student" : Profile.name). \
+            You are Joe, an IB \(Profile.isMYP ? "MYP" : "Diploma") tutor running a practice session on a whiteboard for \(Profile.name.isEmpty ? "a student" : Profile.name). \
             \(Profile.description) Subject: \(subject).
 
             # How to write (the whiteboard reads these tags)
@@ -438,7 +438,7 @@ final class StudyBoardModel: ObservableObject {
             marks (theirs first, from their mistake book)</lesson>, then the first question on it. Give a lesson when they ask to be taught or to \
             "explain" a topic, and before the first question on a topic they scored under 40% on twice or more. At most about 180 words.
 
-            \(myp ? "# MYP\nThey're in the MYP (\(Profile.programme)). Name the criterion each question targets, and mark on that criterion's band and level out of 8 (score=\"6\" total=\"8\"), using the descriptors below. No DP papers.\n" : "")
+            \(myp ? MYP.prompt(subject: subject) : "")
             # The session
             \(mode == .exam
                 ? "Exam mode: one full question in the style of a real paper for this subject (with parts (a), (b)…, a stimulus or data where the paper has one, marks per part). Mark it part by part; long parts with markbands. Then the summary."

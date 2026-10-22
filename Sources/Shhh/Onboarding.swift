@@ -529,7 +529,14 @@ private struct SchoolStep: View {
 
     private static let programmes = ["IB Diploma, year 1 (DP1)", "IB Diploma, year 2 (DP2)", "IB MYP, years 1–3", "IB MYP, year 4 (MYP4)",
                                      "IB MYP, year 5 (MYP5)", "IB Career-related", "Other"]
-    private static let groups: [(name: String, symbol: String, subjects: [String])] = [
+    private var isMYP: Bool { programme.uppercased().contains("MYP") }
+    /// The DP's six groups, or the MYP's eight when they picked an MYP year.
+    private var groups: [(name: String, symbol: String, subjects: [String])] {
+        isMYP ? MYP.groups.map { ($0.name, $0.symbol, $0.subjects) } : Self.dpGroups
+    }
+    private var target: Int { isMYP ? 8 : 6 }
+
+    private static let dpGroups: [(name: String, symbol: String, subjects: [String])] = [
         ("Language & literature", "book", ["English A Lang & Lit", "English A Literature", "Chinese A Lang & Lit", "Chinese A Literature", "Literature & Performance"]),
         ("Language acquisition", "character.bubble", ["Chinese B", "English B", "Spanish B", "French B", "Mandarin ab initio", "Spanish ab initio", "French ab initio"]),
         ("Individuals & societies", "person.3", ["Economics", "Business Management", "Psychology", "History", "Geography", "Global Politics", "Digital Society", "Philosophy"]),
@@ -541,15 +548,15 @@ private struct SchoolStep: View {
     var body: some View {
         StepFrame(model: model, title: "Your school",
                   subtitle: subjects.isEmpty || CalendarFeed.links.isEmpty
-                      ? "So I know your classes, your deadlines and how each subject is assessed."
-                      : "I filled in your subjects from ManageBac. Fix anything I got wrong, and set HL or SL.") {
+                      ? (isMYP ? "So I know your classes, your deadlines and the criteria each subject is marked on." : "So I know your classes, your deadlines and how each subject is assessed.")
+                      : (isMYP ? "I filled in your subjects from ManageBac. Fix anything I got wrong." : "I filled in your subjects from ManageBac. Fix anything I got wrong, and set HL or SL.")) {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(spacing: 12) {
                     field("School", "Your school’s name", $school)
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Programme").font(.system(size: 12, weight: .medium)).foregroundStyle(Tint.soft)
                         Menu {
-                            ForEach(Self.programmes, id: \.self) { option in Button(option) { programme = option } }
+                            ForEach(Self.programmes, id: \.self) { option in Button(option) { programme = option; group = 0 } }
                         } label: {
                             HStack {
                                 Text(programme.isEmpty ? "Choose" : programme).font(.system(size: 14)).lineLimit(1)
@@ -563,17 +570,17 @@ private struct SchoolStep: View {
                         .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
                     }
                     .frame(width: 240)
-                    field("A project of yours (optional)", "A business, club…", $project).frame(width: 220)
+                    field(isMYP ? "Personal Project or a project of yours" : "A project of yours (optional)", isMYP ? "Your Personal Project topic, a club…" : "A business, club…", $project).frame(width: 220)
                 }
                 HStack(alignment: .top, spacing: 14) {
                     // The six groups.
                     VStack(spacing: 4) {
-                        ForEach(Self.groups.indices, id: \.self) { index in
-                            let count = Self.groups[index].subjects.filter { level(of: $0) != nil }.count
+                        ForEach(groups.indices, id: \.self) { index in
+                            let count = groups[index].subjects.filter { level(of: $0) != nil }.count
                             Button { withAnimation(.easeOut(duration: 0.2)) { group = index } } label: {
                                 HStack(spacing: 9) {
-                                    Image(systemName: Self.groups[index].symbol).frame(width: 18)
-                                    Text(Self.groups[index].name).font(.system(size: 13, weight: group == index ? .semibold : .regular)).lineLimit(1)
+                                    Image(systemName: groups[index].symbol).frame(width: 18)
+                                    Text(groups[index].name).font(.system(size: 13, weight: group == index ? .semibold : .regular)).lineLimit(1)
                                     Spacer(minLength: 4)
                                     if count > 0 { Circle().fill(Tint.accent).frame(width: 7, height: 7) }
                                 }
@@ -589,7 +596,7 @@ private struct SchoolStep: View {
                     // That group's subjects.
                     VStack(alignment: .leading, spacing: 8) {
                         LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                            ForEach(Self.groups[group].subjects, id: \.self) { subject in
+                            ForEach(groups[group].subjects, id: \.self) { subject in
                                 let picked = level(of: subject) != nil
                                 Button { withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) { toggle(subject) } } label: {
                                     HStack(spacing: 6) {
@@ -617,8 +624,8 @@ private struct SchoolStep: View {
                         HStack {
                             Text("Your subjects").font(.system(size: 13, weight: .semibold))
                             Spacer()
-                            Text("\(list.count) of 6 · \(list.filter { $0.1 == "HL" }.count) HL")
-                                .font(.system(size: 11.5).monospacedDigit()).foregroundStyle(list.count == 6 ? .green : Tint.soft)
+                            Text(isMYP ? "\(list.count) of \(target)" : "\(list.count) of 6 · \(list.filter { $0.1 == "HL" }.count) HL")
+                                .font(.system(size: 11.5).monospacedDigit()).foregroundStyle(list.count == target ? .green : Tint.soft)
                         }
                         if list.isEmpty {
                             Text("Pick from the groups on the left.").font(.system(size: 12.5)).foregroundStyle(Tint.soft).padding(.top, 6)
@@ -627,7 +634,8 @@ private struct SchoolStep: View {
                             HStack(spacing: 6) {
                                 Text(subject).font(.system(size: 12.5)).lineLimit(1)
                                 Spacer(minLength: 4)
-                                HStack(spacing: 0) {
+                                // The MYP has no HL or SL.
+                                if !isMYP { HStack(spacing: 0) {
                                     ForEach(["SL", "HL"], id: \.self) { option in
                                         Button { setLevel(subject, option) } label: {
                                             Text(option).font(.system(size: 10.5, weight: .bold))
@@ -639,7 +647,7 @@ private struct SchoolStep: View {
                                     }
                                 }
                                 .padding(2)
-                                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+                                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 7)) }
                                 Button { withAnimation { toggle(subject) } } label: { Image(systemName: "xmark").font(.system(size: 9, weight: .bold)) }
                                     .buttonStyle(.plain).foregroundStyle(Tint.soft)
                             }
@@ -680,7 +688,7 @@ private struct SchoolStep: View {
     }
 
     private func save(_ list: [(String, String)]) {
-        subjects = list.map { "\($0.0) \($0.1)" }.joined(separator: ", ")
+        subjects = list.map { isMYP ? $0.0 : "\($0.0) \($0.1)" }.joined(separator: ", ")
     }
 
     private func level(of subject: String) -> String? {

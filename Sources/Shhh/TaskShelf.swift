@@ -41,6 +41,11 @@ final class AssistantTask {
     var startedAt = Date()
     /// Asked to work in the background ("… in the background"): off the card as soon as it starts.
     var background = false
+    /// Asked out loud: Joe says what he's doing while he works ("Opening Gmail."), and what he
+    /// has said so far this request, and when he last spoke.
+    var spoken = false
+    var narrated: [String] = []
+    var narratedAt: Date?
 
     /// A new step, or a vaguer placeholder ("Running a command…") made specific.
     func addStep(_ text: String) {

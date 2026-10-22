@@ -78,19 +78,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let pen = ScreenPen()
 
     /// Silence while Claude works feels like nothing's happening: after 2.5 s with no answer yet, Joe
-    /// says what he's doing ("Checking your calendar.") or just "One sec.", once.
+    /// says what he's doing ("Checking your calendar.") or just "One sec.", once. Later steps are
+    /// said by `narrate`.
     private func acknowledgeIfSlow(_ task: AssistantTask) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, task === self.focused, task.reply.isEmpty, !task.isDone, !task.background,
                       SpeechOutput.engine != .off, !self.speech.isSpeaking, self.state == .idle else { return }
-                let status = (task.status ?? "").replacingOccurrences(of: "…", with: "")
-                let line = status.range(of: #"^(Checking|Reading|Searching|Looking|Opening|Finding)\b"#, options: .regularExpression) != nil
-                    ? status + "." : "One sec."
-                self.speech.update(line)
-                self.speech.finish()
+                let line = SpeechOutput.spokenStatus(task.status ?? "") ?? "One sec."
+                guard !task.narrated.contains(line) else { return }
+                task.narrated.append(line)
+                task.narratedAt = Date()
+                self.speech.announce(line)
             }
         }
+    }
+
+    /// While a spoken request works (Chrome, Gmail, a routine), Joe says what he's doing as he goes
+    /// ("Opening mail.google.com.", "Writing a draft."), so it never feels like he's gone quiet:
+    /// a new step at most every 5 s, never the same line twice, up to 6 a request, and only between
+    /// sentences of the reply, never over them.
+    private func narrate(_ status: String, for task: AssistantTask) {
+        guard task.spoken, task === focused, !task.background, !task.isDone, SpeechOutput.engine != .off,
+              state == .idle, !speech.isSpeaking, task.narrated.count < 6,
+              Date().timeIntervalSince(task.narratedAt ?? .distantPast) >= 5,
+              Date().timeIntervalSince(task.startedAt) >= 1,
+              let line = SpeechOutput.spokenStatus(status), !task.narrated.contains(line) else { return }
+        task.narrated.append(line)
+        task.narratedAt = Date()
+        speech.announce(line)
     }
 
     /// macOS keeps a compiled copy of each Neural Engine model per build of Joe, and never clears the
@@ -863,6 +879,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .status(let status):
             task.status = status
             if let status { task.addStep(status) }
+            if let status { narrate(status, for: task) }
         case .plan(let plan): task.plan = plan
         case .answer(let text): task.reply = text
         case .approval(let approval): task.approval = approval
@@ -1684,6 +1701,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if Self.wantsBackground(text) { task.background = true }
                 task.assistant.ask(request, screenshot: image)
                 asked = true
+                task.spoken = true
+                task.narrated = []
+                task.narratedAt = nil
                 acknowledgeIfSlow(task)
                 return
             }

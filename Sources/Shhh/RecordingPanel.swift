@@ -137,6 +137,7 @@ private struct PillView: View {
                 NotchShape(top: NotchShape.shoulder, bottom: radius)
                     .fill(Color.black)
                     .frame(width: model.open ? full : notchWidth)
+                    .padding(.bottom, model.open ? 0 : NotchShape.tuck)
                 HStack(spacing: 0) {
                     JoeMark()
                         .frame(width: RecordingPanel.ear)

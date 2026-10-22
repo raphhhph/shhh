@@ -138,7 +138,7 @@ final class NotchOverview {
         guard let panel else { return }
         self.panel = nil
         model.isOpen = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             // Unless it was opened again meanwhile (a new panel then shows the model).
             if self?.panel !== panel { panel.orderOut(nil) }
         }
@@ -209,8 +209,8 @@ private struct OverviewView: View {
         GeometryReader { space in
             let open = model.isOpen
             let shape = NotchShape(top: NotchShape.shoulder, bottom: open ? 26 : min(10, notchHeight / 3))
-            let width = open ? space.size.width : notchWidth + 2 * NotchShape.shoulder
-            let height = open ? space.size.height : notchHeight
+            let width = open ? space.size.width : notchWidth
+            let height = open ? space.size.height : notchHeight - NotchShape.tuck // gone behind the camera
             VStack(spacing: 0) {
                 Color.clear.frame(height: notchHeight) // the notch itself
                 HStack(alignment: .top, spacing: 10) {

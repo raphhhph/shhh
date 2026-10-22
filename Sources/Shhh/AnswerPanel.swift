@@ -163,7 +163,7 @@ final class AnswerPanel {
             model.islandOpen = false // back into the notch, then gone
             let work = DispatchWorkItem { panel?.orderOut(nil) }
             closeWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
             return
         }
         NSAnimationContext.runAnimationGroup({ $0.duration = 0.12; panel?.animator().alphaValue = 0 }) {
@@ -897,7 +897,9 @@ private struct Island<Band: View, PeekLine: View, Content: View>: View {
             let radius: CGFloat = !open ? min(10, notch.height / 3) : expanded ? 30 : peek ? 18 : 13
             // Shoulders curving into the screen's top edge, like the iPhone's notch.
             let shape = NotchShape(top: NotchShape.shoulder, bottom: radius)
-            let shapeHeight = max(shown, notch.height)
+            // Closing: straight to tucked in, in the same pass as the width, so the middle doesn't trail
+            // the edges (`shown` only catches up a pass later).
+            let shapeHeight = open ? max(shown, notch.height) : notch.height - NotchShape.tuck
             let solid = min(1, (notch.height + 2) / max(shapeHeight, 1)) // where the notch ends
             content
                 .frame(width: AnswerPanel.width, height: space.size.height, alignment: .top)
@@ -948,7 +950,7 @@ private struct Island<Band: View, PeekLine: View, Content: View>: View {
                 .animation(listening ? nil : expanded ? Self.opening : Self.closing, value: expanded)
                 .frame(width: space.size.width, height: space.size.height, alignment: .top)
         }
-        .onChange(of: open && (expanded || peek) ? height : notch.height, initial: true) { _, target in
+        .onChange(of: !open ? notch.height - NotchShape.tuck : expanded || peek ? height : notch.height, initial: true) { _, target in
             let dropping = shown <= notch.height + 1
             let tucking = target <= notch.height + 1
             if listening { shown = target; return } // folding for a follow-up: at once

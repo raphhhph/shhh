@@ -477,7 +477,7 @@ private struct DashboardView: View {
                 if !compact { Text("Joe").font(.system(size: 18, weight: .bold, design: Look.titleDesign)) }
             }
             .padding(.horizontal, compact ? 0 : 10)
-            .padding(.top, 46)
+            .padding(.top, 22) // just under the window buttons
             .padding(.bottom, 16)
             ForEach(Self.groups.indices, id: \.self) { index in
                 let group = Self.groups[index]
@@ -625,12 +625,11 @@ private struct HomePage: View {
             .background(Look.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Look.line))
             .shadow(color: .black.opacity(0.04), radius: 8, y: 2)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(suggestions, id: \.self) { suggestion in
-                        Button { model.actions.ask(suggestion) } label: { Text(suggestion) }
-                            .buttonStyle(ChipButton())
-                    }
+            // Wrapping onto a second line rather than scrolling, so none is cut off at the edge.
+            ChipFlow(spacing: 8) {
+                ForEach(suggestions, id: \.self) { suggestion in
+                    Button { model.actions.ask(suggestion) } label: { Text(suggestion) }
+                        .buttonStyle(ChipButton())
                 }
             }
         }
@@ -640,7 +639,7 @@ private struct HomePage: View {
                 NowNext(slots: model.timeline, now: context.date)
             }
             if !narrow, !model.alarms.isEmpty || model.nowPlaying != nil {
-                status.frame(width: 320)
+                status.frame(width: 300)
             }
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -770,6 +769,45 @@ private struct HomePage: View {
     }
 }
 
+/// Lays its views out left to right, starting a new line when one doesn't fit.
+private struct ChipFlow: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = rows(width: proposal.width ?? .infinity, subviews: subviews)
+        let height = rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(rows.count - 1, 0))
+        return CGSize(width: proposal.width ?? rows.map(\.width).max() ?? 0, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in rows(width: bounds.width, subviews: subviews) {
+            var x = bounds.minX
+            for index in row.indices {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += row.height + spacing
+        }
+    }
+
+    private func rows(width: CGFloat, subviews: Subviews) -> [(indices: [Int], width: CGFloat, height: CGFloat)] {
+        var rows: [(indices: [Int], width: CGFloat, height: CGFloat)] = []
+        for (index, subview) in subviews.enumerated() {
+            let size = subview.sizeThatFits(.unspecified)
+            if let last = rows.last, last.width + spacing + size.width <= width {
+                rows[rows.count - 1].indices.append(index)
+                rows[rows.count - 1].width += spacing + size.width
+                rows[rows.count - 1].height = max(last.height, size.height)
+            } else {
+                rows.append(([index], size.width, size.height))
+            }
+        }
+        return rows
+    }
+}
+
 /// What's on now and what's next, big, with a countdown.
 private struct NowNext: View {
     let slots: [Daybook.Slot]
@@ -804,17 +842,22 @@ private struct NowNext: View {
         return HStack(spacing: 12) {
             RoundedRectangle(cornerRadius: 2.5).fill(color).frame(width: 5)
             VStack(alignment: .leading, spacing: 3) {
-                Text(label.uppercased()).font(.system(size: 10.5, weight: .bold)).foregroundStyle(color)
-                Text(slot.title).font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                // The countdown sits up with the label, so the class name gets the tile's full width.
+                HStack(spacing: 8) {
+                    Text(label.uppercased()).font(.system(size: 10.5, weight: .bold)).foregroundStyle(color)
+                    Spacer(minLength: 4)
+                    Text(countdown).font(.system(size: 11.5, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(color)
+                        .padding(.horizontal, 8).frame(height: 20)
+                        .background(color.opacity(0.12), in: Capsule())
+                }
+                Text(slot.title).font(.system(size: 17, weight: .semibold)).lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text([slot.start.formatted(date: .omitted, time: .shortened) + (slot.end.map { "–" + $0.formatted(date: .omitted, time: .shortened) } ?? ""), slot.detail]
                     .filter { !$0.isEmpty }.joined(separator: " · "))
-                    .font(.system(size: 12.5)).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.system(size: 12.5)).foregroundStyle(.secondary).lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer(minLength: 6)
-            Text(countdown).font(.system(size: 12.5, weight: .semibold).monospacedDigit())
-                .foregroundStyle(color)
-                .padding(.horizontal, 10).frame(height: 26)
-                .background(color.opacity(0.12), in: Capsule())
         }
         .padding(14)
         .frame(maxWidth: .infinity, minHeight: 78, maxHeight: .infinity, alignment: .leading)
@@ -1048,7 +1091,7 @@ private struct TodayTimeline: View {
         return VStack(alignment: .leading, spacing: 1) {
             if width > 22 {
                 Text(Self.short(slot.title, fitting: width - 10)).font(.system(size: 11, weight: .semibold)).lineLimit(1)
-                    .minimumScaleFactor(0.85)
+                    .minimumScaleFactor(0.7) // shrinks a little before it cuts a word ("Busines")
             }
             if width > 44, !slot.detail.isEmpty {
                 Text(slot.detail).font(.system(size: 9.5, weight: .medium)).opacity(0.8).lineLimit(1)
@@ -1096,7 +1139,7 @@ private struct TodayTimeline: View {
     /// fits, so a short class reads "Adv" rather than "A…". About 7.5 pt a letter at this size, to be safe.
     private static func short(_ title: String, fitting width: CGFloat) -> String {
         let word = title.count <= 7 ? title : String(title.split(separator: " ").first ?? Substring(title))
-        return String(word.prefix(max(1, Int(width / 7.5))))
+        return String(word.prefix(max(1, Int(width / 5)))) // about the narrowest a letter gets at 0.7 scale
     }
 
     private static func times(_ slot: Daybook.Slot) -> String {

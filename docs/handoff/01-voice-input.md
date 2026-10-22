@@ -42,6 +42,11 @@ Goal: a student talks and gets the right words with nothing to set up.
 - Looked at and skipped: names from the timetable (it holds subjects and rooms, not teachers); names from Contacts (a new permission prompt, which goes against "nothing to set up").
 - Next: add the student's teachers' and classmates' names from the timetable / ManageBac feed to the dictionary automatically (needs `08-school-data-calendar`); measure the ManageBac fix with `--transcribe` on recordings of "ManageBac".
 
+## Hey Joe and Apple's speech service (22 Oct)
+- Raph's Activity Monitor showed `com.apple.SpeechRecognitionCore.speechrecognitiond` at **25 GB**. In Joe, only `WakeWord` and `EndListener` use Apple's recognition (SFSpeechRecognizer, on-device). `WakeWord` ran a recognition session all the time while Joe was idle: it restarted every 50 s, and again within a second whenever a session ended, including on errors. The daemon kept memory from each session.
+- Now `WakeWord` keeps only the microphone tap open and watches the level (about -40 dBFS). A session starts on sound, with 1.5 s of pre-roll so "Hey" isn't lost, and ends after 3 s of quiet or 30 s. A session that fails within 5 s backs off 5 s, 10 s, 20 s … up to 5 min. A silent room means no recognition at all.
+- Not compiled yet. Check it on the Mac: turn on Hey Joe, then watch speechrecognitiond's memory over an hour (`ps -o rss= -p $(pgrep -f speechrecognitiond)`). Quitting the daemon (or logging out) frees the 25 GB that's already used. macOS restarts it on demand.
+
 ## Morning status (22 Oct, after the overnight rounds)
 - Final nightly ba9e373 (all of PR #2): 5 clean launches with no new crash reports, so the Parakeet cleanup fix held. `--dictation-test`: 25.3% word errors heard, 2.3% after Joe's fixes, line breaks 10 of 10.
 - Still wrong: "essay" heard as "SA" (line 1), and "tonight" heard as "To" (line 4). Both are SenseVoice on a machine voice. Next, try them with a real voice, and compare the encoder on `.cpuOnly` against the GPU for accuracy (stutters and dropped words).

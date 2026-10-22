@@ -1163,26 +1163,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshResting()
     }
 
-    /// The notch band shows what Joe is doing once something carries on in the background or an
-    /// alarm is set, and its list has every task, the one on the card too, by its subject (or the
-    /// request, until there is one), and the alarms.
+    /// The notch band shows what Joe is doing once something carries on in the background, and its
+    /// list has every task, the one on the card too, by its subject (or the request, until there is one).
     private func refreshShelf() {
-        // Alarms and timers to come: the next time, or a timer's countdown.
-        let style = TaskShelf.alarmStyle
-        let shown = alarms.pending.filter { alarm in
-            style == "off" ? false : style == "soon" ? alarm.kind == .timer || alarm.fireAt.timeIntervalSinceNow < 3600 : true
-        }
-        let alarmItems = shown.map { alarm in
-            let seconds = Int(alarm.fireAt.timeIntervalSinceNow.rounded())
-            let label = alarm.kind == .alarm || seconds >= 3600 ? alarm.when
-                : String(format: "%d:%02d", max(0, seconds) / 60, max(0, seconds) % 60)
-            return TaskShelf.Item(id: alarm.id, question: "\(label) · \(alarm.title)", state: .alarm)
-        }
+        // Alarms stay out of the notch (Raph, Oct 2026): the hover overview's Next alarm has them.
         guard tasks.contains(where: { $0 !== focused }) else {
-            shelf.update(alarmItems)
+            shelf.update([])
             return
         }
-        shelf.update(alarmItems + tasks.map { task in
+        shelf.update(tasks.map { task in
             let state: TaskShelf.Item.State = task.approval != nil ? .needsOK
                 : task.error != nil ? .failed
                 : task.isWorking ? .working : .done

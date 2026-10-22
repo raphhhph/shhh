@@ -3043,7 +3043,6 @@ private struct SettingsPage: View {
         newLink = ""
         Task { await CalendarFeed.refreshLinks() }
     }
-    @AppStorage("alarmsAtNotch") private var alarmsAtNotch = "full"
 
     private static let tabs: [(id: String, title: String, symbol: String)] = [
         ("general", "General", "gearshape"),
@@ -3139,10 +3138,7 @@ private struct SettingsPage: View {
                             set: { overviewWidgets = $0.map(\.rawValue); NotchOverview.widgets = $0 }))
                     }
             }
-            row("Answers at the notch", "Answers drop down from the notch") { switchOn($notch) { model.actions.setNotch($0) } }
-            row("Alarms at the notch", "The next one's time in the notch band", last: true) {
-                Choice(options: [("full", "Time"), ("icon", "Icon only"), ("soon", "Last hour only"), ("off", "Hidden")], selection: $alarmsAtNotch)
-            }
+            row("Answers at the notch", "Answers drop down from the notch", last: true) { switchOn($notch) { model.actions.setNotch($0) } }
         }
         section("Joe", "power") {
             row("Quit Joe", "Dictation and the notch stop until you open Joe again", last: true) {

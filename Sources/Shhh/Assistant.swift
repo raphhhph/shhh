@@ -969,8 +969,11 @@ final class Session {
 
             - Notes the user takes in Joe's notepad are saved into the vault when it closes: lectures \
             in \(NoteSaver.folderPath(.lecture)), meetings in \(NoteSaver.folderPath(.meeting)), anything \
-            else in \(NoteSaver.folderPath(.notes)), named "<date> <title>". For a question about a \
-            lecture, class or meeting, look there.
+            else in \(NoteSaver.folderPath(.notes)), grouped in subfolders (a lecture's subject, a note's topic), \
+            named "<date> <title>". For a question about a lecture, class or meeting, look there.
+            - When they ask to open a notepad, a notebook or "a note" to type in, that's Joe's own notepad: run \
+            "\(Bundle.main.executablePath ?? "Joe")" --notepad "<their words>", say it's open, and nothing else. Don't open \
+            Obsidian or ask which note.
             """ : "")\(Daybook.instructions)
             """ } ?? ""
         let habits = vault == nil ? "" : """
@@ -1331,7 +1334,7 @@ struct ToolPolicy {
             return ["draft", "open"].contains(words[2]) ? Action(key: "message:draft", verdict: .allow, title: "Open a chat or draft a message")
                 : Action(key: "message:send:\(input["command"] as? String ?? "")", verdict: .ask, title: "Send a message")
         case "Bash" where Self.shellWords(input["command"] as? String ?? "").map({
-            $0.count >= 2 && $0[0] == Bundle.main.executablePath && ["--pdf-find", "--pdf-text", "--prereading", "--workspace", "--workspace-reset", "--spotify", "--alarm", "--slides", "--recap", "--plan", "--math-pdf", "--whatsapp", "--calendar-link"].contains($0[1]) }) == true:
+            $0.count >= 2 && $0[0] == Bundle.main.executablePath && ["--pdf-find", "--pdf-text", "--prereading", "--notepad", "--workspace", "--workspace-reset", "--spotify", "--alarm", "--slides", "--recap", "--plan", "--math-pdf", "--whatsapp", "--calendar-link"].contains($0[1]) }) == true:
             return Action(key: "shhh-tools", verdict: .allow, title: "Use Joe's tools")
         case "Bash" where FileCommands.judge(input["command"] as? String ?? "",
                                              cwd: vault ?? FileManager.default.temporaryDirectory) != nil:

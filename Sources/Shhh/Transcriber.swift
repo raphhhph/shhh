@@ -162,24 +162,19 @@ actor Transcriber {
         await takeModel()
         defer { releaseModel() }
         // English and Chinese: SenseVoice hears everything once it's loaded (Parakeet only covers the
-        // first seconds after launch). It takes up to ~100 s at a time, so longer audio goes in pieces.
-        if let chinese, manager == nil, samples.count >= 16_000 * 100 {
+        // first seconds after launch). It's made for short speech: past about half a minute it lost
+        // whole stretches of a long question (22 Oct), so anything over 25 s goes in pieces of at
+        // most 20 s, each cut where they paused.
+        if let chinese, manager == nil, samples.count > 16_000 * 25 {
             var parts: [String] = []
-            for start in stride(from: 0, to: samples.count, by: 16_000 * 90) {
-                let piece = Array(samples[start..<min(start + 16_000 * 90, samples.count)])
-                if let heard = try? await chinese.transcribeDetailed(audio: piece) { parts.append(heard.text) }
+            for piece in Self.pieces(samples) {
+                if let heard = try? await chinese.transcribeDetailed(audio: Self.blocked(piece)) {
+                    parts.append(heard.text.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
             }
-            return parts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            return Self.joined(parts)
         }
-        // Padded with silence to a whole number of 5-second blocks: on the GPU each new length of
-        // audio is prepared once (about a second), so a handful of lengths keeps it fast.
-        // At least half a second of it after the last word: speech that runs right up to the end
-        // lost its last word ("…to ManageBac tonight" came out "…to manage back To").
-        let block = 16_000 * 5
-        let tailed = samples + [Float](repeating: 0, count: 8_000)
-        let blocked = tailed + [Float](repeating: 0, count: (block - tailed.count % block) % block)
-        if let chinese, samples.count < 16_000 * 100,
-           let heard = try? await chinese.transcribeDetailed(audio: blocked) {
+        if let chinese, let heard = try? await chinese.transcribeDetailed(audio: Self.blocked(samples)) {
             let text = heard.text.trimmingCharacters(in: .whitespacesAndNewlines)
             // English and Chinese: SenseVoice hears both (Parakeet is unloaded once it's ready).
             if manager == nil || ["zh", "yue"].contains(heard.language ?? "") || SpeechOutput.isChinese(text) { return text }
@@ -191,6 +186,48 @@ actor Transcriber {
         var state = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
         let result = try await manager.transcribe(padded, decoderState: &state)
         return result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Padded with silence to a whole number of 5-second blocks: on the GPU each new length of
+    /// audio is prepared once (about a second), so a handful of lengths keeps it fast. At least half
+    /// a second of it comes after the last word.
+    private static func blocked(_ samples: [Float]) -> [Float] {
+        let block = 16_000 * 5
+        let tailed = samples + [Float](repeating: 0, count: 8_000)
+        return tailed + [Float](repeating: 0, count: (block - tailed.count % block) % block)
+    }
+
+    /// A long recording in pieces of at most 20 s, each cut at the quietest fifth of a second in its
+    /// last 5 s, so a word is rarely split.
+    static func pieces(_ samples: [Float]) -> [[Float]] {
+        let rate = 16_000, longest = 20 * rate, window = rate / 5
+        var result: [[Float]] = []
+        var start = 0
+        while samples.count - start > longest {
+            var cut = start + longest
+            var quietest = Float.greatestFiniteMagnitude
+            for at in stride(from: start + 15 * rate, to: start + longest - window, by: window / 2) {
+                var energy: Float = 0
+                for i in at..<(at + window) { energy += samples[i] * samples[i] }
+                if energy < quietest {
+                    quietest = energy
+                    cut = at + window / 2
+                }
+            }
+            result.append(Array(samples[start..<cut]))
+            start = cut
+        }
+        result.append(Array(samples[start...]))
+        return result
+    }
+
+    /// The pieces' text in one: a space between words, none next to Chinese.
+    private static func joined(_ parts: [String]) -> String {
+        parts.filter { !$0.isEmpty }.reduce("") { text, part in
+            guard let last = text.last, let first = part.first else { return text + part }
+            let chinese = SpeechOutput.isChinese(String(last)) || SpeechOutput.isChinese(String(first))
+            return text + (chinese ? "" : " ") + part
+        }
     }
 
     /// A file, through the same path as a recording (so the language choice applies).

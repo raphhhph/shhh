@@ -13,32 +13,37 @@ enum PromptPolish {
     }
 
     static func polish(_ said: String) async -> String {
-        guard let claude = Assistant.executable else { return said }
         let system = """
             Rewrite what the user dictated as a clear prompt for an AI assistant (ChatGPT, Claude, Cursor), in their \
             voice ("I", "my"). Keep every fact and request they gave; invent nothing. Structure: the goal in one line; \
             the context; constraints or requirements as a short list if there are several; the output format they \
             want. Plain text, no headings unless it's long, no preamble. Reply with the prompt only.
             """
+        return await haiku(system: system, said, timeout: 15) ?? said
+    }
+
+    /// A one-off Haiku call with no tools through the user's Claude Code: the reply, or nil if it
+    /// failed or took longer than `timeout` seconds.
+    static func haiku(system: String, _ input: String, timeout: Double) async -> String? {
+        guard let claude = Assistant.executable else { return nil }
         return await withCheckedContinuation { continuation in
             DispatchQueue.global().async {
                 let process = Process()
                 process.executableURL = claude
                 process.arguments = ["-p", "--model", Assistant.Model.haiku.rawValue, "--tools", "", "--strict-mcp-config",
-                                     "--no-session-persistence", "--system-prompt", system, said]
+                                     "--no-session-persistence", "--system-prompt", system, input]
                 process.environment = Session.environment()
                 let pipe = Pipe()
                 process.standardOutput = pipe
                 process.standardError = FileHandle.nullDevice
-                guard (try? process.run()) != nil else { continuation.resume(returning: said); return }
-                // Fifteen seconds at most: then the words as said.
+                guard (try? process.run()) != nil else { continuation.resume(returning: nil); return }
                 let timer = DispatchWorkItem { if process.isRunning { process.terminate() } }
-                DispatchQueue.global().asyncAfter(deadline: .now() + 15, execute: timer)
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timer)
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit()
                 timer.cancel()
-                let prompt = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                continuation.resume(returning: process.terminationStatus == 0 && !prompt.isEmpty ? prompt : said)
+                let reply = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                continuation.resume(returning: process.terminationStatus == 0 && !reply.isEmpty ? reply : nil)
             }
         }
     }

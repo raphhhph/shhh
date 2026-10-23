@@ -2643,6 +2643,7 @@ private struct SettingsPage: View {
     @AppStorage("wakeChallenge") private var wakeChallenge = true
     @AppStorage("reduceNoise") private var reduceNoise = true
     @AppStorage("liveCaption") private var liveWords = true
+    @AppStorage("smartFormatting") private var smartFormatting = true
     @AppStorage("notchOverview") private var overviewOn = true
     @State private var overviewWidgets = NotchOverview.widgets.map(\.rawValue)
     @AppStorage("chineseVoice") private var chineseVoice = "zf_001"
@@ -2797,6 +2798,7 @@ private struct SettingsPage: View {
                 Choice(options: [("", "Automatic")] + model.actions.microphones().map { ($0.uid, $0.name) }, selection: $microphone)
             }
             row("Live words", "Shows what you're saying under the pill as you talk") { switchOn($liveWords) }
+            row("Smart formatting", "Longer dictations come out with punctuation, paragraphs and lists, using Claude Haiku") { switchOn($smartFormatting) }
             row("Reduce background noise", "Takes out fans and chatter before your words are written, on this Mac") { switchOn($reduceNoise) }
             row("Languages", "What you speak to Joe in. English only stops it mishearing you as Russian", last: true) {
                 Choice(options: [("english", "English only"), ("chinese", "English + Chinese"), ("european", "25 European languages")],

@@ -1619,7 +1619,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 text = await PromptPolish.polish(said)
             } else {
                 // "new line", "new paragraph", "new bullet" said out loud become the real thing.
-                text = SpokenCommands.apply(style.apply(text), capitalize: style != .veryCasual)
+                text = SpokenCommands.apply(text, capitalize: style != .veryCasual)
+                // Long enough to organise: punctuation, paragraphs, lists (Smart formatting).
+                if DictationFormat.needsFormatting(text) {
+                    panel.showProcessing()
+                    text = await DictationFormat.format(text)
+                }
+                text = style.apply(text)
             }
             guard !text.isEmpty else { return }
             lastTranscript = text

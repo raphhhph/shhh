@@ -28,6 +28,34 @@ enum Daybook {
         }
     }
 
+    /// Routines with an "At 18:00 on Sundays." line run by themselves at that time: (name, minute of
+    /// the day). Days can be "every day", "weekdays", "weekends", "school days", or day names
+    /// ("Mondays and Thursdays"); none given means every day.
+    static func timedRoutines(on date: Date) -> [(name: String, minute: Int)] {
+        guard let url = routinesURL, let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        let lines = text.components(separatedBy: "\n")
+        let weekday = Calendar.current.component(.weekday, from: date) // 1 = Sunday
+        let names = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
+        return lines.indices.filter { lines[$0].hasPrefix("## ") }.compactMap { i in
+            let body = lines[(i + 1)...].prefix { !$0.hasPrefix("## ") }.prefix(4)
+            guard let line = body.first(where: { $0.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("at ") }),
+                  let match = line.range(of: #"(?i)^\s*at\s+(\d{1,2})[:.](\d{2})\b(.*)$"#, options: .regularExpression)
+            else { return nil }
+            let parts = String(line[match]).trimmingCharacters(in: .whitespaces).dropFirst(3)
+            let time = parts.prefix { $0.isNumber || $0 == ":" || $0 == "." }
+            let hm = time.split(whereSeparator: { $0 == ":" || $0 == "." }).compactMap { Int($0) }
+            guard hm.count == 2, hm[0] < 24, hm[1] < 60 else { return nil }
+            let days = parts.dropFirst(time.count).lowercased()
+            let runs: Bool
+            if days.contains("school") { runs = isSchoolDay(date) }
+            else if days.contains("weekday") { runs = (2...6).contains(weekday) }
+            else if days.contains("weekend") { runs = weekday == 1 || weekday == 7 }
+            else if names.contains(where: { days.contains($0) }) { runs = days.contains(names[weekday - 1]) }
+            else { runs = true }
+            return runs ? (String(lines[i].dropFirst(3)), hm[0] * 60 + hm[1]) : nil
+        }
+    }
+
     /// "Remember conversations": each request and the gist of its answer go in a monthly log.
     static var remembers: Bool {
         get { UserDefaults.standard.object(forKey: "rememberConversations") as? Bool ?? true }
@@ -571,6 +599,11 @@ enum Daybook {
                 work should also…", "instead, do…"), write it in that note without asking: a "## Name" heading, a \
                 "Say “…”." line with the phrases, then numbered steps, concrete enough to repeat exactly (apps, \
                 sites, workspaces, notes). Change only what they changed. Then confirm in one line.
+                - A routine can also run by itself at a time ("every Sunday at 6pm, plan my week", "at 7:15 on school \
+                days, tell me what to revise"): put an "At 18:00 on Sundays." line under its heading (24-hour time; \
+                days as every day, weekdays, weekends, school days, or day names), then the steps. Joe starts it at \
+                that time if they're at the Mac, or when they're next at it within two hours. When a request starts \
+                with "[Timed routine", just do its steps and report in a few lines.
                 - If they say a phrase that sounds like a routine but none matches, ask what it should do, and save it.
                 - Open apps with open -a "Name". Switch Vivaldi's workspace with "\(Bundle.main.executablePath ?? "Joe")" \
                 --workspace "<name>" (its workspaces: \(Workspace.names.joined(separator: ", "))).

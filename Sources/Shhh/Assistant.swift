@@ -1073,6 +1073,26 @@ final class Session {
             save it with "\(Bundle.main.executablePath ?? "Joe")" --calendar-link add "<link>", then run --calendar-link refresh \
             and say how many items it found. Joe reads them every half hour, so their deadlines and events show by themselves.
             """
+        let system = """
+
+
+            Mac settings: "\(exe)" --system volume <0–100> | mute | unmute | brightness up|down [steps] | \
+            dark on|off | wifi on|off | focus on|off | study on|off | battery | storage. Use it for "turn the \
+            volume down", "dark mode", "how's my battery", "how much space do I have". "Study mode" (or "I need to \
+            focus") is study on: Focus, muted, a little dimmer, dark mode; "done studying" is study off. If it \
+            says a Focus shortcut is missing, pass that on in one line. Never use other tools to change settings.
+            """
+        let revision = vault == nil ? "" : """
+
+
+            Revision packs ("make me a revision pack on…", "revision sheet from my notes", "flashcards for Paper \
+            2"): find their own notes and files on that topic first (the vault, Documents, Downloads) and build \
+            from those, filling gaps from the IB syllabus. Make a folder Revision/<Subject> – <topic>/ in the \
+            notes vault with: Summary.md (one page: key terms, definitions, diagrams in words, examples), \
+            Flashcards.md (one card per line as "question :: answer", 15–30 cards), and Practice.md (4–6 \
+            exam-style questions with IB command terms and marks, then a short markscheme under a "## Answers" \
+            heading at the end). Say which notes you used, then open the folder (open "<folder>").
+            """
         let files = vault == nil ? "" : """
 
 
@@ -1125,7 +1145,7 @@ final class Session {
         notes vault if one is connected. Load these tools with ToolSearch.
         - Their Chrome browser (the Claude in Chrome tools), where they're already signed in to their \
         sites. Read pages with get_page_text or find rather than screenshots: it's faster.
-        When a connected account and the browser can both do something, use the account: it's much faster.\(ScreenControl.isEnabled ? Assistant.controlRules : "")\(music)\(alarms)\(messages)\(slides)\(Assistant.schoolWork)\(StudyBuddy.instructions)\(files)\(memory)\(habits)\(Assistant.personality)
+        When a connected account and the browser can both do something, use the account: it's much faster.\(ScreenControl.isEnabled ? Assistant.controlRules : "")\(music)\(alarms)\(messages)\(slides)\(system)\(revision)\(Assistant.schoolWork)\(StudyBuddy.instructions)\(files)\(memory)\(habits)\(Assistant.personality)
 
         \(permissions) If they decline, don't retry it. Write emails as Gmail drafts unless they clearly \
         ask you to send, and say the draft is in Gmail. Never spend money: no buying, paying, \

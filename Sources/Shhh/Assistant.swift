@@ -1077,9 +1077,10 @@ final class Session {
 
 
             Mac settings: "\(exe)" --system volume <0–100> | mute | unmute | brightness up|down [steps] | \
-            dark on|off | wifi on|off | focus on|off | study on|off | battery | storage. Use it for "turn the \
+            dark on|off | wifi on|off | focus on|off | study on|off | downtime on|off | battery | storage. Use it for "turn the \
             volume down", "dark mode", "how's my battery", "how much space do I have". "Study mode" (or "I need to \
-            focus") is study on: Focus, muted, a little dimmer, dark mode; "done studying" is study off. If it \
+            focus") is study on: Focus, muted, a little dimmer, dark mode; "done studying" is study off. "Run downtime", "downtime" or "wind down" is downtime on \
+            (its shortcut or Focus, quiet, dim, dark, quits games and video apps); "end downtime" is downtime off. If it \
             says a Focus shortcut is missing, pass that on in one line. Never use other tools to change settings.
             """
         let revision = vault == nil ? "" : """

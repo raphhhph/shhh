@@ -11,6 +11,8 @@ import AppKit
 ///     Joe --system focus on|off           runs the user's "Joe Focus On/Off" shortcut
 ///     Joe --system dnd on|off             same as focus
 ///     Joe --system study on|off           focus, mute, a little dimmer, dark mode
+///     Joe --system downtime on|off        wind-down: "Joe Downtime On/Off" shortcut (or focus), quiet,
+///                                         dim, dark, and quits distracting apps
 ///     Joe --system battery | storage      a one-line status
 enum SystemSettings {
     static func run(_ args: [String]) -> String {
@@ -42,6 +44,16 @@ enum SystemSettings {
             if on { done.append(run(["brightness", "down", "2"])) }
             done.append(run(["dark", on ? "on" : "off"]))
             return (on ? "Study mode on: " : "Study mode off: ") + done.joined(separator: " · ")
+        case "downtime":
+            var done = [shortcut(on ? "Joe Downtime On" : "Joe Downtime Off") ?? focus(on)]
+            done.append(run([on ? "mute" : "unmute"]))
+            done.append(run(["brightness", on ? "down" : "up", "4"]))
+            done.append(run(["dark", on ? "on" : "off"]))
+            if on {
+                let quit = quitDistractions()
+                if !quit.isEmpty { done.append("closed " + quit.joined(separator: ", ")) }
+            }
+            return (on ? "Downtime on: " : "Downtime off: ") + done.joined(separator: " · ")
         case "battery":
             let text = shell("/usr/bin/pmset", ["-g", "batt"]) ?? ""
             let line = text.components(separatedBy: "\n").first { $0.contains("%") } ?? ""
@@ -55,7 +67,7 @@ enum SystemSettings {
             let gb = { (bytes: Int64) in String(format: "%.0f GB", Double(bytes) / 1e9) }
             return "\(gb(free)) free of \(gb(Int64(total)))"
         default:
-            return "Say it as: volume <0–100>, mute, unmute, brightness up|down, dark on|off, wifi on|off, focus on|off, study on|off, battery, storage."
+            return "Say it as: volume <0–100>, mute, unmute, brightness up|down, dark on|off, wifi on|off, focus on|off, study on|off, downtime on|off, battery, storage."
         }
     }
 
@@ -68,6 +80,24 @@ enum SystemSettings {
             return "Focus: make a shortcut called “\(name)” in Shortcuts (Set Focus → Do Not Disturb → \(on ? "On" : "Off")) and I'll use it."
         }
         return shell("/usr/bin/shortcuts", ["run", name]) != nil ? "Focus \(on ? "on" : "off")" : "Couldn't run “\(name)”."
+    }
+
+    /// Runs a shortcut if the user has one by that name; nil when there's none.
+    private static func shortcut(_ name: String) -> String? {
+        let list = shell("/usr/bin/shortcuts", ["list"]) ?? ""
+        guard list.components(separatedBy: "\n").contains(name) else { return nil }
+        return shell("/usr/bin/shortcuts", ["run", name]) != nil ? name : "Couldn't run “\(name)”."
+    }
+
+    /// Games, video and social apps, asked politely to quit (they can save first). Browsers and
+    /// anything for school stay open.
+    private static let distractions = ["Steam", "Discord", "Minecraft", "Roblox", "TikTok", "Netflix", "YouTube",
+                                       "Instagram", "Twitch", "Epic Games Launcher", "Battle.net", "League of Legends"]
+    private static func quitDistractions() -> [String] {
+        NSWorkspace.shared.runningApplications.compactMap { app in
+            guard let name = app.localizedName, distractions.contains(name), app.terminate() else { return nil }
+            return name
+        }
     }
 
     /// The brightness keys (144 up, 145 down), pressed through System Events.

@@ -123,11 +123,12 @@ enum ScreenCapture {
     }
 
     /// Whether a screen request needs the picture rather than the text: finding or pointing at
-    /// something, or anything visual. Text requests ("rewrite this", "summarize this page") are
-    /// cheaper and more exact as text (see `ScreenContext`).
+    /// something, anything visual, or the screen itself ("what's on my screen": never just the selected
+    /// word). Text requests ("rewrite this", "summarize this page") are cheaper and more exact as text
+    /// (see `ScreenContext`).
     static func wantsPicture(_ request: String) -> Bool {
         let pattern = #"\b(point (to|at|out|me)|show me|where('?s| is| are| do| can| should| would)?|which|click|press|tap|"#
-            + #"chart|graph|diagram|image|picture|photo|video|screenshot|looks?( like)?|looking at|layout|design|"#
+            + #"chart|graph|diagram|image|picture|photo|video|screens?|screenshot|écran|looks?( like)?|looking at|layout|design|"#
             + #"colou?rs?|icon|button|menu)\b"#
         return request.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
     }

@@ -25,6 +25,26 @@ enum ScreenContext {
 
     static var frontPID: pid_t? { NSWorkspace.shared.frontmostApplication?.processIdentifier }
 
+    /// "Always look at my screen" in Settings: every request goes with what's in front. On by default.
+    static var alwaysAware: Bool { UserDefaults.standard.object(forKey: "screenAware") as? Bool ?? true }
+
+    /// Apps whose windows are never sent along unasked: password managers and keychains.
+    private static let privateApps: Set = ["com.1password.1password", "com.agilebits.onepassword7", "com.bitwarden.desktop",
+                                            "com.apple.keychainaccess", "com.apple.Passwords", "com.lastpass.LastPass",
+                                            "com.dashlane.dashlanephonefinal", "com.keepassxc.keepassxc"]
+
+    static func isPrivate(_ app: NSRunningApplication) -> Bool {
+        privateApps.contains(app.bundleIdentifier ?? "")
+    }
+
+    /// The front window's title, quickly: tells a new page or document from the one already sent.
+    static func windowTitle(_ pid: pid_t) -> String {
+        let ax = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(ax, 0.2)
+        guard let window = element(ax, kAXFocusedWindowAttribute) else { return "" }
+        return value(window, kAXTitleAttribute) as? String ?? ""
+    }
+
     /// The selected text in the front app: asked for through Accessibility, or copied with ⌘C when
     /// the app doesn't say (browsers, Google Docs). The clipboard is put back afterwards.
     static func selection(limit: Int) async -> Text? {

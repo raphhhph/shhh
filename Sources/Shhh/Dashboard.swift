@@ -2688,6 +2688,7 @@ private struct SettingsPage: View {
     @AppStorage("rememberConversations") private var remember = true
     @AppStorage("saveNotesToVault") private var saveNotes = true
     @AppStorage("keepHistory") private var keepHistory = true
+    @AppStorage("screenAware") private var screenAware = true
     @AppStorage("speakBriefing") private var speakBriefing = true
     @AppStorage("userName") private var userName = ""
     @AppStorage("joeChattiness") private var chattiness = "normal"
@@ -2903,6 +2904,8 @@ private struct SettingsPage: View {
 
     @ViewBuilder private var privacy: some View {
         section("What Joe keeps", "tray.full") {
+            row("Look at my screen", "Every question goes with the window in front, so you don't have to say “screen”. "
+                    + "Never password managers") { switchOn($screenAware) }
             row("Keep history", "What you dictate and ask, on this Mac only") { switchOn($keepHistory) }
             row("Remember conversations", "A log in your vault, Joe's memory of past days") { switchOn($remember) }
             row("Save notes to Obsidian", "When the notepad closes") { switchOn($saveNotes) }

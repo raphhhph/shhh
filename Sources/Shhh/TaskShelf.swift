@@ -25,6 +25,9 @@ final class AssistantTask {
     var notepadTarget = false
     /// Whether the conversation is about the screen, so visual follow-ups get a fresh screenshot.
     var screenConversation = false
+    /// The window last sent along as background context (app and title), so a follow-up in the same
+    /// window doesn't send it again.
+    var ambientSeen: String?
     /// Finished, failed or waiting for an OK while in the background, and not looked at yet.
     var unseen = false
     /// Called once with the answer (or what went wrong) when the request finishes: for requests

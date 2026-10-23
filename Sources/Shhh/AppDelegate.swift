@@ -1230,7 +1230,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let explicit = ScreenCapture.isAbout(text)
         let aboutSelection = ScreenContext.refersToSelection(text)
         let pointing = ScreenCapture.pointsAtSomething(text)
-        guard explicit || aboutSelection || pointing || (task.screenConversation && picture) else { return (text, nil, nil) }
+        guard explicit || aboutSelection || pointing || (task.screenConversation && picture) else {
+            return await ambientContext(for: text, screen: screen, task: task)
+        }
         task.screenConversation = true
         // "Find his LinkedIn": just the area around the pointer, a sixth of a screenshot's tokens.
         if pointing, !explicit, !picture, !aboutSelection {
@@ -1273,6 +1275,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let pointer = screenshot.cursor.map { "\n\n(My mouse pointer is at \(Int($0.x)),\(Int($0.y)) in the screenshot.)" } ?? ""
         return (text + pointer, screenshot.jpeg, screenshot)
+    }
+
+    /// Always-on screen awareness: a request that doesn't name the screen still goes with what's in
+    /// front, so "what's the answer to question 3" or "is this due tomorrow" just work. The window's
+    /// text if it has some (cheap, a few hundred tokens), else the screenshot taken when the key went
+    /// down (no wait). Sent again in a conversation only when the window changes. Off in Settings,
+    /// never for password managers or while a password field is focused.
+    private func ambientContext(for text: String, screen: Task<ScreenCapture.Screenshot?, Never>?,
+                                task: AssistantTask) async -> (request: String, image: Data?, screenshot: ScreenCapture.Screenshot?) {
+        guard ScreenContext.alwaysAware, let app = NSWorkspace.shared.frontmostApplication,
+              app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+              !ScreenContext.isPrivate(app), !IsSecureEventInputEnabled() else { return (text, nil, nil) }
+        let note = "(That's what's in front of me right now, for context. Use it only if my request is about it; "
+            + "otherwise ignore it and don't mention it.)"
+        if let window = await ScreenContext.windowText(limit: 4_000) {
+            let seen = "\(window.text.pid) \(window.title)"
+            guard task.ambientSeen != seen else { return (text, nil, nil) }
+            task.ambientSeen = seen
+            return (text + """
+
+
+                <screen_context app="\(window.text.app)" title="\(window.title)">
+                \(window.text.text)
+                </screen_context>
+                \(note)
+                """, nil, nil)
+        }
+        // Browsers and apps that draw their own text: the picture, if the window is new to Claude.
+        let seen = "\(app.processIdentifier) \(ScreenContext.windowTitle(app.processIdentifier))"
+        guard task.ambientSeen != seen, let screenshot = await screen?.value else { return (text, nil, nil) }
+        task.ambientSeen = seen
+        return (text + "\n\n(Attached: my screen. " + String(note.dropFirst()), screenshot.jpeg, screenshot)
     }
 
     /// "Help me take notes", "open a notepad".

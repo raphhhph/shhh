@@ -19,7 +19,7 @@ enum UsageLog {
         /// "Morning briefing", "Background task", or "Request".
         var kind: String {
             if request.hasPrefix("[Morning briefing") { return "Morning brief" }
-            if request.hasPrefix("[Evening check") || request.hasPrefix("[Night shutdown") { return "Scheduled" }
+            if request.hasPrefix("[Evening check") || request.hasPrefix("[Night shutdown") || request.hasPrefix("[Timed routine") { return "Scheduled" }
             if request.hasPrefix("[From their iPhone") { return "iPhone" }
             if request.hasPrefix("[My lecture") || request.hasPrefix("[My meeting") { return "Notes" }
             return "Request"

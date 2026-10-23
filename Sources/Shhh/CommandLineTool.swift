@@ -168,6 +168,10 @@ enum CommandLineTool {
             }
             print(Spotify.run(command))
             exit(0)
+        case ("--system", 2...):
+            // Joe --system volume 40 | mute | dark on | wifi off | focus on | study on | battery …: Mac settings.
+            print(SystemSettings.run(Array(args.dropFirst())))
+            exit(0)
         case ("--workspace-reset", 1):
             print(Workspace.reset())
             exit(0)

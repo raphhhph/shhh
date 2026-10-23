@@ -335,6 +335,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.clearOldTasks()
                 self?.shutDownIfNight()
                 self?.eveningCheckIfTime()
+                self?.runTimedRoutines()
             }
         }
         RunLoop.main.add(clearing, forMode: .common)
@@ -1094,6 +1095,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         else { return }
         UserDefaults.standard.set(today, forKey: "lastEveningCheck")
         startInBackground("[Evening check, \(now.formatted(date: .omitted, time: .shortened)).] Run my Evening check routine.")
+    }
+
+    /// Routines with an "At …" line in Routines.md: each once a day, at its time or within two hours
+    /// after, while the user is at the Mac. Read once a minute, not every tick.
+    private var lastRoutineScan = Date.distantPast
+    private func runTimedRoutines() {
+        let now = Date()
+        guard now.timeIntervalSince(lastRoutineScan) >= 60, Assistant.executable != nil, Assistant.vaultURL != nil,
+              state == .idle,
+              CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!) < 300
+        else { return }
+        lastRoutineScan = now
+        let calendar = Calendar.current
+        let minutes = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
+        let today = now.formatted(.localDay)
+        for routine in Daybook.timedRoutines(on: now) where (routine.minute..<routine.minute + 120).contains(minutes) {
+            let key = "lastTimedRoutine." + routine.name
+            guard UserDefaults.standard.string(forKey: key) != today else { continue }
+            UserDefaults.standard.set(today, forKey: key)
+            startInBackground("[Timed routine, \(now.formatted(date: .omitted, time: .shortened)).] Run my \(routine.name) routine.")
+            toast.show("Running " + routine.name, symbol: "clock.arrow.circlepath", tint: .blue)
+            return // one at a time
+        }
     }
 
     @objc private func toggleNightShutdown() {

@@ -1168,6 +1168,10 @@ final class Session {
             to. Work out the exact time \
             yourself (from their calendar or Daybook if they say "before my econ class"). Use this, not Google \
             Calendar, unless they ask for a calendar event. They ring only while the Mac is awake (lid open). \
+            A Google Meet ("set up a Meet", "make a meeting link now"): create a Google Calendar event with \
+            addGoogleMeetUrl true (starting now for 30 minutes unless they say otherwise, attendees only if they \
+            name them) and give them its Meet link. Never open meet.new or meet.google.com in a browser: that \
+            page never finishes loading for a browser tool and the request hangs for minutes. \
             Wake-up challenge: an alarm with "wake" in its title (any time), or any alarm between 4:00 and 11:00, \
             has no Stop button: it stops only once they read a Bible verse or an IB fact aloud, or answer a \
             question from their subjects, holding right Option. Each alarm on the same morning gets a different \

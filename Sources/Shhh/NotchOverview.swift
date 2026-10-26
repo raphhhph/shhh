@@ -110,6 +110,7 @@ final class NotchOverview {
         model.isOpen = false
         panel.contentView = NSHostingView(rootView: OverviewView(model: model, notchHeight: notch.height, notchWidth: notch.width, music: { [weak self] command in
             self?.data.music(command)
+            self?.refreshMusic(after: 0.6) // the new track, and its cover
         }, ask: { [weak self] request in
             // The answer card takes over the notch.
             self?.hide()
@@ -131,6 +132,21 @@ final class NotchOverview {
         NotchSpace.pin(panel)
         self.panel = panel
         DispatchQueue.main.async { [weak self] in self?.model.isOpen = true } // grows out of the notch
+        if model.widgets.contains(.music) { refreshMusic() }
+    }
+
+    /// What Spotify is playing and its album cover, asked off the main thread so opening stays instant.
+    private func refreshMusic(after delay: Double = 0) {
+        Task.detached { [weak self] in
+            if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+            let playing = Spotify.current()
+            let artwork = playing == nil ? nil : Spotify.artwork()
+            await MainActor.run {
+                guard let model = self?.model else { return }
+                if model.music != playing { model.music = playing }
+                if model.artwork != artwork { model.artwork = artwork }
+            }
+        }
     }
 
     /// Shrinks back into the notch, then goes.
@@ -159,6 +175,8 @@ private final class OverviewModel: ObservableObject {
     @Published var tasks: [String] = []
     @Published var alarm: Alarm?
     @Published var music: String?
+    /// The playing song's album cover, shown on the Now playing tile.
+    @Published var artwork: URL?
     /// A timer running now (the focus timer's, or one asked for).
     @Published var timer: Alarm?
 
@@ -179,7 +197,7 @@ private final class OverviewModel: ObservableObject {
         today = data.tasks.prefix(5).map { ($0.line, $0.text, $0.done) }
         self.tasks = tasks
         alarm = data.alarms.first
-        music = data.nowPlaying
+        music = data.nowPlaying ?? music // the dashboard only checks while it's open; `refreshMusic` asks Spotify itself
         timer = data.alarms.filter { $0.kind == .timer && $0.fireAt > now }.min { $0.fireAt < $1.fireAt }
     }
 }
@@ -318,7 +336,20 @@ private struct OverviewView: View {
                     Text(alarm.title).font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
                 } else { empty("No alarm set") }
             case .music:
-                Text(model.music ?? "Nothing playing").font(.system(size: 12)).lineLimit(2)
+                HStack(spacing: 8) {
+                    if let artwork = model.artwork, model.music != nil {
+                        AsyncImage(url: artwork) { image in
+                            image.resizable().scaledToFill()
+                        } placeholder: {
+                            Color.white.opacity(0.08)
+                        }
+                        .frame(width: 40, height: 40)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .transition(.opacity)
+                    }
+                    Text(model.music ?? "Nothing playing").font(.system(size: 12)).lineLimit(2)
+                }
+                .animation(.easeOut(duration: 0.2), value: model.artwork)
                 HStack(spacing: 14) {
                     Button { music(.previous) } label: { Image(systemName: "backward.fill") }
                     Button { music(model.music == nil ? .resume : .pause) } label: { Image(systemName: model.music == nil ? "play.fill" : "pause.fill") }

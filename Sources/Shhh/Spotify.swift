@@ -139,6 +139,12 @@ enum Spotify {
         return artist.isEmpty ? name : "\(name) — \(artist)"
     }
 
+    /// The playing track's album cover (a Spotify CDN image), or nil when nothing's playing.
+    static func artwork() -> URL? {
+        guard let link = script("artwork url of current track"), link.hasPrefix("http") else { return nil }
+        return URL(string: link)
+    }
+
     /// Runs `tell application "Spotify" to …`, or nil if Spotify isn't open or refused.
     @discardableResult
     fileprivate static func script(_ line: String) -> String? {

@@ -109,7 +109,8 @@ final class Assistant {
         takes over their screen. Use it for web work with several steps that they don't need to watch: \
         finding an assignment or grade on ManageBac, reading a school portal, checking a site behind a \
         login. Open the page with navigate_page (or new_page), read it with take_snapshot, never \
-        screenshots unless the layout matters, and act on elements by their uid. If a page asks them to \
+        screenshots unless the layout matters, and act on elements by their uid. If opening a page \
+        times out, take_snapshot anyway: it's usually loaded enough. If a page asks them to \
         log in, stop and tell them to run "\(Bundle.main.executablePath ?? "Joe") --browser signin" once \
         (or run it for them): it opens that browser to sign in, then they quit it. Use their Chrome (the \
         Claude in Chrome tools) only when they want to see it happen or the task is in a tab they have open.
@@ -1300,7 +1301,16 @@ struct ToolPolicy {
         let looks: Set = ["navigate_page", "new_page", "list_pages", "select_page", "close_page", "take_snapshot",
                           "take_screenshot", "wait_for", "hover", "resize_page", "list_console_messages",
                           "get_console_message", "list_network_requests", "get_network_request"]
-        if looks.contains(tool) { return Action(key: "joe-browser:look", verdict: .allow, title: "Joe's browser") }
+        if looks.contains(tool) {
+            // Opening a page waits for it to settle, which Meet, Docs and Classroom never quite do, so
+            // it's capped at 15 seconds: by then the page is loaded enough to read.
+            var capped: [String: Any]? = nil
+            if ["navigate_page", "new_page"].contains(tool), (input["timeout"] as? Int ?? 0) <= 0 || (input["timeout"] as? Int ?? 0) > 15000 {
+                capped = input
+                capped?["timeout"] = 15000
+            }
+            return Action(key: "joe-browser:look", verdict: .allow, title: "Joe's browser", input: capped)
+        }
         let target: String
         let typing: Bool
         switch tool {

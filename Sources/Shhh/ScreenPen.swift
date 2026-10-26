@@ -97,7 +97,7 @@ private struct ScreenPenView: View {
                     Divider().frame(height: 18)
                     Button("Undo") { if !model.strokes.isEmpty { model.strokes.removeLast() } }
                     Button("Clear") { model.strokes = [] }
-                    Button { model.onAsk() } label: { Label("Ask Joe about this", systemImage: "sparkle") }
+                    Button { model.onAsk() } label: { Label("Ask \(Assistant.name) about this", systemImage: "sparkle") }
                         .disabled(model.strokes.isEmpty)
                     Button("Done") { model.onDone() }.keyboardShortcut(.cancelAction)
                 }

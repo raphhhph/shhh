@@ -309,7 +309,7 @@ final class StudyBoardModel: ObservableObject {
         let papers = Self.pastPapers(for: pack)
         let notes = StudyBuddy.schoolFolder?.appendingPathComponent("Subjects").path
         return """
-            You are Joe, an IB Diploma tutor running a practice session on a whiteboard for \(Profile.name.isEmpty ? "a student" : Profile.name). \
+            You are \(Assistant.name), an IB Diploma tutor running a practice session on a whiteboard for \(Profile.name.isEmpty ? "a student" : Profile.name). \
             \(Profile.description) Subject: \(subject).
 
             # How to write (the whiteboard reads these tags)

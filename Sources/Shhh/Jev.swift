@@ -25,7 +25,7 @@ enum Jev {
 
     /// nil when Jev is off, has no key, fails or is too slow.
     static func needsStrongModel(_ request: String) async -> Bool? {
-        guard Assistant.strongModelForWork else { return false }
+        guard await Assistant.strongModelForWork else { return false }
         guard let intent = await intent(of: request) else { return nil }
         return intent == .schoolwork || intent == .design
     }

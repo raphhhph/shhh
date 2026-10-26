@@ -143,6 +143,8 @@ final class StudyBoardModel: ObservableObject {
     /// The question they're on in exam mode: when it was set, and the time the real paper gives it.
     @Published private(set) var questionSince: Date?
     @Published private(set) var questionMinutes: Int?
+    /// Goes up with each card marked, so the next one comes in as a new card.
+    @Published private(set) var turn = 0
     /// What they said for this card (right ⌥), shown above the definition to compare.
     @Published private(set) var said: String?
 
@@ -219,6 +221,7 @@ final class StudyBoardModel: ObservableObject {
     func mark(gotIt: Bool) {
         guard !deck.isEmpty else { return }
         let card = deck.removeFirst()
+        turn += 1
         flipped = false
         said = nil
         if gotIt { known += 1 } else { deck.append(card); again.insert(card.id) }
@@ -590,30 +593,39 @@ private struct StudyBoardView: View {
             Spacer(minLength: 0)
             if let card = model.deck.first {
                 Text("\(model.known) of \(model.deckSize) known").font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary)
-                VStack(spacing: 14) {
-                    Text(card.term).font(.system(size: 24, weight: .bold)).multilineTextAlignment(.center)
-                    if model.flipped {
+                FlipCard(angle: model.flipped ? 180 : 0) {
+                    VStack(spacing: 14) {
+                        Text(card.term).font(.system(size: 26, weight: .bold)).multilineTextAlignment(.center)
+                        Text("Hold right ⌥ and say the definition, or think it, then click to flip")
+                            .font(.system(size: 12.5)).foregroundStyle(.tertiary).multilineTextAlignment(.center)
+                    }
+                    .cardFace(tint: accent)
+                } back: {
+                    VStack(spacing: 12) {
+                        Text(card.term).font(.system(size: 15, weight: .bold)).foregroundStyle(accent).multilineTextAlignment(.center)
                         if let said = model.said, !said.isEmpty {
                             Text("You said: \(said)").font(.system(size: 13)).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         }
                         Divider()
                         BoardText(card.definition, size: 16, spacing: 3)
-                    } else {
-                        Text("Hold right ⌥ and say the definition, or think it, then turn the card").font(.system(size: 12.5)).foregroundStyle(.tertiary)
                     }
+                    .cardFace(tint: accent, back: true)
                 }
-                .padding(28)
-                .frame(maxWidth: 560, minHeight: 240)
-                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(accent.opacity(0.35)))
+                // A springy turn, whether clicked, spaced or said; each new card slides in from the right.
+                .animation(.spring(response: 0.55, dampingFraction: 0.68), value: model.flipped)
+                .id(model.turn)
+                .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
+                                        removal: .move(edge: .leading).combined(with: .opacity)))
                 .contentShape(Rectangle())
-                .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { model.flipped.toggle() } }
+                .onTapGesture { model.flipped.toggle() }
                 HStack(spacing: 12) {
                     if model.flipped {
-                        Button("Again") { model.mark(gotIt: false) }.keyboardShortcut("1", modifiers: [])
-                        Button("Got it") { model.mark(gotIt: true) }.keyboardShortcut("2", modifiers: []).buttonStyle(.borderedProminent)
+                        Button("Again") { withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) { model.mark(gotIt: false) } }
+                            .keyboardShortcut("1", modifiers: [])
+                        Button("Got it") { withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) { model.mark(gotIt: true) } }
+                            .keyboardShortcut("2", modifiers: []).buttonStyle(.borderedProminent)
                     } else {
-                        Button("Turn over") { withAnimation(.easeOut(duration: 0.15)) { model.flipped = true } }
+                        Button("Turn over") { model.flipped = true }
                             .keyboardShortcut(.space, modifiers: [])
                     }
                 }
@@ -857,6 +869,44 @@ private struct StudyBoardView: View {
         return ratio >= 0.7 ? .green : ratio >= 0.45 ? .orange : .red
     }
 
+}
+
+// MARK: - Flip card
+
+/// A flashcard that turns over in 3D: the front until halfway, then the back (drawn mirrored so
+/// it reads the right way round), lifting a little mid-turn so it feels like a card in the hand.
+private struct FlipCard<Front: View, Back: View>: View, Animatable {
+    var angle: Double
+    @ViewBuilder var front: Front
+    @ViewBuilder var back: Back
+
+    var animatableData: Double {
+        get { angle }
+        set { angle = newValue }
+    }
+
+    var body: some View {
+        let showingBack = angle.truncatingRemainder(dividingBy: 360) > 90 && angle.truncatingRemainder(dividingBy: 360) < 270
+        ZStack {
+            front.opacity(showingBack ? 0 : 1)
+            back.rotation3DEffect(.degrees(180), axis: (x: 0, y: 1, z: 0)).opacity(showingBack ? 1 : 0)
+        }
+        .frame(maxHeight: 380) // both sides the same size
+        .scaleEffect(1 + 0.06 * sin(angle * .pi / 180))
+        .rotation3DEffect(.degrees(angle), axis: (x: 0, y: 1, z: 0), perspective: 0.4)
+        .shadow(color: .black.opacity(0.12 + 0.12 * sin(angle * .pi / 180)), radius: 10 + 10 * sin(angle * .pi / 180), y: 6)
+    }
+}
+
+private extension View {
+    /// One side of a flashcard: the same size front and back, so the turn doesn't jump.
+    func cardFace(tint: Color, back: Bool = false) -> some View {
+        padding(28)
+            .frame(maxWidth: 560, minHeight: 260, maxHeight: .infinity)
+            .background(back ? Color(nsColor: .textBackgroundColor) : Color(nsColor: .controlBackgroundColor),
+                        in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(tint.opacity(back ? 0.6 : 0.35), lineWidth: back ? 1.5 : 1))
+    }
 }
 
 // MARK: - Sketch pad

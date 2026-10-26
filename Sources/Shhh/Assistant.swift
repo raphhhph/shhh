@@ -80,7 +80,7 @@ final class Assistant {
 
     /// What the assistant is called ("Joe"): it introduces itself so, and the menu says so.
     static var name: String {
-        get { UserDefaults.standard.string(forKey: "assistantName").flatMap { $0.isEmpty ? nil : $0 } ?? "Assistant" }
+        get { UserDefaults.standard.string(forKey: "assistantName").flatMap { $0.isEmpty ? nil : $0 } ?? "Joe" }
         set { UserDefaults.standard.set(newValue, forKey: "assistantName") }
     }
 

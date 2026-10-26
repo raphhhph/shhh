@@ -271,19 +271,19 @@ private struct HelloStep: View {
         VStack(spacing: 22) {
             Spacer()
             Star(size: 92).frame(height: 230)
-            Typed(text: "Hi, I’m Joe.")
+            Typed(text: "Hi, I’m \(Assistant.name).")
             Text("I live at the top of your screen. Talk to me, and I’ll take care of the rest.")
                 .font(.system(size: 17)).foregroundStyle(Tint.soft)
                 .opacity(appeared ? 1 : 0)
                 .animation(.easeOut(duration: 0.8).delay(0.9), value: appeared)
             Spacer()
-            Primary(title: "Hi, Joe") { model.next() }
+            Primary(title: "Hi, \(Assistant.name)") { model.next() }
                 .opacity(appeared ? 1 : 0)
                 .animation(.easeOut(duration: 0.6).delay(1.4), value: appeared)
         }
         .onAppear {
             appeared = true
-            model.actions.greet("Hi, I’m Joe", "Hi! I'm Joe. Let's get you set up.")
+            model.actions.greet("Hi, I’m \(Assistant.name)", "Hi! I'm \(Assistant.name). Let's get you set up.")
         }
     }
 }
@@ -719,7 +719,7 @@ private struct ModelsStep: View {
     }
 
     var body: some View {
-        StepFrame(model: model, title: "Get Joe ready", subtitle: "Joe runs on this Mac: speech and his voice download once (about \(String(format: "%.1f", models.reduce(0) { $0 + $1.megabytes } / 1024)) GB). You can continue while they download.") {
+        StepFrame(model: model, title: "Get \(Assistant.name) ready", subtitle: "\(Assistant.name) runs on this Mac: speech and his voice download once (about \(String(format: "%.1f", models.reduce(0) { $0 + $1.megabytes } / 1024)) GB). You can continue while they download.") {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(models) { item in row(item) }
                 // Many IB students speak Chinese: both languages, in one sentence too. Adds two downloads.
@@ -813,7 +813,7 @@ private struct ModelsStep: View {
                     ProgressView(value: fraction).tint(isStalled(item) ? .orange : Tint.accent).frame(maxWidth: 380)
                     // A hung download can't be restarted from here; after a relaunch it resumes (FluidAudio's
                     // .partial files, kept by ModelGuard) and the welcome reopens on this page.
-                    Text(isStalled(item) ? "Stuck at \(Int(fraction * 100))%. Check your internet. If it still doesn't move, quit and reopen Joe: the download carries on from where it stopped, and you'll be back on this page."
+                    Text(isStalled(item) ? "Stuck at \(Int(fraction * 100))%. Check your internet. If it still doesn't move, quit and reopen \(Assistant.name): the download carries on from where it stopped, and you'll be back on this page."
                                          : "\(Int(fraction * 100))% of \(Int(item.megabytes)) MB")
                         .font(.system(size: 11.5)).foregroundStyle(isStalled(item) ? .orange : Tint.soft)
                 case .ready: Label("Ready", systemImage: "checkmark.circle.fill").font(.system(size: 12.5)).foregroundStyle(.green)
@@ -1356,7 +1356,7 @@ private struct DoneStep: View {
                 Text("Anything not ticked can be added any time in Settings.").font(.system(size: 12)).foregroundStyle(Tint.soft)
             }
             Spacer()
-            Primary(title: "Start using Joe") {
+            Primary(title: "Start using \(Assistant.name)") {
                 OnboardingModel.savedStep = .hello
                 model.actions.finished()
             }

@@ -123,7 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// "Quiz me on econ externalities", "test me on…": the study whiteboard, not the notch.
     private func openStudy(_ request: String) -> Bool {
         // "Quiz me on…", "let's start a quiz", "study session", "open (up) the whiteboard"…
-        let quiz = #"^\W*((hey|ok|okay|yo),?\s+)?(joe,?\s+)?(can you\s+)?(quiz|test) me\b|give me (a|an|one) (full )?exam(-style)? question|\b(start|do|begin|run)\b[^.?!]{0,12}\b(quiz|study session|revision session|practice session)\b|\b(open|pull|bring|start|show|get)\b[^.?!]{0,15}\bwhite ?board\b|^\W*(the )?white ?board\W*$"#
+        let quiz = #"^\W*((hey|ok|okay|yo),?\s+)?(joe,?\s+|"#+NSRegularExpression.escapedPattern(for: Assistant.name.lowercased())+#",?\s+)?(can you\s+)?(quiz|test) me\b|give me (a|an|one) (full )?exam(-style)? question|\b(start|do|begin|run)\b[^.?!]{0,12}\b(quiz|study session|revision session|practice session)\b|\b(open|pull|bring|start|show|get)\b[^.?!]{0,15}\bwhite ?board\b|^\W*(the )?white ?board\W*$"#
         guard request.range(of: quiz, options: [.regularExpression, .caseInsensitive]) != nil else { return false }
         // The subject: said now, or in the conversation on the card ("let's start a quiz on econ",
         // then "open the whiteboard"), or the one studied last.
@@ -258,7 +258,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         wake.onWake = { [weak self] in self?.startHandsFree() }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "sparkle", accessibilityDescription: "Joe")
+        statusItem.button?.image = NSImage(systemSymbolName: "sparkle", accessibilityDescription: Assistant.name)
         // Click: the dashboard. Right-click (or ⌃-click): the quick menu.
         quickMenu.autoenablesItems = false
         quickMenu.delegate = self
@@ -441,7 +441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item.target = to
             return item
         }
-        menu("Joe", [
+        menu(Assistant.name, [
             item("About Joe", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), "", to: NSApp),
             .separator(),
             item("Settings…", #selector(openSettings), ",", to: target),

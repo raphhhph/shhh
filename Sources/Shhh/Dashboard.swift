@@ -28,7 +28,7 @@ final class Dashboard: NSObject, NSWindowDelegate {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 720),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                                   backing: .buffered, defer: false)
-            window.title = "Joe"
+            window.title = "\(Assistant.name)"
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
             window.isMovableByWindowBackground = true
@@ -41,7 +41,7 @@ final class Dashboard: NSObject, NSWindowDelegate {
             self.window = window
         }
         if NSApp.activationPolicy() != .regular {
-            NSApp.setActivationPolicy(.regular) // a Dock icon, and "Joe" at the top left, while it's open
+            NSApp.setActivationPolicy(.regular) // a Dock icon, and "\(Assistant.name)" at the top left, while it's open
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in MainActor.assumeIsolated { self?.onModeChange() } }
         }
         // Come to the front even when asked from the menu bar or the notch (a background app's
@@ -460,14 +460,14 @@ private struct DashboardView: View {
     /// The pages in groups, like Linear's sidebar: your day, Joe's tools, and the app.
     private static let groups: [(title: String?, pages: [DashboardModel.Page])] = [
         (nil, [.home, .calendar, .study, .history]),
-        ("Joe", [.routines, .alarms, .notes, .dictionary, .music]),
+        ("\(Assistant.name)", [.routines, .alarms, .notes, .dictionary, .music]),
     ]
 
     private func sidebar(compact: Bool) -> some View {
         VStack(alignment: compact ? .center : .leading, spacing: 1) {
             HStack(spacing: 8) {
                 Image(systemName: "sparkle").font(.system(size: 16, weight: .bold)).foregroundStyle(Look.accent)
-                if !compact { Text("Joe").font(.system(size: 18, weight: .bold, design: Look.titleDesign)) }
+                if !compact { Text("\(Assistant.name)").font(.system(size: 18, weight: .bold, design: Look.titleDesign)) }
             }
             .padding(.horizontal, compact ? 0 : 10)
             .padding(.top, 46)
@@ -500,7 +500,7 @@ private struct DashboardView: View {
                         AppearanceToggle()
                     }
                     shortcut("Dictate", "right ⌘")
-                    shortcut("Ask Joe", "right ⌥")
+                    shortcut("Ask \(Assistant.name)", "right ⌥")
                     shortcut("Long request", "double-tap")
                 }
                 .padding(.horizontal, 10)
@@ -604,7 +604,7 @@ private struct HomePage: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
                 Image(systemName: "sparkle").font(.system(size: 15, weight: .semibold)).foregroundStyle(Look.accent)
-                TextField("Ask Joe anything, or tell him what to do…", text: $request)
+                TextField("Ask \(Assistant.name) anything, or tell him what to do…", text: $request)
                     .textFieldStyle(.plain)
                     .font(.system(size: 15))
                     .onSubmit(send)
@@ -645,7 +645,7 @@ private struct HomePage: View {
                     Text(focus).font(.system(size: 14, weight: .medium)).fixedSize(horizontal: false, vertical: true)
                 }
                 if model.tasks.isEmpty {
-                    Text("Today's Daybook isn't built yet. Joe makes it on your first wake each morning.").foregroundStyle(.secondary).font(.system(size: 13))
+                    Text("Today's Daybook isn't built yet. \(Assistant.name) makes it on your first wake each morning.").foregroundStyle(.secondary).font(.system(size: 13))
                     Button { model.actions.askInBackground("Build today's Daybook now (how: your instructions), then tell me my five things in one short line.") } label: {
                         Label("Build it now", systemImage: "wand.and.stars")
                     }
@@ -1153,7 +1153,7 @@ private struct HistoryPage: View {
             Picker("", selection: $kind) {
                 Text("All").tag("all")
                 Text("Dictation").tag("dictation")
-                Text("Joe").tag("ask")
+                Text("\(Assistant.name)").tag("ask")
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -1408,14 +1408,14 @@ private struct UsagePage: View {
                     }
                     .padding(.vertical, 3)
                 }
-                Text("Joe uses Haiku for most things and Opus only for designing and doing schoolwork.")
+                Text("\(Assistant.name) uses Haiku for most things and Opus only for designing and doing schoolwork.")
                     .font(.system(size: 11.5)).foregroundStyle(.tertiary).fixedSize(horizontal: false, vertical: true)
             }
             .frame(width: narrow ? nil : 300)
         }
         .fixedSize(horizontal: false, vertical: true)
         Card(title: "By kind, last 7 days", symbol: "square.grid.2x2") {
-            if week.isEmpty { Text("Nothing logged yet: costs appear after Joe's next request.").font(.system(size: 13)).foregroundStyle(.secondary) }
+            if week.isEmpty { Text("Nothing logged yet: costs appear after \(Assistant.name)'s next request.").font(.system(size: 13)).foregroundStyle(.secondary) }
             ForEach(Self.byKind(week), id: \.kind) { group in
                 HStack {
                     Text(group.kind).font(.system(size: 14, weight: .medium))
@@ -1591,7 +1591,7 @@ private struct CalendarPage: View {
             } label: { Label(syncing(now) ? "Syncing…" : "Sync", systemImage: "arrow.triangle.2.circlepath") }
                 .buttonStyle(PillButton(prominent: true))
                 .disabled(syncing(now))
-                .help("Joe fetches Google Calendar and ManageBac for the next 3 weeks")
+                .help("\(Assistant.name) fetches Google Calendar and ManageBac for the next 3 weeks")
         }
     }
 
@@ -1825,7 +1825,7 @@ private struct CalendarPage: View {
             if item.kind == .deadline || item.kind == .lesson {
                 Button {
                     model.actions.ask(item.kind == .deadline ? "Help me plan for \"\(item.title)\", due \(Self.when(item))." : "What should I prepare for \(item.title) on \(Self.when(item))?")
-                } label: { Label("Ask Joe about this", systemImage: "sparkle") }
+                } label: { Label("Ask \(Assistant.name) about this", systemImage: "sparkle") }
                     .buttonStyle(PillButton())
             }
         }
@@ -1870,7 +1870,7 @@ private struct StudyPage: View {
     }
 
     var body: some View {
-        PageTitle(title: "Study", subtitle: "Joe quizzes you on the IB syllabus, from your own notes and textbooks, and marks you like an examiner.")
+        PageTitle(title: "Study", subtitle: "\(Assistant.name) quizzes you on the IB syllabus, from your own notes and textbooks, and marks you like an examiner.")
         HStack(spacing: 10) {
             Image(systemName: "graduationcap.fill").font(.system(size: 15)).foregroundStyle(Look.accent)
             TextField("Quiz me on… (a subject, a topic, or “my weakest topic”)", text: $request)
@@ -1883,10 +1883,10 @@ private struct StudyPage: View {
         .frame(height: 50)
         .background(Look.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Look.line))
-        Text("Questions open on the whiteboard: type your answer, or hold right ⌥ and say it. Joe marks it like an examiner and gives a model answer.")
+        Text("Questions open on the whiteboard: type your answer, or hold right ⌥ and say it. \(Assistant.name) marks it like an examiner and gives a model answer.")
             .font(.system(size: 12)).foregroundStyle(.secondary).padding(.leading, 4)
         Card(title: "Real past papers", symbol: "doc.text.magnifyingglass") {
-            Text("IB papers are sold by the IB, so Joe can't ship them. Put the ones you have (from school, IB Questionbank or a teacher) in your notes under _files/School/<subject>/Past papers, with their markschemes, and Joe asks those real questions and marks with the real markscheme. Otherwise he writes questions in the exact style of each paper.")
+            Text("IB papers are sold by the IB, so \(Assistant.name) can't ship them. Put the ones you have (from school, IB Questionbank or a teacher) in your notes under _files/School/<subject>/Past papers, with their markschemes, and \(Assistant.name) asks those real questions and marks with the real markscheme. Otherwise he writes questions in the exact style of each paper.")
                 .font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
 
@@ -1950,7 +1950,7 @@ private struct StudyPage: View {
             }
             Group {
                 if mine.isEmpty {
-                    Text(pack == nil ? "No syllabus map yet: Joe uses your notes and what he knows." : "Not quizzed yet.")
+                    Text(pack == nil ? "No syllabus map yet: \(Assistant.name) uses your notes and what he knows." : "Not quizzed yet.")
                 } else {
                     Text("\(mine.count) answered" + (weakest.map { " · weakest: \($0.topic)" } ?? ""))
                 }
@@ -2065,7 +2065,7 @@ private struct RoutinesPage: View {
     @State private var idea = ""
 
     var body: some View {
-        PageTitle(title: "Routines", subtitle: "Say a routine's phrase and Joe runs it. Tell him to change one any time.")
+        PageTitle(title: "Routines", subtitle: "Say a routine's phrase and \(Assistant.name) runs it. Tell him to change one any time.")
         HStack(spacing: 10) {
             Image(systemName: "plus.circle.fill").font(.system(size: 16)).foregroundStyle(Look.accent)
             TextField("New routine: when I say “let's work on WellPrepped”, open my creator pipeline…", text: $idea)
@@ -2396,7 +2396,7 @@ private struct DictionaryPage: View {
     @State private var raw = ""
 
     var body: some View {
-        PageTitle(title: "Dictionary", subtitle: "Names and words Joe always spells your way, in dictation and when you ask him things.")
+        PageTitle(title: "Dictionary", subtitle: "Names and words \(Assistant.name) always spells your way, in dictation and when you ask him things.")
 
         HStack(spacing: 12) {
             count("\(entries.filter { $0.heard.isEmpty }.count)", "words and names", "textformat")
@@ -2406,15 +2406,15 @@ private struct DictionaryPage: View {
         Card(title: "Add", symbol: "plus") {
             HStack(spacing: 10) {
                 TextField("Spelled: Ammiel, ManageBac, WellPrepped", text: $word).textFieldStyle(.roundedBorder).onSubmit(add)
-                TextField("Joe hears (optional): manage back", text: $heardAs).textFieldStyle(.roundedBorder).onSubmit(add)
+                TextField("\(Assistant.name) hears (optional): manage back", text: $heardAs).textFieldStyle(.roundedBorder).onSubmit(add)
                 Button("Add", action: add).buttonStyle(PillButton(prominent: true)).disabled(word.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            Text("Leave “Joe hears” empty and he fixes anything that sounds close. Fill it in and he swaps those exact words every time.")
+            Text("Leave “\(Assistant.name) hears” empty and he fixes anything that sounds close. Fill it in and he swaps those exact words every time.")
                 .font(.system(size: 11.5)).foregroundStyle(.secondary)
         }
 
         Card(title: "Try it", symbol: "wand.and.stars") {
-            TextField("Type a sentence the way Joe might mishear it…", text: $trial).textFieldStyle(.roundedBorder)
+            TextField("Type a sentence the way \(Assistant.name) might mishear it…", text: $trial).textFieldStyle(.roundedBorder)
             if !trial.isEmpty {
                 let fixed = Vocabulary.apply(trial)
                 HStack(alignment: .top, spacing: 8) {
@@ -2444,7 +2444,7 @@ private struct DictionaryPage: View {
             } else {
                 let shown = entries.filter { search.isEmpty || $0.written.localizedCaseInsensitiveContains(search) || $0.heard.localizedCaseInsensitiveContains(search) }
                 if shown.isEmpty {
-                    Text(entries.isEmpty ? "No words yet. Add names Joe gets wrong: teachers, friends, products." : "Nothing matches.")
+                    Text(entries.isEmpty ? "No words yet. Add names \(Assistant.name) gets wrong: teachers, friends, products." : "Nothing matches.")
                         .font(.system(size: 13)).foregroundStyle(.secondary)
                 }
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: narrow ? 1 : 2), spacing: 10) {
@@ -2507,7 +2507,7 @@ private struct DictionaryPage: View {
     }
 
     private func save() {
-        if header.isEmpty { header = ["# Your dictionary (edited in Joe → Dictionary). A word per line; “heard -> Written” for an exact swap."] }
+        if header.isEmpty { header = ["# Your dictionary (edited in \(Assistant.name) → Dictionary). A word per line; “heard -> Written” for an exact swap."] }
         let text = (header + [""] + entries.map(\.line)).joined(separator: "\n") + "\n"
         try? FileManager.default.createDirectory(at: Vocabulary.url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? text.write(to: Vocabulary.url, atomically: true, encoding: .utf8)
@@ -2690,6 +2690,7 @@ private struct SettingsPage: View {
     @AppStorage("keepHistory") private var keepHistory = true
     @AppStorage("speakBriefing") private var speakBriefing = true
     @AppStorage("userName") private var userName = ""
+    @AppStorage("assistantName") private var assistantName = "Joe"
     @AppStorage("joeChattiness") private var chattiness = "normal"
     @AppStorage("joeTone") private var tone = "direct"
     @AppStorage("joeHype") private var hype = false
@@ -2757,7 +2758,7 @@ private struct SettingsPage: View {
 
     @ViewBuilder private var general: some View {
         section("You", "person.crop.circle") {
-            row("Your name", "What Joe calls you") {
+            row("Your name", "What \(Assistant.name) calls you") {
                 TextField("", text: $userName)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13, weight: .medium))
@@ -2769,8 +2770,8 @@ private struct SettingsPage: View {
             }
             profileRow("School", "Where you study", $profileSchool, "Your school")
             profileRow("Programme", "e.g. IB Diploma, year 1 (DP1)", $profileProgramme, "IB Diploma, year 1")
-            profileRow("Subjects", "Joe’s IB help and daily question use these", $profileSubjects, "Math AI HL, ESS SL…")
-            profileRow("Your project", "A business or club Joe should know about", $profileProject, "Optional")
+            profileRow("Subjects", "\(Assistant.name)’s IB help and daily question use these", $profileSubjects, "Math AI HL, ESS SL…")
+            profileRow("Your project", "A business or club \(Assistant.name) should know about", $profileProject, "Optional")
             row("Welcome tour", "See the first-launch tour again; your settings stay") {
                 Button("Replay") { model.actions.showOnboarding() }.buttonStyle(PillButton())
             }
@@ -2787,7 +2788,7 @@ private struct SettingsPage: View {
                     }
                 }
             }
-            row("Style", "How Joe looks: Classic, Midnight (navy and gold), Paper (serif, warm) or Ocean") {
+            row("Style", "How \(Assistant.name) looks: Classic, Midnight (navy and gold), Paper (serif, warm) or Ocean") {
                 Choice(options: Theme.allCases.map { ($0.rawValue, $0.title) }, selection: $theme)
                     .onChange(of: theme) { AppAppearance.apply() }
             }
@@ -2795,7 +2796,7 @@ private struct SettingsPage: View {
                 Choice(options: AppAppearance.allCases.map { ($0.rawValue, $0.title) }, selection: $appearance)
                     .onChange(of: appearance) { AppAppearance.apply() }
             }
-            row("Open Joe at login", last: true) {
+            row("Open \(Assistant.name) at login", last: true) {
                 switchOn($login) { on in
                     do { if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() } } catch { NSSound.beep() }
                 }
@@ -2810,7 +2811,7 @@ private struct SettingsPage: View {
             }
             row("Live words", "Shows what you're saying under the pill as you talk") { switchOn($liveWords) }
             row("Reduce background noise", "Takes out fans and chatter before your words are written, on this Mac") { switchOn($reduceNoise) }
-            row("Languages", "What you speak to Joe in. English only stops it mishearing you as Russian", last: true) {
+            row("Languages", "What you speak to \(Assistant.name) in. English only stops it mishearing you as Russian", last: true) {
                 Choice(options: [("english", "English only"), ("chinese", "English + Chinese"), ("european", "25 European languages")],
                        selection: $speechLanguages)
                     .onChange(of: speechLanguages) { model.actions.setSpeechLanguages(speechLanguages) }
@@ -2846,25 +2847,35 @@ private struct SettingsPage: View {
                 Choice(options: [("full", "Time"), ("icon", "Icon only"), ("soon", "Last hour only"), ("off", "Hidden")], selection: $alarmsAtNotch)
             }
         }
-        section("Joe", "power") {
-            row("Quit Joe", "Dictation and the notch stop until you open Joe again", last: true) {
+        section("\(Assistant.name)", "power") {
+            row("Quit \(Assistant.name)", "Dictation and the notch stop until you open \(Assistant.name) again", last: true) {
                 Button("Quit") { NSApp.terminate(nil) }.buttonStyle(PillButton())
             }
         }
     }
 
     @ViewBuilder private var personality: some View {
-        section("How Joe talks", "bubble.left.and.text.bubble.right") {
-            row("Answers", "How much Joe says") {
+        section("How \(Assistant.name) talks", "bubble.left.and.text.bubble.right") {
+            row("Name", "What you call your assistant, and the wake word (“Hey \(Assistant.name)”)") {
+                TextField("Joe", text: $assistantName)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13, weight: .medium))
+                    .multilineTextAlignment(.trailing)
+                    .padding(.horizontal, 12)
+                    .frame(width: 180, height: 28)
+                    .background(Color.primary.opacity(0.06), in: Capsule())
+                    .overlay(Capsule().strokeBorder(Look.line))
+            }
+            row("Answers", "How much \(Assistant.name) says") {
                 Choice(options: [("brief", "Brief"), ("normal", "Normal"), ("chatty", "Chatty")], selection: $chattiness)
             }
-            row("Tone", "How Joe puts things") {
+            row("Tone", "How \(Assistant.name) puts things") {
                 Choice(options: [("gentle", "Gentle"), ("direct", "Direct"), ("blunt", "Blunt")], selection: $tone)
             }
-            row("Hype you up", "Joe cheers when you get things done", last: true) { switchOn($hype) }
+            row("Hype you up", "\(Assistant.name) cheers when you get things done", last: true) { switchOn($hype) }
         }
         section("Voice", "speaker.wave.2") {
-            row("Joe's voice", "Joe answers out loud in Alba's voice") {
+            row("\(Assistant.name)'s voice", "\(Assistant.name) answers out loud in Alba's voice") {
                 Choice(options: [(SpeechOutput.Engine.lifelike, "On"), (.off, "Off")], selection: $voice)
                     .onChange(of: voice) { model.actions.setVoice(voice) }
             }
@@ -2884,13 +2895,13 @@ private struct SettingsPage: View {
             row("Wake-up challenge", "Morning alarms only stop once you read a verse or a fact aloud, or answer a question (right ⌥)", last: true) { switchOn($wakeChallenge) }
         }
         section("iPhone", "iphone") {
-            row("Alarms on iPhone", "Copies alarms to a “Joe” list in Reminders") { switchOn($toReminders) }
-            row("Ask from iPhone", "“Hey Siri, add … to Ask Joe”", last: true) { switchOn($phoneRemote) }
+            row("Alarms on iPhone", "Copies alarms to a “\(Assistant.name)” list in Reminders") { switchOn($toReminders) }
+            row("Ask from iPhone", "“Hey Siri, add … to Ask \(Assistant.name)”", last: true) { switchOn($phoneRemote) }
         }
         section("Hands-free", "ear") {
-            row("“Hey Joe”", "Talk without a key. On your Mac only; the mic stays on") { switchOn($wakeWord) }
-            row("Your voice", voiceLearned >= 3 ? "Learned from \(voiceLearned) recordings: Joe listens for you, not the room"
-                    : "Learning: talk to Joe holding the key a few times (\(voiceLearned) of 3)", last: true) {
+            row("“Hey \(Assistant.name)”", "Talk without a key. On your Mac only; the mic stays on") { switchOn($wakeWord) }
+            row("Your voice", voiceLearned >= 3 ? "Learned from \(voiceLearned) recordings: \(Assistant.name) listens for you, not the room"
+                    : "Learning: talk to \(Assistant.name) holding the key a few times (\(voiceLearned) of 3)", last: true) {
                 Button("Reset") {
                     Task { await VoicePrint.shared.reset(); voiceLearned = 0 }
                 }
@@ -2902,9 +2913,9 @@ private struct SettingsPage: View {
     }
 
     @ViewBuilder private var privacy: some View {
-        section("What Joe keeps", "tray.full") {
+        section("What \(Assistant.name) keeps", "tray.full") {
             row("Keep history", "What you dictate and ask, on this Mac only") { switchOn($keepHistory) }
-            row("Remember conversations", "A log in your vault, Joe's memory of past days") { switchOn($remember) }
+            row("Remember conversations", "A log in your vault, \(Assistant.name)'s memory of past days") { switchOn($remember) }
             row("Save notes to Obsidian", "When the notepad closes") { switchOn($saveNotes) }
             row("Clear history", last: true) {
                 Button("Clear") { ActivityLog.clear(); model.reload() }.buttonStyle(PillButton(destructive: true))
@@ -2918,10 +2929,10 @@ private struct SettingsPage: View {
             permission("Reminders", "Alarms on iPhone, Ask from iPhone", reminders == .fullAccess, "Privacy_Reminders",
                        ask: reminders == .notDetermined ? { done in ReminderMirror.store.requestFullAccessToReminders { _, _ in done() } } : nil)
             let events = EKEventStore.authorizationStatus(for: .event)
-            permission("Calendar", "Your Mac's calendars on Joe's Calendar page (optional)", events == .fullAccess, "Privacy_Calendars",
+            permission("Calendar", "Your Mac's calendars on \(Assistant.name)'s Calendar page (optional)", events == .fullAccess, "Privacy_Calendars",
                        ask: events == .notDetermined ? { done in CalendarFeed.requestMacCalendar(done) } : nil)
             let speech = SFSpeechRecognizer.authorizationStatus()
-            permission("Speech Recognition", "“Hey Joe”", speech == .authorized, "Privacy_SpeechRecognition", last: true,
+            permission("Speech Recognition", "“Hey \(Assistant.name)”", speech == .authorized, "Privacy_SpeechRecognition", last: true,
                        ask: speech == .notDetermined ? { done in SFSpeechRecognizer.requestAuthorization { _ in done() } } : nil)
                 .id(permissionsSeen)
         }
@@ -2972,15 +2983,15 @@ private struct SettingsPage: View {
             row("Opus for big jobs", "Doing schoolwork or designing slides switches to Opus. Off: everything stays on the model above") {
                 switchOn($strongForWork)
             }
-            row("Effort", "How hard Joe thinks before answering", last: true) {
+            row("Effort", "How hard \(Assistant.name) thinks before answering", last: true) {
                 Choice(options: Assistant.Effort.allCases.map { ($0.rawValue, $0.name) }, selection: $effort)
             }
         }
         section("Control", "hand.raised") {
-            row("Permissions", (Assistant.Autonomy(rawValue: autonomy)?.title.components(separatedBy: ": ").dropFirst().first).map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? "What Joe may do without asking") {
+            row("Permissions", (Assistant.Autonomy(rawValue: autonomy)?.title.components(separatedBy: ": ").dropFirst().first).map { $0.prefix(1).uppercased() + $0.dropFirst() } ?? "What \(Assistant.name) may do without asking") {
                 Choice(options: Assistant.Autonomy.allCases.map { ($0.rawValue, $0.title.components(separatedBy: ":")[0]) }, selection: $autonomy)
             }
-            row("Click and type", "Joe can use your mouse and keyboard") { switchOn($control) { model.actions.setScreenControl($0) } }
+            row("Click and type", "\(Assistant.name) can use your mouse and keyboard") { switchOn($control) { model.actions.setScreenControl($0) } }
             row("AI cleanup", "Removes filler words from dictation, on this Mac", last: true) { switchOn($cleanup) { model.actions.setCleanup($0) } }
         }
         section("Downloads", "arrow.down.circle") {
@@ -2993,7 +3004,7 @@ private struct SettingsPage: View {
             row("Memory vault", Assistant.vaultURL?.path.replacingOccurrences(of: NSHomeDirectory(), with: "~") ?? "None") {
                 Button("Choose…") { model.actions.chooseVault() }.buttonStyle(PillButton())
             }
-            row("Instructions", "Your standing notes for Joe", last: true) {
+            row("Instructions", "Your standing notes for \(Assistant.name)", last: true) {
                 Button("Edit…") { Assistant.openInstructions() }.buttonStyle(PillButton())
             }
         }

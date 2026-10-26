@@ -16,7 +16,7 @@ final class NotchOverview {
             case .nextClass: "Next class"
             case .dueSoon: "Due soon"
             case .today: "Today's five"
-            case .tasks: "Joe's tasks"
+            case .tasks: "\(Assistant.name)'s tasks"
             case .alarm: "Next alarm"
             case .music: "Now playing"
             }

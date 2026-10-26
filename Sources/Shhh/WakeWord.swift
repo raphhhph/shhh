@@ -24,7 +24,12 @@ final class WakeWord {
     private var startedAt = Date.distantPast
     private var asked = false
 
-    private static let phrase = try! NSRegularExpression(pattern: #"\b(hey|hi|okay|ok|yo) (joe|jo)\b"#, options: .caseInsensitive)
+    /// "Hey Joe", or "hey" and whatever they renamed him to in Settings.
+    private static var phrase: NSRegularExpression {
+        let name = Assistant.name.lowercased()
+        let names = name == "joe" ? "joe|jo" : NSRegularExpression.escapedPattern(for: name) + "|joe"
+        return try! NSRegularExpression(pattern: #"\b(hey|hi|okay|ok|yo) ("# + names + #")\b"#, options: .caseInsensitive)
+    }
 
     /// Every second: starts or stops listening to match the setting and what Joe is doing, and
     /// starts afresh each 50 seconds (recognition runs in one-minute pieces).
@@ -49,7 +54,7 @@ final class WakeWord {
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.requiresOnDeviceRecognition = true
         request.shouldReportPartialResults = true
-        request.contextualStrings = ["Hey Joe"]
+        request.contextualStrings = ["Hey \(Assistant.name)"]
         let engine = AVAudioEngine()
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)

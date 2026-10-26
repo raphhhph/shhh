@@ -58,6 +58,9 @@ enum AIAccount {
         set { UserDefaults.standard.set(newValue, forKey: "openRouterModel") }
     }
 
+    /// The saved OpenRouter key, whether or not "Other models" mode is on (Jev uses it on its own).
+    static var openRouterKey: String? { stored("openRouterKey") }
+
     static var maskedOpenRouterKey: String? {
         stored("openRouterKey").map { $0.count > 12 ? String($0.prefix(8)) + "…" + String($0.suffix(4)) : "saved" }
     }

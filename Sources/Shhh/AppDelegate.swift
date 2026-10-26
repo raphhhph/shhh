@@ -1609,7 +1609,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 task.screenshot = screenshot
                 // Designing slides needs the strongest model: a new conversation about it gets Opus.
-                if !continuing, Assistant.needsStrongModel(text) { task.assistant.useStrongModel() }
+                if !continuing, await Jev.needsStrongModel(text) ?? Assistant.needsStrongModel(text) {
+                    task.assistant.useStrongModel()
+                }
                 if Self.wantsBackground(text) { task.background = true }
                 task.assistant.ask(request, screenshot: image)
                 asked = true

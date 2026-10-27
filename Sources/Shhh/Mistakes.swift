@@ -86,11 +86,13 @@ enum Mistakes {
         NSWorkspace.shared.open(file)
     }
 
-    /// The "✗ missing: …" lines of a feedback, without the marker.
+    /// The "✗ missing: …" lines of a feedback, without the marker. A tutor's caveat that slipped in
+    /// ("my inference…, tell me if…") isn't a lost mark point, so it's left out.
     static func missing(in feedback: String) -> [String] {
-        feedback.components(separatedBy: "\n")
+        let meta = ["my inference", "tell me", "if you", "let me know", "i'm assuming", "i assumed", "my guess", "i'll correct"]
+        return feedback.components(separatedBy: "\n")
             .filter { $0.contains("✗") || $0.lowercased().contains("missing") }
             .map { $0.replacingOccurrences(of: #"^[-•*✗\s]+(missing:?\s*)?"#, with: "", options: [.regularExpression, .caseInsensitive]) }
-            .filter { !$0.isEmpty }
+            .filter { line in !line.isEmpty && !meta.contains { line.lowercased().contains($0) } }
     }
 }

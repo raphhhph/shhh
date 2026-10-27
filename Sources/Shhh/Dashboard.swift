@@ -1966,7 +1966,7 @@ private struct StudyPage: View {
     /// Marked work back, and drafts: a mark review turns lost marks into mistakes and redo questions;
     /// draft feedback checks coursework against the IB criteria.
     private var marksCard: some View {
-        Card(title: redos.isEmpty ? "Marks and drafts" : "Marks and drafts · \(redos.count) redo due", symbol: "doc.text.magnifyingglass") {
+        Card(title: redos.isEmpty ? "Marks and drafts" : "Marks and drafts · \(redos.count) redo due", symbol: "checkmark.seal") {
             Text(marks.isEmpty
                  ? "Got a test back? Joe goes through the lost marks with you, sorts them into didn't know, command term and careless, and brings each back as a fresh question in 1, 3 and 7 days. Or check a draft against the IB criteria."
                  : "Returned marks are logged in Marks.md in your notes. Lost marks come back as fresh questions in 1, 3 and 7 days.")

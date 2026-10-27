@@ -19,13 +19,24 @@ enum Marks {
         text.replacingOccurrences(of: "|", with: "/").replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
     }
 
-    /// Adds a returned mark to the log, as a table row.
+    /// Adds a returned mark to the log, as a table row; the same assessment logged again the same day
+    /// updates its row instead (keeping the boundary when the new one is empty).
     static func log(subject: String, assessment: String, mark: String, boundary: String) {
         guard !mark.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         var text = (try? String(contentsOf: logURL, encoding: .utf8))
             ?? "# Marks\n\nReturned marks, newest at the bottom. Joe adds a row in each mark review; edit freely.\n\n| Date | Subject | Assessment | Mark | Boundary |\n|---|---|---|---|---|\n"
         if !text.hasSuffix("\n") { text += "\n" }
-        text += "| \(today()) | \(cell(subject)) | \(cell(assessment)) | \(cell(mark)) | \(cell(boundary)) |\n"
+        let key = "| \(today()) | \(cell(subject)) | \(cell(assessment)) |"
+        var lines = text.components(separatedBy: "\n")
+        if let index = lines.lastIndex(where: { $0.hasPrefix(key) }) {
+            let old = lines[index].split(separator: "|", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
+            // "| d | s | a | m | b |" splits to ["", d, s, a, m, b, ""]: the boundary is the sixth.
+            let kept = boundary.trimmingCharacters(in: .whitespaces).isEmpty && old.count > 5 ? old[5] : cell(boundary)
+            lines[index] = "\(key) \(cell(mark)) | \(kept) |"
+            text = lines.joined(separator: "\n")
+        } else {
+            text += "\(key) \(cell(mark)) | \(cell(boundary)) |\n"
+        }
         try? FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? text.write(to: logURL, atomically: true, encoding: .utf8)
     }

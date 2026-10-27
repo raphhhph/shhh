@@ -164,6 +164,8 @@ final class StudyBoardModel: ObservableObject {
     private var startedAt = Date()
     /// Draft feedback: the items already saved to their notes (each check is saved once).
     private var savedUpTo = 0
+    /// Mark review: the items already checked for lost questions without a feedback tag.
+    private var nettedUpTo = 0
 
     var isActive: Bool { assistant != nil || (mode == .cards && !deck.isEmpty) }
 
@@ -192,6 +194,7 @@ final class StudyBoardModel: ObservableObject {
         startedAt = Date()
         questionSince = nil
         savedUpTo = 0
+        nettedUpTo = 0
         if mode == .cards { shuffleDeck(); return }
         let assistant = Assistant()
         assistant.tutorPrompt = mode == .feedback ? Self.feedbackPrompt(project: subject) : Self.tutorPrompt(subject: subject, mode: mode)
@@ -314,8 +317,12 @@ final class StudyBoardModel: ObservableObject {
         // Said while Joe is still marking: kept in the box to send, not lost.
         if isBusy, spoken, !text.isEmpty { draft = draft.isEmpty ? text : draft + " " + text; return }
         guard !text.isEmpty || image != nil, assistant != nil, !isBusy else { return }
-        items.append(.answer(text: text, spoken: spoken, image: image))
+        // A pasted draft: counted the way a dropped file is, so the word limit is checked on the real count.
+        let pastedWords = mode == .feedback && image == nil ? Marks.words(text) : 0
+        let counted = pastedWords > 150
+        items.append(.answer(text: counted ? text + "\n\n· \(pastedWords) words" : text, spoken: spoken, image: image))
         draft = ""
+        if counted { text = "[Pasted draft. Word count (Joe counted it): \(pastedWords).]\n" + text }
         if image != nil { text = (text.isEmpty ? "" : text + "\n\n") + "[My diagram is attached: mark it as part of my answer.]" }
         send(text, image: image)
     }
@@ -401,6 +408,9 @@ final class StudyBoardModel: ObservableObject {
                 lines.append("- \(date) · \(subject) · \(topic) · \(score)/\(total) · \(note)")
             }
         }
+        if mode == .review, parsed.contains(where: { if case .summary = $0 { return true } else { return false } }) {
+            lost += undiscussedLost(date: date)
+        }
         Mistakes.record(lost, subject: subject)
         for case let .cards(cards) in parsed { Flashcards.save(cards, subject: subject) }
         guard !lines.isEmpty else { return }
@@ -412,6 +422,39 @@ final class StudyBoardModel: ObservableObject {
         try? log.write(to: url, atomically: true, encoding: .utf8)
     }
 
+    /// Mark review safety net, at the summary: lost questions that never got a feedback tag (no mark
+    /// given for them) still go in the mistake book, as 0 of their marks with cause "?" and redo dates.
+    private func undiscussedLost(date: String) -> [Mistakes.Entry] {
+        guard nettedUpTo < items.count else { return [] }
+        var entries: [Mistakes.Entry] = []
+        var unmarked: (topic: String, marks: Int, text: String, model: String)?
+        func close() {
+            if let question = unmarked, question.marks > 0 {
+                var entry = Mistakes.Entry(date: date, topic: question.topic, score: 0, total: question.marks, question: question.text,
+                                           missing: ["not discussed in detail"], model: question.model)
+                entry.cause = "?"
+                entry.redo = StudyReview.redoDates()
+                entries.append(entry)
+            }
+            unmarked = nil
+        }
+        for item in items[nettedUpTo...] {
+            switch item {
+            case let .question(_, marks, topic, _, text):
+                close()
+                unmarked = (topic: topic, marks: marks, text: text, model: "")
+            case let .feedback(_, total, _, model):
+                // Marked: it's in the book already. A model answer on its own is kept for the entry.
+                if total > 0 { unmarked = nil } else if !model.isEmpty { unmarked?.model = model }
+            default:
+                break
+            }
+        }
+        close()
+        nettedUpTo = items.count
+        return entries
+    }
+
     /// A finished draft check (its summary has come): the criteria and summary since the last one,
     /// dated, into the project's note under "## Feedback".
     private func saveFeedback() {
@@ -421,7 +464,7 @@ final class StudyBoardModel: ObservableObject {
         for item in items[savedUpTo...] {
             switch item {
             case let .criterion(name, score, total, band, text):
-                let mark = total > 0 ? " \(score)/\(total)" : ""
+                let mark = total > 0 ? " \(score)/\(total)" : " (not assessed)"
                 lines.append("- **\(name)**\(mark)\(band.isEmpty ? "" : " (band \(band))"): " + text.replacingOccurrences(of: "\n", with: " "))
             case let .summary(score, total, text):
                 lines.append("\n**Predicted:** \(score)/\(total)\n\n" + text)
@@ -563,17 +606,22 @@ final class StudyBoardModel: ObservableObject {
             1. If they haven't said, ask in one short line for the assessment's name, their mark (out of what, and the grade if they know it), the \
             grade boundary if they know it, and the paper: drop it on the whiteboard (a PDF or a photo) or type the questions they lost marks on.
             2. As soon as you know the mark, log it once: <returned assessment="Unit 3 test" mark="23/40 (4)" boundary="5 from 26/40"></returned> \
-            (boundary empty when they don't know; never guess it).
+            (boundary always as "<grade> from <mark>", the next grade up and the mark it needs; ask for the grade if they only give a mark; \
+            empty when they don't know; never guess it).
             3. Then the questions that lost marks, one at a time, most marks lost first: <question n="3" marks="6" topic="<syllabus number and name \
             from the map>" source="<assessment> Q3">the question as printed</question>, and ask what they wrote and where the marks went. When the \
             marking is visible on the paper, say what you see and ask them to confirm instead.
             4. Then <feedback n="3" score="<marks they got>" total="<marks available>" cause="didn't know|command term|careless">✓ what earned \
-            marks; ✗ missing: each lost mark point</feedback><model>the answer that gets full marks</model>, then the next lost question. cause: \
+            marks; ✗ missing: each lost mark point</feedback><model>the answer that gets full marks, using only methods on this subject's \
+            syllabus</model>, then the next lost question. Give the feedback tag as soon as they've said what they wrote and why the marks went: \
+            if they haven't said the marks they got, estimate the score from the markscheme and say outside the tag that it's an estimate. \
+            ✗ lines are only the lost mark points; caveats and notes go outside the tag. cause: \
             didn't know = the content wasn't there; command term = they knew it but didn't answer what the command term asks (described when \
             asked to explain, no judgment on evaluate, too short for the marks); careless = a slip, misread, units, arithmetic, ran out of time. \
-            When you can't tell, ask which it was before the feedback tag. Each one goes in their mistake book, and a fresh redo question on \
-            it comes back tomorrow, in 3 days and in a week: say so once.
-            5. When the lost questions are done (or on "end"): <summary score="<their total>" total="<marks available>">the mark; how the lost \
+            When you can't tell, ask which it was before the feedback tag. Each feedback tag goes in their mistake book, and a fresh redo \
+            question on it comes back tomorrow, in 3 days and in a week: say so once, and only about questions you gave a feedback tag for.
+            5. When the lost questions are done (or on "end"): first a <feedback> (and <model>) for every lost-marks question discussed that \
+            doesn't have one yet, then <summary score="<their total>" total="<marks available>">the mark; how the lost \
             marks split by cause (e.g. 9 didn't know, 4 command term, 3 careless); then **3 things to fix** as a numbered list, each concrete \
             (a topic to relearn with its syllabus number, a command-term habit, a checking habit)</summary>. No <cards> unless definitions were lost.
             """
@@ -590,7 +638,8 @@ final class StudyBoardModel: ObservableObject {
             strictly against it, so the same answer always gets the same mark.
             - They can draw: a diagram sent as an image with their answer. Mark what's drawn (axes, labels, curves, shifts, areas) as an examiner would.
             - After they answer: <feedback n="1" score="3" total="4">✓ what earned marks, one bullet each; ✗ missing: what was missing, one bullet each</feedback> \
-            then <model>the answer a markscheme would credit, concise</model>, then the next <question>.
+            then <model>the answer a markscheme would credit, concise, using only methods on this subject's syllabus</model>, then the next <question>. \
+            ✗ lines are only lost mark points; any caveat or note goes outside the tag.
             - Outside the tags, at most one short sentence, said aloud ("Nice, three out of four."). No other chatter.
             - At the end: <summary score="x" total="y">strengths, the weakest topic, the one thing to revise next</summary>.
             - Right after the summary, flashcards of what they must know word for word: <cards>one per line, term :: the definition as the \
@@ -649,14 +698,17 @@ final class StudyBoardModel: ObservableObject {
             # How to write (the whiteboard reads these tags)
             - Until the draft has come, ask for it in one short line: drop the file on the whiteboard (Word, Pages, PDF or text) or paste it. \
             Work out which assessment it is (an IA of which subject, the EE and its subject, the TOK essay or exhibition, the IO) from what \
-            they said and the draft; ask only if you can't tell. A dropped file arrives as <file>…</file> with Joe's word count: use that number.
+            they said and the draft; ask only if you can't tell. A dropped file arrives as <file>…</file> with Joe's word count, and a pasted \
+            draft comes with Joe's word count too: use that number, never estimate one.
             - Then one card per criterion of that assessment, in order: <criterion name="A · Focus and method" score="4" total="6" band="3–4">**Evidence:** \
             a short quote from the draft in quotation marks (or what's missing)
             **To lift it a band:** one or two concrete changes</criterion>. TOK essay and exhibition: one holistic criterion out of 10. \
-            Mark honestly against the descriptors below (best fit; most drafts sit mid-band), never inflate.
+            Mark honestly against the descriptors below (best fit; most drafts sit mid-band), never inflate. A criterion that can't be assessed \
+            from the draft (EE criterion E needs the RPPF, for instance): score="0" total="0" and say why in the card, or leave it out.
             - Then <summary score="<predicted total>" total="<maximum>">**Grade:** the grade when the rubric gives bands (the total is shown from score and total, don't repeat it)
             **Word count:** n of the limit, and what to cut or add when it's over or well under
-            **The three biggest fixes:** a numbered list, most marks first</summary>
+            **The three biggest fixes:** a numbered list, most marks first</summary>. Score and total count only the criteria you could assess; \
+            when one was left out, say so in the summary ("on A–D; E needs the RPPF").
             - Outside the tags, at most one short sentence, said aloud. Quote only their words; never invent quotes.
             - Academic honesty: give advice, never rewritten paragraphs or text to paste in. Short examples of a structure are fine.
             - Follow-up questions: answer briefly. A new version of the draft: the whole set of cards again, saying what improved.
@@ -1000,6 +1052,8 @@ private struct StudyBoardView: View {
                     Spacer()
                     if total > 0 {
                         Text("\(score)/\(total)").font(.system(size: 17, weight: .bold).monospacedDigit()).foregroundStyle(Self.color(score, total))
+                    } else {
+                        chip("not assessed")
                     }
                 }
                 BoardText(text, size: 13.5)
@@ -1007,7 +1061,7 @@ private struct StudyBoardView: View {
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(alignment: .leading) { Rectangle().fill(Self.color(score, max(total, 1))).frame(width: 3).padding(.vertical, 12) }
+            .overlay(alignment: .leading) { Rectangle().fill(total > 0 ? Self.color(score, total) : Color.secondary.opacity(0.4)).frame(width: 3).padding(.vertical, 12) }
         case let .lesson(title, text):
             VStack(alignment: .leading, spacing: 8) {
                 Label(title.isEmpty ? "Lesson" : title, systemImage: "book.closed.fill")

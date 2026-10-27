@@ -149,6 +149,11 @@ final class DashboardModel: ObservableObject {
     @Published var routines: [(name: String, trigger: String)] = []
     @Published var notes: [(title: String, kind: String, date: Date, url: URL)] = []
     @Published var nowPlaying: String?
+    /// The study plan, read for Home and the notch (see `StudyToday`).
+    @Published var studyNext: StudyToday.Block?
+    @Published var overdue: [StudyToday.Overdue] = []
+    @Published var week: [StudyToday.Block] = []
+    @Published var milestone: CalendarFeed.Item?
     @Published var spotifyConnected = false
     @Published var spotifyBusy = false
     @Published var status = ""
@@ -187,6 +192,10 @@ final class DashboardModel: ObservableObject {
         }
         update(\.spotifyConnected, Spotify.Account.isConnected)
         loadDaybook()
+        update(\.studyNext, StudyToday.next())
+        update(\.overdue, StudyToday.overdue())
+        update(\.week, StudyToday.week().flatMap(\.blocks))
+        update(\.milestone, IBProjects.nearestMilestone())
         loadRoutines()
         loadNotes()
         if page == .music || page == .home {
@@ -641,6 +650,8 @@ private struct HomePage: View {
             }
         }
 
+        StudyStrip(model: model)
+
         HStack(alignment: .top, spacing: 16) {
             TimelineView(.periodic(from: .now, by: 30)) { context in
                 NowNext(slots: model.timeline, now: context.date)
@@ -812,6 +823,102 @@ private struct ChipFlow: Layout {
             }
         }
         return rows
+    }
+}
+
+/// Today's study, under the greeting: the next study block with Start, what's overdue with the
+/// one thing to do about each, the nearest project milestone, and the week's blocks as a row of
+/// days that opens Week.md. Hidden when there's no plan and nothing late.
+private struct StudyStrip: View {
+    @ObservedObject var model: DashboardModel
+
+    var body: some View {
+        if model.studyNext != nil || !model.overdue.isEmpty || model.milestone != nil || !model.week.isEmpty {
+            Card(title: "Today's study", symbol: "book.closed") {
+                if let block = model.studyNext {
+                    let now = block.start <= Date()
+                    HStack(spacing: 12) {
+                        RoundedRectangle(cornerRadius: 2.5).fill(color(block)).frame(width: 5, height: 40)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(now ? "NOW" : "NEXT BLOCK").font(.system(size: 10.5, weight: .bold)).foregroundStyle(color(block))
+                            Text(block.title).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                            Text(["\(Daybook.hhmm(block.start))–\(Daybook.hhmm(block.end))", block.subject ?? "", block.due]
+                                .filter { !$0.isEmpty }.joined(separator: " · "))
+                                .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 8)
+                        Button { model.actions.ask(block.startRequest) } label: { Label("Start", systemImage: "play.fill") }
+                            .buttonStyle(PillButton(prominent: true))
+                    }
+                } else if !model.week.isEmpty {
+                    Text("No more study blocks today.").font(.system(size: 13)).foregroundStyle(.secondary)
+                }
+                ForEach(model.overdue.prefix(3), id: \.line) { item in
+                    HStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.circle.fill").font(.system(size: 14)).foregroundStyle(Look.deadline)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(item.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                            Text("Overdue since \(item.since)").font(.system(size: 11.5)).foregroundStyle(Look.deadline)
+                        }
+                        Spacer(minLength: 8)
+                        if let link = item.link ?? CalendarFeed.manageBacHome.flatMap(URL.init(string:)) {
+                            Button("Upload") { NSWorkspace.shared.open(link) }.buttonStyle(PillButton())
+                        }
+                        Button("Email") { model.actions.ask(item.emailRequest) }.buttonStyle(PillButton())
+                        Button("Done") { model.toggle(item.line) }.buttonStyle(PillButton(prominent: true))
+                    }
+                }
+                if let milestone = model.milestone {
+                    let left = IBProjects.daysLeft(milestone.start)
+                    HStack(spacing: 10) {
+                        Image(systemName: "flag.checkered").font(.system(size: 13)).foregroundStyle(Look.accent)
+                        Text(milestone.title).font(.system(size: 13)).lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text(left < 0 ? "\(-left) days late" : left == 0 ? "Due today" : left == 1 ? "Tomorrow" : "\(left) days left")
+                            .font(.system(size: 12, weight: .semibold)).foregroundStyle(left <= 1 ? Look.deadline : .secondary)
+                    }
+                }
+                if !model.week.isEmpty { weekRow }
+            }
+        }
+    }
+
+    /// Seven days from today, a dot per study block (filled once ticked). Opens Week.md.
+    private var weekRow: some View {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let days = (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: today) }
+        return Button {
+            if let url = WeekPlan.url { model.openInObsidian(url) }
+        } label: {
+            HStack(spacing: 6) {
+                ForEach(days, id: \.self) { day in
+                    let blocks = model.week.filter { calendar.isDate($0.start, inSameDayAs: day) }
+                    VStack(spacing: 5) {
+                        Text(day.formatted(.dateTime.weekday(.abbreviated))).font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(calendar.isDateInToday(day) ? Look.accent : .secondary)
+                        HStack(spacing: 3) {
+                            ForEach(blocks.prefix(4), id: \.self) { block in
+                                Circle().fill(block.done ? color(block) : color(block).opacity(0.3)).frame(width: 6, height: 6)
+                            }
+                            if blocks.isEmpty { Circle().strokeBorder(Look.line).frame(width: 6, height: 6) }
+                        }
+                        .frame(height: 6)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 7)
+                    .background(calendar.isDateInToday(day) ? Look.accent.opacity(0.08) : Color.primary.opacity(0.03),
+                                in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Open this week's plan")
+    }
+
+    private func color(_ block: StudyToday.Block) -> Color {
+        block.subject.flatMap { SubjectGroup.of($0)?.color } ?? SubjectGroup.of(block.title)?.color ?? Look.accent
     }
 }
 

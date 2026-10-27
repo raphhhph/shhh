@@ -1903,7 +1903,6 @@ private struct StudyPage: View {
         reviewCard
         marksCard
         flashcardsCard
-        pastPapersCard
 
         let columns = narrow ? 1 : 2
         let rows = stride(from: 0, to: subjects.count, by: columns).map { Array(subjects[$0..<min($0 + columns, subjects.count)]) }
@@ -1915,6 +1914,7 @@ private struct StudyPage: View {
                 }
             }
         }
+        pastPapersCard
 
         if !Profile.programme.uppercased().contains("MYP") { PointsCalculator(subjects: subjects.filter { StudyBuddy.pack(for: $0) != "Theory of Knowledge" }) }
 

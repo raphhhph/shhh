@@ -178,6 +178,14 @@ enum IBProjects {
         var next: Milestone? {
             milestones.filter { !$0.done }.min { ($0.date ?? .distantFuture) < ($1.date ?? .distantFuture) }
         }
+
+        /// ## Next action, or the next open milestone when that's empty or still names one now ticked.
+        var nextStep: String {
+            let action = nextAction.trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: "."))).lowercased()
+            let stale = action.isEmpty || milestones.contains { $0.done && $0.title.lowercased() == action }
+            guard stale else { return nextAction }
+            return next.map { "\($0.title)." } ?? ""
+        }
     }
 
     // MARK: - Reading
@@ -295,12 +303,29 @@ enum IBProjects {
         all().flatMap { project in project.milestones.filter { !$0.done }.map { "\(project.label): \($0.title)" } }
     }
 
-    /// Each project's next dated milestone from today, as a deadline for the study plans.
+    /// A milestone as a deadline for the study plans, at the end of its day. An overdue one is
+    /// due at the end of today, so it still gets study blocks.
+    static func milestoneItem(_ project: Project, _ milestone: Milestone, date: Date, _ now: Date) -> CalendarFeed.Item {
+        let day = daysLeft(date, now) < 0 ? now : date
+        let due = Calendar.current.date(bySettingHour: 23, minute: 59, second: 0, of: day) ?? day
+        return CalendarFeed.Item(title: "\(project.label): \(milestone.title)", start: due, allDay: true, kind: .deadline, subject: "project")
+    }
+
+    /// Each project's next dated milestone (an overdue one as due today), as a deadline for the study plans.
     static func milestoneItems(_ now: Date = Date()) -> [CalendarFeed.Item] {
         all().compactMap { project -> CalendarFeed.Item? in
-            guard let next = project.next, let date = next.date, daysLeft(date, now) >= 0 else { return nil }
-            let due = Calendar.current.date(bySettingHour: 23, minute: 59, second: 0, of: date) ?? date
-            return CalendarFeed.Item(title: "\(project.label): \(next.title)", start: due, allDay: true, kind: .deadline, subject: "project")
+            guard let next = project.next, let date = next.date else { return nil }
+            return milestoneItem(project, next, date: date, now)
+        }
+    }
+
+    /// Every open dated milestone due by `end` (overdue ones as due today), for the week's plan.
+    static func openMilestoneItems(_ now: Date = Date(), through end: Date? = nil) -> [CalendarFeed.Item] {
+        all().flatMap { project -> [CalendarFeed.Item] in
+            project.milestones.filter { !$0.done }.compactMap { milestone -> CalendarFeed.Item? in
+                guard let date = milestone.date, end.map({ date <= $0 }) ?? true else { return nil }
+                return milestoneItem(project, milestone, date: date, now)
+            }
         }
     }
 
@@ -439,7 +464,7 @@ enum IBProjects {
             }
             if let finalDate = project.finalDate { line += " · final \(finalDate.formatted(.localDay))" }
             if let words = wordCount(doc: project.doc) { line += " · \(words)" + (project.words.map { "/\($0)" } ?? "") + " words" }
-            if !project.nextAction.isEmpty { line += "\n    next action: \(project.nextAction)" }
+            if !project.nextStep.isEmpty { line += "\n    next action: \(project.nextStep)" }
             if let meeting = project.meetings.last { line += "\n    last meeting: \(meeting)" }
             return line
         }

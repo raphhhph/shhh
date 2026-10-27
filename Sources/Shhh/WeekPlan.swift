@@ -29,7 +29,10 @@ enum WeekPlan {
         let items = CalendarFeed.items(from: start, days: 21)
         let done = Daybook.doneTitles(Daybook.url.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? "")
         let deadlines = items.filter { item in item.kind == .deadline && !done.contains { Daybook.sameTask($0, item.title) } }
-        let work = (deadlines + IBProjects.milestoneItems(now)).filter { $0.start > now }.sorted { a, b in
+        // Every open project milestone due this week or soon after (an overdue one as due today).
+        let milestonesEnd = calendar.date(byAdding: .day, value: 14, to: start) ?? start
+        let milestones = IBProjects.openMilestoneItems(now, through: milestonesEnd)
+        let work = (deadlines + milestones).filter { $0.start > now }.sorted { a, b in
             let dayA = calendar.startOfDay(for: a.start), dayB = calendar.startOfDay(for: b.start)
             if dayA != dayB { return dayA < dayB }
             return Daybook.isWeighty(a) && !Daybook.isWeighty(b)
@@ -78,7 +81,11 @@ enum WeekPlan {
                 if !ahead { wanted[item.id, default: 0] -= 1 }
                 today[item.id, default: 0] += 1
                 let subject = item.subject.map { $0 == "project" ? "" : " · \($0)" } ?? ""
-                lines.append("- [ ] \(Daybook.hhmm(block.start))–\(Daybook.hhmm(block.end)) (\(block.label)): \(ahead ? "get ahead on " : "")\(item.title)\(subject) — due \(short(item.start))")
+                // "Get ahead" only before the due day; on the day it's just due today.
+                let dueDay = calendar.isDate(item.start, inSameDayAs: day)
+                let label = ahead && !dueDay ? "get ahead on " : ""
+                let due = dueDay ? "today" + (item.allDay ? "" : " " + Daybook.hhmm(item.start)) : short(item.start)
+                lines.append("- [ ] \(Daybook.hhmm(block.start))–\(Daybook.hhmm(block.end)) (\(block.label)): \(label)\(item.title)\(subject) — due \(due)")
                 planned += 1
             }
             if planned == 0 { lines.append("Nothing planned.") }
@@ -157,7 +164,7 @@ enum WeekPlan {
         guard days.contains(where: { $0 >= today }) else { return nil }
 
         let items = CalendarFeed.items(from: today, days: 21)
-        let pending = items.filter { $0.kind == .deadline } + IBProjects.milestoneItems(now)
+        let pending = items.filter { $0.kind == .deadline } + IBProjects.openMilestoneItems(now)
         let events = items.filter { $0.kind == .event && !$0.allDay }
         let done = Daybook.doneTitles(Daybook.url.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? "")
         var taken = Set(lines.indices.compactMap { index -> String? in
@@ -178,6 +185,14 @@ enum WeekPlan {
         var moves: [String] = []
         var additions: [(heading: String, line: String)] = []
         var questions: [String] = []
+        // Titles already reported, so two missed blocks for one thing make one line.
+        var reported: [String] = []
+        // When a block on a day starts ("16:10" on that day).
+        func blockStart(_ day: Date, _ time: String) -> Date? {
+            let parts = time.split(separator: ":").compactMap { Int($0) }
+            guard parts.count == 2 else { return nil }
+            return calendar.date(bySettingHour: parts[0], minute: parts[1], second: 0, of: day)
+        }
         for index in lines.indices {
             let line = lines[index]
             guard let day = dayOf[index], day < today, line.hasPrefix("- [ ] "), let time = blockTime(line),
@@ -195,8 +210,34 @@ enum WeekPlan {
             guard let slot = slots.first(where: { slot in
                 !taken.contains("\(slot.day.formatted(.localDay)) \(Daybook.hhmm(slot.start))") && (due.map { slot.end < $0 } ?? true)
             }) else {
-                lines[index] = "- ~~\(body)~~ didn't fit anywhere else"
-                questions.append("- \(title) (was \(was)) didn't fit anywhere else this week: drop it, or ask for more time?")
+                // Still open in a block from today on, before it's due: say so instead of asking.
+                let planned = (lines.indices.compactMap { other -> (day: Date, line: String)? in
+                    guard let otherDay = dayOf[other], otherDay >= today else { return nil }
+                    return (day: otherDay, line: lines[other])
+                } + additions.compactMap { addition -> (day: Date, line: String)? in
+                    IBProjects.isoDate(addition.heading).map { (day: $0, line: addition.line) }
+                }).compactMap { block -> (day: Date, time: String)? in
+                    guard block.line.hasPrefix("- [ ] "), let otherTime = blockTime(block.line),
+                          let otherColon = block.line.range(of: "): ") else { return nil }
+                    let otherTitle = String(block.line[otherColon.upperBound...]).replacingOccurrences(of: "get ahead on ", with: "")
+                        .components(separatedBy: " — ")[0].components(separatedBy: " · ")[0]
+                    guard CalendarFeed.sameThing(otherTitle, title) else { return nil }
+                    if let due, let at = blockStart(block.day, otherTime), at >= due { return nil }
+                    return (day: block.day, time: otherTime)
+                }
+                let first = !reported.contains { CalendarFeed.sameThing($0, title) }
+                reported.append(title)
+                if planned.isEmpty {
+                    lines[index] = "- ~~\(body)~~ didn't fit anywhere else"
+                    if first { questions.append("- \(title) (was \(was)) didn't fit anywhere else this week: drop it, or ask for more time?") }
+                } else {
+                    let byDay = Dictionary(grouping: planned, by: { $0.day })
+                    let times = byDay.keys.sorted().map { plannedDay -> String in
+                        "\(short(plannedDay)) " + (byDay[plannedDay] ?? []).map { $0.time }.sorted().joined(separator: " and ")
+                    }.joined(separator: "; ")
+                    lines[index] = "- ~~\(body)~~ already planned \(times)"
+                    if first { moves.append("- \(title) (was \(was)): already planned \(times)") }
+                }
                 continue
             }
             taken.insert("\(slot.day.formatted(.localDay)) \(Daybook.hhmm(slot.start))")

@@ -356,6 +356,10 @@ enum Daybook {
             backlog = backlog.indices.filter { !picked.contains($0) }.map { backlog[$0] }
         }
         let five = Array(tasks.prefix(5)), overflow = tasks.dropFirst(5).map { stamped($0, today) }
+        // A week-old backlog item that didn't make the five is asked about, not buried in Backlog.
+        let staleAsks = stale.filter { !five.contains($0) }.map { line in
+            "- \(taskTitle(line)) has waited \(daysOld(line, now)) days: do, schedule or drop?"
+        }
 
         let focus: String
         if let first = five.first {
@@ -402,7 +406,7 @@ enum Daybook {
         lines += ["", "## Deadlines"] + due
         // Two things at once today (MUN and Volleyball): one question, unless Patterns has the answer.
         let known = patterns.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
-        lines += ["", "## Needs you"] + WeekPlan.clashes(events, known: known) + [pendingMark]
+        lines += ["", "## Needs you"] + WeekPlan.clashes(events, known: known) + staleAsks + [pendingMark]
         lines += ["", "## Backlog"] + (overflow + lateRest + backlog).prefix(30)
         lines += ["", "## Inbox"] + inbox
         if !dropped.isEmpty {
@@ -529,11 +533,14 @@ enum Daybook {
             return isWeighty(a) && !isWeighty(b)
         }
         guard !work.isEmpty else { return [] }
-        // Two blocks for the most pressing one, then one each.
-        let order = [work[0]] + work
-        return freeBlocks(on: now, busy: busy).filter { $0.end > now }.enumerated().compactMap { index, block in
-            guard index < order.count, order[index].start > block.end else { return nil }
-            let item = order[index]
+        // Two blocks for the most pressing one still due after the block, then one each; what's
+        // due before a block is skipped, not given it.
+        var given: [String: Int] = [:]
+        return freeBlocks(on: now, busy: busy).filter { $0.end > now }.compactMap { block -> String? in
+            let upcoming = work.filter { $0.start > block.end }
+            guard let first = upcoming.first,
+                  let item = upcoming.first(where: { (given[$0.id] ?? 0) < ($0.id == first.id ? 2 : 1) }) else { return nil }
+            given[item.id, default: 0] += 1
             return "- \(hhmm(block.start))–\(hhmm(block.end)) (\(block.label)): \(item.title)"
                 + (item.subject.map { " · \($0)" } ?? "") + " — due \(when(item, now))"
         }

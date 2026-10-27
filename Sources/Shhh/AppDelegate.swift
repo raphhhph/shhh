@@ -476,7 +476,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let request = AlarmRequest.parse(text) { alarms.handle(request); return }
         if openStudy(text) { return }
         if screenshot == nil, openPen(text) { return }
-        if let music = Spotify.command(in: text) {
+        if let music = Spotify.quick(in: text) {
             Task.detached { [weak self] in
                 let result = Spotify.run(music)
                 await MainActor.run { self?.toast.show(result, symbol: "music.note", tint: .green) }
@@ -1515,7 +1515,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                               options: [.regularExpression, .caseInsensitive]) != nil {
                     pausedMusic = []
                 }
-                if let music = Spotify.command(in: text) {
+                if let music = Spotify.quick(in: text) {
                     pausedMusic = [] // they're steering the music themselves now
                     if task.question.isEmpty { end(task) } // the new conversation this press started
                     pointer.hide()

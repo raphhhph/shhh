@@ -13,6 +13,8 @@ enum Spotify {
 
     enum Command {
         case play(String, Kind?)
+        /// A Spotify link or URI found elsewhere (a web search): played as is, no search needed.
+        case playLink(String)
         /// Their own library (needs `Shhh --spotify-login` once).
         case likedSongs(shuffle: Bool), myPlaylist(String, shuffle: Bool), like, listPlaylists, unlike(String?)
         case resume, pause, next, previous, nowPlaying
@@ -22,6 +24,11 @@ enum Spotify {
 
     /// A short music request, or nil if it's anything else (that goes to Claude as usual).
     static func command(in request: String) -> Command? {
+        // "play https://open.spotify.com/track/…" or the link alone: not a link mentioned in passing.
+        if let uri = uri(in: request),
+           request.range(of: #"^\W*((play|put on|open)\s+)?(\S*spotify\S*)\s*$"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            return .playLink(uri)
+        }
         var text = request.lowercased()
             .replacingOccurrences(of: #"[.!?]+$"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"^\W*((hey|ok|okay|yo)\W+)?(joe\W+)?((can|could) you\W+|please\W+)*"#, with: "", options: .regularExpression)
@@ -86,6 +93,29 @@ enum Spotify {
         return .play(text, kind)
     }
 
+    /// "spotify:track:…" or "https://open.spotify.com/intl-de/album/…" in a request, as a URI. Read
+    /// from the request as said: the IDs are case-sensitive.
+    static func uri(in request: String) -> String? {
+        let pattern = #"spotify:(track|album|artist|playlist):([A-Za-z0-9]{22})|open\.spotify\.com/(?:intl-[a-z-]+/)?(track|album|artist|playlist)/([A-Za-z0-9]{22})"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: request, range: NSRange(request.startIndex..., in: request)) else { return nil }
+        let part = { (i: Int) in Range(match.range(at: i), in: request).map { String(request[$0]) } }
+        guard let kind = part(1) ?? part(3), let id = part(2) ?? part(4) else { return nil }
+        return "spotify:\(kind):\(id)"
+    }
+
+    /// Whether this Mac can search Spotify: the developer's own keys, or a signed-in account. Other
+    /// Macs can't since Spotify's 2026 limits (5 allow-listed users per app in development mode).
+    static var canSearch: Bool { keys != nil || Account.isConnected }
+
+    /// A command to carry out at once, without Claude. "Play X" goes to Claude instead when this Mac
+    /// can't search: Claude finds the song's open.spotify.com link on the web and plays that.
+    static func quick(in request: String) -> Command? {
+        guard let command = command(in: request) else { return nil }
+        if case .play = command, !canSearch { return nil }
+        return command
+    }
+
     // MARK: - Doing it
 
     /// Carries out a command and says what happened, in a few words.
@@ -103,9 +133,15 @@ enum Spotify {
         case .like: return Account.likeCurrent()
         case .listPlaylists: return Account.listPlaylists()
         case let .unlike(uri): return Account.unlike(uri)
+        case let .playLink(uri):
+            guard script("play track \"\(uri)\"") != nil || (launch() && script("play track \"\(uri)\"") != nil) else {
+                return "Spotify didn't respond."
+            }
+            return "▶ " + (current() ?? "Playing")
         case let .play(query, kind):
             guard let found = search(query, kind: kind) else {
-                return keys == nil ? "Spotify isn't set up: its developer keys are missing." : "Couldn't find “\(query)” on Spotify."
+                return canSearch ? "Couldn't find “\(query)” on Spotify."
+                    : "Can't search Spotify on this Mac. Find its open.spotify.com link and play that instead."
             }
             guard script("play track \"\(found.uri)\"") != nil || (launch() && script("play track \"\(found.uri)\"") != nil) else {
                 return "Found \(found.title), but Spotify didn't respond."
@@ -184,6 +220,13 @@ enum Spotify {
         try? FileManager.default.createDirectory(at: secretsFile.deletingLastPathComponent(), withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: secretsFile.path, contents: data, attributes: [.posixPermissions: 0o600])
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: secretsFile.path)
+    }
+
+    fileprivate static func forget(_ account: String) {
+        var all = secrets
+        all[account] = nil
+        guard let data = try? JSONEncoder().encode(all) else { return }
+        FileManager.default.createFile(atPath: secretsFile.path, contents: data, attributes: [.posixPermissions: 0o600])
     }
 
     fileprivate static var keys: (id: String, secret: String)? {
@@ -290,7 +333,15 @@ enum Spotify {
             if let access = json["access_token"] as? String {
                 token = (access, Date().addingTimeInterval(Double(json["expires_in"] as? Int ?? 3600) - 60))
             }
-            let name = (api("GET", "/me")?["display_name"] as? String).map { " as \($0)" } ?? ""
+            var status = 0
+            let me = api("GET", "/me", status: &status)
+            if status == 403 { // signed in, but not one of the app's allow-listed users
+                Spotify.forget("refresh-token")
+                token = nil
+                return "Spotify signed you in, but this account isn't on Joe's Spotify tester list yet, so liked songs "
+                    + "and playlists can't work. Playing songs still works. Ask Joe's developer to add your Spotify email."
+            }
+            let name = (me?["display_name"] as? String).map { " as \($0)" } ?? ""
             return "Connected to Spotify\(name). Your library works now."
         }
 
@@ -389,7 +440,7 @@ enum Spotify {
             return result
         }
 
-        private static let notConnected = "Spotify isn't connected to your account yet: run Joe --spotify-login once."
+        private static let notConnected = "Spotify isn't connected to your account yet: connect it on the Spotify page of Joe's dashboard."
 
         // MARK: Library
 

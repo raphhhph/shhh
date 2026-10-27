@@ -303,12 +303,23 @@ enum IBProjects {
         all().flatMap { project in project.milestones.filter { !$0.done }.map { "\(project.label): \($0.title)" } }
     }
 
+    /// What an overdue milestone's item carries in `detail`, so the plans can tell it apart.
+    static let overdueMark = "overdue"
+
     /// A milestone as a deadline for the study plans, at the end of its day. An overdue one is
-    /// due at the end of today, so it still gets study blocks.
+    /// due at the end of today, so it still gets study blocks, and is marked (see `isOverdue`):
+    /// the plans give it at most one block a day, after anything really due by tomorrow.
     static func milestoneItem(_ project: Project, _ milestone: Milestone, date: Date, _ now: Date) -> CalendarFeed.Item {
-        let day = daysLeft(date, now) < 0 ? now : date
+        let late = daysLeft(date, now) < 0
+        let day = late ? now : date
         let due = Calendar.current.date(bySettingHour: 23, minute: 59, second: 0, of: day) ?? day
-        return CalendarFeed.Item(title: "\(project.label): \(milestone.title)", start: due, allDay: true, kind: .deadline, subject: "project")
+        return CalendarFeed.Item(title: "\(project.label): \(milestone.title)", detail: late ? overdueMark : "",
+                                 start: due, allDay: true, kind: .deadline, subject: "project")
+    }
+
+    /// Whether a study-plan item is an overdue project milestone (its "due today" isn't real).
+    static func isOverdue(_ item: CalendarFeed.Item) -> Bool {
+        item.subject == "project" && item.detail == overdueMark
     }
 
     /// Each project's next dated milestone (an overdue one as due today), as a deadline for the study plans.
@@ -470,7 +481,11 @@ enum IBProjects {
         }
         let tasks = dailyTasks(now)
         lines += ["", "Tasks for today's Daybook:"] + (tasks.isEmpty ? ["(none: no milestone overdue or due within 7 days)"] : tasks)
-        if let block = nearestMilestone(now) { lines.append("Study block in today's Plan goes to: \(block.title), due \(dayName(block.start, now))") }
+        if let block = nearestMilestone(now) {
+            lines.append(isOverdue(block)
+                ? "Study block in today's Plan goes to: \(block.title), overdue (one block a day, after anything due by tomorrow)"
+                : "Study block in today's Plan goes to: \(block.title), due \(dayName(block.start, now))")
+        }
         return lines.joined(separator: "\n")
     }
 

@@ -527,22 +527,33 @@ enum Daybook {
     private static func studyPlan(_ deadlines: [CalendarFeed.Item], _ now: Date, busy: [(Date, Date)] = []) -> [String] {
         let calendar = Calendar.current
         guard let fortnight = calendar.date(byAdding: .day, value: 14, to: now) else { return [] }
-        let work = deadlines.filter { $0.start > now && $0.start < fortnight }.sorted { a, b in
+        let sorted = deadlines.filter { $0.start > now && $0.start < fortnight }.sorted { a, b in
             let dayA = calendar.startOfDay(for: a.start), dayB = calendar.startOfDay(for: b.start)
             if dayA != dayB { return dayA < dayB }
             return isWeighty(a) && !isWeighty(b)
         }
+        // What's really due by the end of tomorrow comes first, then an overdue project milestone
+        // (its "due today" is made up), then the rest.
+        let horizon = calendar.date(byAdding: .day, value: 2, to: calendar.startOfDay(for: now)) ?? fortnight
+        let soon = sorted.filter { !IBProjects.isOverdue($0) && $0.start < horizon }
+        let late = sorted.filter { IBProjects.isOverdue($0) }
+        let later = sorted.filter { !IBProjects.isOverdue($0) && $0.start >= horizon }
+        let work = soon + late + later
         guard !work.isEmpty else { return [] }
         // Two blocks for the most pressing one still due after the block, then one each; what's
-        // due before a block is skipped, not given it.
+        // due before a block is skipped, not given it. An overdue milestone gets one at most.
         var given: [String: Int] = [:]
         return freeBlocks(on: now, busy: busy).filter { $0.end > now }.compactMap { block -> String? in
             let upcoming = work.filter { $0.start > block.end }
-            guard let first = upcoming.first,
-                  let item = upcoming.first(where: { (given[$0.id] ?? 0) < ($0.id == first.id ? 2 : 1) }) else { return nil }
+            guard let first = upcoming.first(where: { !IBProjects.isOverdue($0) }) ?? upcoming.first,
+                  let item = upcoming.first(where: { candidate in
+                      let cap = IBProjects.isOverdue(candidate) ? 1 : (candidate.id == first.id ? 2 : 1)
+                      return (given[candidate.id] ?? 0) < cap
+                  }) else { return nil }
             given[item.id, default: 0] += 1
+            let due: String = IBProjects.isOverdue(item) ? "overdue" : "due \(when(item, now))"
             return "- \(hhmm(block.start))–\(hhmm(block.end)) (\(block.label)): \(item.title)"
-                + (item.subject.map { " · \($0)" } ?? "") + " — due \(when(item, now))"
+                + (item.subject.map { " · \($0)" } ?? "") + " — \(due)"
         }
     }
 

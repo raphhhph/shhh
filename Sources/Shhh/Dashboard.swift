@@ -235,6 +235,22 @@ final class DashboardModel: ObservableObject {
         if found.map({ "\($0.0)\($0.3)" }) != tasks.map({ "\($0.line)\($0.done)" }) { tasks = found }
     }
 
+    /// A "decide:" task settled from Home: kept for today (the question goes), or dropped (the line
+    /// goes, and it's logged as done so it isn't carried again).
+    func decide(_ line: String, keep: Bool) {
+        guard let url = Daybook.url, var text = try? String(contentsOf: url, encoding: .utf8),
+              let range = text.range(of: line) else { return }
+        if keep {
+            let kept = line.components(separatedBy: " — decide:").first ?? line
+            text.replaceSubrange(range, with: kept)
+        } else {
+            let end = text[range.upperBound...].first == "\n" ? text.index(after: range.upperBound) : range.upperBound
+            text.removeSubrange(range.lowerBound..<end)
+        }
+        try? text.write(to: url, atomically: true, encoding: .utf8)
+        loadDaybook()
+    }
+
     /// Ticks or unticks a task in Daybook.md (the same line Joe and Obsidian see).
     func toggle(_ line: String) {
         guard let url = Daybook.url, var text = try? String(contentsOf: url, encoding: .utf8),
@@ -716,6 +732,18 @@ private struct HomePage: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        // A task carried for days: settle it here instead of in the notes.
+                        if !task.done, task.line.contains("decide:") {
+                            HStack(spacing: 6) {
+                                Button("Do today") { model.decide(task.line, keep: true) }.buttonStyle(PillButton(prominent: true))
+                                Button("Schedule") {
+                                    model.actions.ask("Schedule \u{201C}\(task.text)\u{201D} for a day this week: put it in my week plan and take it out of Today's five.")
+                                }
+                                .buttonStyle(PillButton())
+                                Button("Drop") { model.decide(task.line, keep: false) }.buttonStyle(PillButton(destructive: true))
+                            }
+                            .padding(.leading, 27)
+                        }
                     }
                 }
             }

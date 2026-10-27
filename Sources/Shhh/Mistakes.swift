@@ -13,6 +13,11 @@ enum Mistakes {
         let question: String
         let missing: [String]
         let model: String
+        /// Why the marks went, from a mark review: "didn't know", "command term" or "careless".
+        /// Older entries have none.
+        var cause: String = ""
+        /// When a fresh redo question on it is due ("2026-10-28"), from a mark review.
+        var redo: [String] = []
     }
 
     static var folder: URL {
@@ -38,6 +43,8 @@ enum Mistakes {
             text += "**Question:** \(entry.question.replacingOccurrences(of: "\n", with: " "))\n"
             if !entry.missing.isEmpty { text += "**Missing:**\n" + entry.missing.map { "- \($0)" }.joined(separator: "\n") + "\n" }
             if !entry.model.isEmpty { text += "**Model answer:** \(entry.model.replacingOccurrences(of: "\n", with: " "))\n" }
+            if !entry.cause.isEmpty { text += "**Cause:** \(entry.cause)\n" }
+            if !entry.redo.isEmpty { text += "**Redo:** \(entry.redo.joined(separator: ", "))\n" }
         }
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try? text.write(to: file, atomically: true, encoding: .utf8)
@@ -48,6 +55,22 @@ enum Mistakes {
         guard let text = try? String(contentsOf: url(for: subject), encoding: .utf8) else { return [] }
         let sections = text.components(separatedBy: "\n## ").dropFirst()
         return sections.suffix(limit).map { "## " + $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+
+    /// Each entry's heading ("2026-10-27 · 2.5 Normal distribution · 2/6"), cause and redo dates,
+    /// for the ones with a redo schedule (from a mark review). Older entries have no "**Redo:**" line.
+    static func scheduled(_ subject: String) -> [(heading: String, topic: String, cause: String, redo: [String])] {
+        guard let text = try? String(contentsOf: url(for: subject), encoding: .utf8) else { return [] }
+        return text.components(separatedBy: "\n## ").dropFirst().compactMap { section -> (heading: String, topic: String, cause: String, redo: [String])? in
+            let lines = section.components(separatedBy: "\n")
+            func field(_ name: String) -> String {
+                lines.first { $0.hasPrefix("**\(name):** ") }.map { String($0.dropFirst(name.count + 6)).trimmingCharacters(in: .whitespaces) } ?? ""
+            }
+            let redo = field("Redo").components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            guard !redo.isEmpty, let heading = lines.first else { return nil }
+            let parts = heading.components(separatedBy: " · ")
+            return (heading, parts.count >= 3 ? parts[1] : "", field("Cause"), redo)
+        }
     }
 
     static func count(_ subject: String) -> Int {

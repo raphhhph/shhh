@@ -133,9 +133,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // The subject: said now, or in the conversation on the card ("let's start a quiz on econ",
         // then "open the whiteboard"), or the one studied last.
         let context = [request, focused?.question ?? ""] + tasks.suffix(3).map(\.question)
-        let subject = context.lazy.compactMap { StudyBoard.subject(in: $0) }.first
+        var subject = context.lazy.compactMap { StudyBoard.subject(in: $0) }.first
             ?? UserDefaults.standard.string(forKey: "lastStudySubject")
             ?? Profile.subjects.components(separatedBy: ",").first?.trimmingCharacters(in: .whitespaces) ?? "Economics"
+        // Draft feedback is on a piece of coursework: "Extended Essay", "Mathematics AI IA", "TOK Essay".
+        if mode == .feedback { subject = Self.courseworkName(request, subject: StudyBoard.subject(in: request)) }
         // "Quiz me on that" on an answer card: on what the card was about.
         var request = request
         if let asked = focused?.question, !asked.isEmpty,
@@ -150,13 +152,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     /// Whether a request is for the whiteboard, and how: a quiz, an exam question, or their flashcards
-    /// ("review my flashcards" is the deck; "make flashcards on…" is the tutor writing them). Also `--route`.
+    /// ("review my flashcards" is the deck; "make flashcards on…" is the tutor writing them), a mark
+    /// review ("I got a 4 in maths", "my econ test came back") or feedback on a draft ("check my IA
+    /// against the criteria"). Also `--route`.
     static func studyMode(_ request: String) -> StudyBoardModel.Mode? {
+        func matches(_ pattern: String) -> Bool { request.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil }
+        let assessed = #"(math|maths|mathematics|econ|economics|business|bio|biology|chem|chemistry|physics|history|english|chinese|spanish|french|geog|geography|psych|psychology|ess|tok|cs|computer science|politics|test|exam|paper|mock|quiz|assessment|ia|essay|unit test|summative)"#
+        let review = [
+            // "I got a 4 in maths", "got 23/40 on my econ test", "I scored 61% in the chem mock"
+            #"\b(got|get|scored|score|received|getting)\b\s+(a |an |only |just )?([1-7]|\d{1,3}\s*%|\d{1,3}\s*/\s*\d{1,3}|\d{1,3} out of \d{1,3})\b[^.?!]{0,30}\b(in|on|for)\b[^.?!]{0,20}\b"# + assessed + #"\b"#,
+            // "my econ test came back", "maths came back a 4", "got my history paper back"
+            #"\b"# + assessed + #"\b[^.?!]{0,30}\b(came|come|got|is|are|was|were) back\b|\bgot (my|the|our)\b[^.?!]{0,30}\b(test|exam|paper|mock|essay|ia|assessment|marks?|grades?|results?)\b[^.?!]{0,10}\bback\b"#,
+            // "go through my marked paper", "review a returned mark", "sort out my lost marks"
+            #"\b(go|going|went|look|run)\s+(through|over)\b[^.?!]{0,25}\b(marked|returned|graded)\b|\b(returned|marked) (mark|test|paper|exam|mock|assessment)\b|\b(lost marks|mark review)\b"#,
+        ]
+        let feedback = [
+            // "check my IA against the criteria", "mark my EE draft", "review my TOK essay"
+            #"\b(check|mark|grade|assess|review|look over|go over|go through|read|predict|feedback on)\b[^.?!]{0,30}\b(ia|ee|extended essay|internal assessment|tok essay|tok exhibition|exhibition|io|individual oral|draft|commentary|exploration|lab report)\b"#,
+            // "give me feedback on my draft"
+            #"\bfeedback\b[^.?!]{0,30}\b(draft|ia|ee|essay|io|outline|exhibition|commentary|exploration)\b"#,
+            #"\bagainst (the )?(ib )?(criteria|criterion|rubric|mark ?bands?|markscheme)\b"#,
+        ]
+        // Not a draft email, message or slides.
+        if feedback.contains(where: matches), !matches(#"\b(email|e-mail|message|text|reply|slides?|deck|code)\b"#) { return .feedback }
+        if review.contains(where: matches) { return .review }
         let quiz = #"\b(quiz|test) me\b|\blet'?s\b[^.?!]{0,10}\bquiz\b|\b(give|set|make)\b[^.?!]{0,10}\b(quiz|practice questions|exam(-style)? question)|\b(start|do|begin|run)\b[^.?!]{0,12}\b(quiz|study session|revision session|practice session)\b|\bwhite ?board\b|\bflash ?cards?\b"#
         func has(_ pattern: String) -> Bool { request.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil }
         guard has(quiz) else { return nil }
         if has(#"\bflash ?cards?\b"#), !has(#"\b(make|create|generate|write)\b[^.?!]{0,20}\bflash ?cards?\b"#), !has(#"\b(quiz|test) me\b"#) { return .cards }
         return has(#"\bexam\b"#) ? .exam : .quiz
+    }
+
+    /// What a draft-feedback session is on: "Extended Essay", "TOK Essay", "TOK Exhibition",
+    /// "English A Language and Literature IO", "Mathematics AI IA", or "<subject> draft".
+    static func courseworkName(_ request: String, subject: String?) -> String {
+        func has(_ pattern: String) -> Bool { request.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil }
+        let subjects = Profile.subjects.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        if has(#"\b(ee|extended essay)\b"#) { return "Extended Essay" }
+        if has(#"\bexhibition\b"#) { return "TOK Exhibition" }
+        if has(#"\b(tok|theory of knowledge)\b"#) { return "TOK Essay" }
+        if has(#"\b(io|individual oral)\b"#) {
+            let language = (subject.map { [$0] } ?? []) + subjects
+            return (language.first { $0.lowercased().contains("english") || $0.lowercased().contains("literature") } ?? subject ?? "English") + " IO"
+        }
+        if has(#"\b(ia|internal assessment|exploration|investigation|commentary|commentaries)\b"#) { return subject.map { "\($0) IA" } ?? "IA" }
+        return subject.map { "\($0) draft" } ?? "Draft"
     }
 
     /// Joe at the notch, saying a line out loud: for the tour, with no conversation behind it.

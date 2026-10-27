@@ -174,6 +174,51 @@ enum StudyReview {
         return (count, results.filter { $0.date >= weekAgo }.count)
     }
 
+    // MARK: Redo questions (from a mark review)
+
+    /// A lost-marks question from a returned test, due for a fresh redo question.
+    struct Redo: Hashable {
+        let subject: String
+        let topic: String
+        let cause: String
+        /// The mistake book's heading for it ("2026-10-27 · 2.5 Normal distribution · 2/6").
+        let heading: String
+        /// The step that's due ("2026-10-30"), and which of the steps it is (1 of 3).
+        let date: String
+        let step: Int
+        let steps: Int
+    }
+
+    /// Redo days after a mark review: the next day, then 3 and 7 days on.
+    static let redoGaps = [1, 3, 7]
+
+    static func redoDates(from date: Date = Date()) -> [String] {
+        redoGaps.compactMap { Calendar.current.date(byAdding: .day, value: $0, to: Calendar.current.startOfDay(for: date)) }.map { day.string(from: $0) }
+    }
+
+    /// Redo questions due now: the latest redo day that has come, unless they've since been marked
+    /// on that topic (a quiz log result on or after that day), and not more than 3 days stale. Read
+    /// from the mistake book's "**Redo:**" lines, so nothing else is stored.
+    static func redos(subject: String? = nil, results: [StudyBuddy.Result] = StudyBuddy.results()) -> [Redo] {
+        let today = day.string(from: Date())
+        let stale = day.string(from: Calendar.current.date(byAdding: .day, value: -3, to: Date()) ?? Date())
+        var subjects = Profile.subjects.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        if let subject { subjects = [subject] }
+        return subjects.flatMap { subject -> [Redo] in
+            let pack = StudyBuddy.pack(for: subject)
+            return Mistakes.scheduled(subject).compactMap { entry -> Redo? in
+                guard let index = entry.redo.lastIndex(where: { $0 <= today }), entry.redo[index] >= stale else { return nil }
+                let date = entry.redo[index]
+                let done = !entry.topic.isEmpty && results.contains {
+                    $0.date >= date && key($0.topic) == key(entry.topic)
+                        && ($0.subject == subject || (pack != nil && StudyBuddy.pack(for: $0.subject) == pack))
+                }
+                return done ? nil : Redo(subject: subject, topic: entry.topic, cause: entry.cause, heading: entry.heading,
+                                         date: date, step: index + 1, steps: entry.redo.count)
+            }
+        }
+    }
+
     /// For a tutor's or Claude's instructions: what's due, one line each.
     static func lines(_ topics: [Topic], limit: Int = 8) -> String {
         topics.prefix(limit).map {

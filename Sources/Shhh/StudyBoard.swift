@@ -101,7 +101,9 @@ final class StudyBoardModel: ObservableObject {
     enum Item: Identifiable, Equatable {
         case question(n: Int, marks: Int, topic: String, source: String, text: String)
         case answer(text: String, spoken: Bool, image: Data? = nil)
-        case feedback(score: Int, total: Int, text: String, model: String)
+        /// n: the question it marks (its <question n=…>), 0 when the tag gave none; topic: the
+        /// feedback tag's own topic, for a question that never got a <question> tag.
+        case feedback(score: Int, total: Int, text: String, model: String, n: Int = 0, topic: String = "")
         case summary(score: Int, total: Int, text: String)
         /// A short lesson before the questions ("teach me…", or a topic they keep losing marks on).
         case lesson(title: String, text: String)
@@ -117,7 +119,7 @@ final class StudyBoardModel: ObservableObject {
             switch self {
             case let .question(n, _, _, _, text): "q\(n)\(text.prefix(20))"
             case let .answer(text, _, image): "a\(text.hashValue)\(image?.count ?? 0)"
-            case let .feedback(score, total, text, _): "f\(score)/\(total)\(text.prefix(20))"
+            case let .feedback(score, total, text, _, _, _): "f\(score)/\(total)\(text.prefix(20))"
             case let .summary(_, _, text): "s\(text.prefix(20))"
             case let .lesson(title, text): "l\(title)\(text.prefix(20))"
             case let .cards(cards): "c\(cards.count)\(cards.first?.term ?? "")"
@@ -177,7 +179,7 @@ final class StudyBoardModel: ObservableObject {
     /// Marks so far this session.
     var score: (Int, Int) {
         items.reduce((0, 0)) { total, item in
-            if case let .feedback(score, out, _, _) = item { return (total.0 + score, total.1 + out) }
+            if case let .feedback(score, out, _, _, _, _) = item { return (total.0 + score, total.1 + out) }
             return total
         }
     }
@@ -385,13 +387,33 @@ final class StudyBoardModel: ObservableObject {
         if mode == .feedback { saveFeedback(); return }
         let date = Date().formatted(.iso8601.year().month().day())
         var lines: [String] = []
-        var topic = items.reversed().compactMap { if case let .question(_, _, topic, _, _) = $0 { return topic } else { return nil } }.first ?? ""
-        var question = items.reversed().compactMap { if case let .question(_, _, _, _, text) = $0 { return text } else { return nil } }.first ?? ""
+        // The questions before this reply (items already holds it): the last one, and each by its n.
+        let earlier = items.dropLast(min(parsed.count, items.count))
+        var topic = earlier.reversed().compactMap { if case let .question(_, _, topic, _, _) = $0 { return topic } else { return nil } }.first ?? ""
+        var question = earlier.reversed().compactMap { if case let .question(_, _, _, _, text) = $0 { return text } else { return nil } }.first ?? ""
+        var byNumber: [Int: (topic: String, text: String)] = [:]
+        for case let .question(n, _, topic, _, text) in earlier where n > 0 { byNumber[n] = (topic: topic, text: text) }
         var lost: [Mistakes.Entry] = []
         for item in parsed {
-            if case let .question(_, _, next, _, text) = item { topic = next; question = text }
-            if case let .feedback(score, total, text, model) = item, total > 0, score < total {
-                var entry = Mistakes.Entry(date: date, topic: topic, score: score, total: total, question: question,
+            if case let .question(n, _, next, _, text) = item {
+                topic = next; question = text
+                if n > 0 { byNumber[n] = (topic: next, text: text) }
+            }
+            guard case let .feedback(score, total, text, model, n, ownTopic) = item, total > 0 else { continue }
+            // Paired by its n, never with whichever question came last: a lost question that had no
+            // <question> tag (the tutor waited for the paper) is logged as that, not as the one before.
+            var markedTopic = topic, markedQuestion = question
+            if n > 0 {
+                if let asked = byNumber[n] {
+                    markedTopic = asked.topic.isEmpty ? ownTopic : asked.topic
+                    markedQuestion = asked.text
+                } else if mode == .review {
+                    markedTopic = ownTopic
+                    markedQuestion = "Q\(n) (from the paper, wording not given)"
+                }
+            }
+            if score < total {
+                var entry = Mistakes.Entry(date: date, topic: markedTopic, score: score, total: total, question: markedQuestion,
                                            missing: Mistakes.missing(in: text), model: model)
                 // A returned test's lost marks: why, and fresh redo questions on it in 1, 3 and 7 days.
                 if mode == .review {
@@ -400,12 +422,12 @@ final class StudyBoardModel: ObservableObject {
                 }
                 lost.append(entry)
             }
-            if case let .feedback(score, total, text, _) = item, total > 0 {
+            do {
                 let missing = text.components(separatedBy: "\n").first { $0.lowercased().contains("missing") || $0.contains("✗") } ?? ""
                 var note = missing.replacingOccurrences(of: #"^[-•*✗\s]+"#, with: "", options: .regularExpression)
                 // Cut at a word, not mid-word ("the price producers rec").
                 if note.count > 90 { note = String(note.prefix(90)).replacingOccurrences(of: #"\s+\S*$"#, with: "", options: .regularExpression) + "…" }
-                lines.append("- \(date) · \(subject) · \(topic) · \(score)/\(total) · \(note)")
+                lines.append("- \(date) · \(subject) · \(markedTopic) · \(score)/\(total) · \(note)")
             }
         }
         if mode == .review, parsed.contains(where: { if case .summary = $0 { return true } else { return false } }) {
@@ -426,31 +448,40 @@ final class StudyBoardModel: ObservableObject {
     /// given for them) still go in the mistake book, as 0 of their marks with cause "?" and redo dates.
     private func undiscussedLost(date: String) -> [Mistakes.Entry] {
         guard nettedUpTo < items.count else { return [] }
-        var entries: [Mistakes.Entry] = []
-        var unmarked: (topic: String, marks: Int, text: String, model: String)?
-        func close() {
-            if let question = unmarked, question.marks > 0 {
-                var entry = Mistakes.Entry(date: date, topic: question.topic, score: 0, total: question.marks, question: question.text,
-                                           missing: ["not discussed in detail"], model: question.model)
-                entry.cause = "?"
-                entry.redo = StudyReview.redoDates()
-                entries.append(entry)
-            }
-            unmarked = nil
-        }
+        // Every question asked since the last check, in order; a feedback tag marks the one with its n
+        // (or, with no n, the latest question, as before). A feedback for a question that never got a
+        // <question> tag marks nothing else.
+        var asked: [(n: Int, topic: String, marks: Int, text: String, model: String, marked: Bool)] = []
+        var latest: Int?
         for item in items[nettedUpTo...] {
             switch item {
-            case let .question(_, marks, topic, _, text):
-                close()
-                unmarked = (topic: topic, marks: marks, text: text, model: "")
-            case let .feedback(_, total, _, model):
-                // Marked: it's in the book already. A model answer on its own is kept for the entry.
-                if total > 0 { unmarked = nil } else if !model.isEmpty { unmarked?.model = model }
+            case let .question(n, marks, topic, _, text):
+                asked.append((n: n, topic: topic, marks: marks, text: text, model: "", marked: false))
+                latest = asked.count - 1
+            case let .feedback(_, total, _, model, n, _):
+                if total > 0 {
+                    // Marked: it's in the book already.
+                    if n > 0 {
+                        if let index = asked.lastIndex(where: { $0.n == n }) { asked[index].marked = true }
+                    } else if let index = latest {
+                        asked[index].marked = true
+                    }
+                } else if !model.isEmpty, let index = latest {
+                    // A model answer on its own is kept for the entry.
+                    asked[index].model = model
+                }
             default:
                 break
             }
         }
-        close()
+        var entries: [Mistakes.Entry] = []
+        for question in asked where !question.marked && question.marks > 0 {
+            var entry = Mistakes.Entry(date: date, topic: question.topic, score: 0, total: question.marks, question: question.text,
+                                       missing: ["not discussed in detail"], model: question.model)
+            entry.cause = "?"
+            entry.redo = StudyReview.redoDates()
+            entries.append(entry)
+        }
         nettedUpTo = items.count
         return entries
     }
@@ -501,9 +532,11 @@ final class StudyBoardModel: ObservableObject {
     static func parse(_ text: String) -> [Item] {
         var items: [Item] = []
         var rest = Substring(text)
-        var pendingFeedback: (Int, Int, String)?
+        var pendingFeedback: (score: Int, total: Int, body: String, n: Int, topic: String)?
         func flushFeedback(model: String = "") {
-            if let (score, total, body) = pendingFeedback { items.append(.feedback(score: score, total: total, text: body, model: model)) }
+            if let pending = pendingFeedback {
+                items.append(.feedback(score: pending.score, total: pending.total, text: pending.body, model: model, n: pending.n, topic: pending.topic))
+            }
             pendingFeedback = nil
         }
         while let open = rest.range(of: #"<(question|feedback|model|summary|lesson|cards|ms|returned|criterion)\b[^>]*>"#, options: .regularExpression) {
@@ -530,7 +563,9 @@ final class StudyBoardModel: ObservableObject {
                 flushFeedback()
                 // Mark review: why the marks went, shown on the card and kept in the mistake book.
                 let cause = attribute("cause")
-                pendingFeedback = (Int(attribute("score")) ?? 0, Int(attribute("total")) ?? 0, cause.isEmpty ? body : "**Cause:** \(cause)\n" + body)
+                pendingFeedback = (score: Int(attribute("score")) ?? 0, total: Int(attribute("total")) ?? 0,
+                                   body: cause.isEmpty ? body : "**Cause:** \(cause)\n" + body,
+                                   n: Int(attribute("n")) ?? 0, topic: attribute("topic"))
             case "returned":
                 flushFeedback()
                 items.append(.returned(assessment: attribute("assessment"), mark: attribute("mark"), boundary: attribute("boundary")))
@@ -610,18 +645,20 @@ final class StudyBoardModel: ObservableObject {
             empty when they don't know; never guess it).
             3. Then the questions that lost marks, one at a time, most marks lost first: <question n="3" marks="6" topic="<syllabus number and name \
             from the map>" source="<assessment> Q3">the question as printed</question>, and ask what they wrote and where the marks went. When the \
-            marking is visible on the paper, say what you see and ask them to confirm instead.
-            4. Then <feedback n="3" score="<marks they got>" total="<marks available>" cause="didn't know|command term|careless">✓ what earned \
+            marking is visible on the paper, say what you see and ask them to confirm instead. Every lost-marks question gets its own \
+            <question n=… marks=… topic=…> before its feedback, even when you only have part of the wording (a table or diagram still to \
+            come): give what you have and say "(table on the paper)" or the like; never skip it.
+            4. Then <feedback n="3" topic="<the same topic>" score="<marks they got>" total="<marks available>" cause="didn't know|command term|careless">✓ what earned \
             marks; ✗ missing: each lost mark point</feedback><model>the answer that gets full marks, using only methods on this subject's \
-            syllabus</model>, then the next lost question. Give the feedback tag as soon as they've said what they wrote and why the marks went: \
+            syllabus</model>, then the next lost question. n is always the question's number on the paper, the same as its <question> tag. Give the feedback tag as soon as they've said what they wrote and why the marks went: \
             if they haven't said the marks they got, estimate the score from the markscheme and say outside the tag that it's an estimate. \
             ✗ lines are only the lost mark points; caveats and notes go outside the tag. cause: \
             didn't know = the content wasn't there; command term = they knew it but didn't answer what the command term asks (described when \
             asked to explain, no judgment on evaluate, too short for the marks); careless = a slip, misread, units, arithmetic, ran out of time. \
             When you can't tell, ask which it was before the feedback tag. Each feedback tag goes in their mistake book, and a fresh redo \
             question on it comes back tomorrow, in 3 days and in a week: say so once, and only about questions you gave a feedback tag for.
-            5. When the lost questions are done (or on "end"): first a <feedback> (and <model>) for every lost-marks question discussed that \
-            doesn't have one yet, then <summary score="<their total>" total="<marks available>">the mark; how the lost \
+            5. When the lost questions are done (or on "end"): first a <question> for any lost-marks question that doesn't have one yet, and a \
+            <feedback n=…> (and <model>) for every lost-marks question discussed that doesn't have one yet, then <summary score="<their total>" total="<marks available>">the mark; how the lost \
             marks split by cause (e.g. 9 didn't know, 4 command term, 3 careless); then **3 things to fix** as a numbered list, each concrete \
             (a topic to relearn with its syllabus number, a command-term habit, a checking habit)</summary>. No <cards> unless definitions were lost.
             """
@@ -955,7 +992,7 @@ private struct StudyBoardView: View {
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
-        case let .feedback(score, total, text, modelAnswer):
+        case let .feedback(score, total, text, modelAnswer, _, _):
             VStack(alignment: .leading, spacing: 10) {
                 if total > 0 {
                     HStack(spacing: 8) {

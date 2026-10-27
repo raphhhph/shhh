@@ -3395,7 +3395,7 @@ private struct SettingsPage: View {
     @AppStorage("profileProgramme") private var profileProgramme = ""
     @AppStorage("profileSubjects") private var profileSubjects = ""
     @AppStorage("profileProject") private var profileProject = ""
-    @AppStorage("examSession") private var examSession = ""
+    @AppStorage("profileExamSession") private var examSession = "" // Profile.examSession, shared with onboarding
     @AppStorage("studyDoneBy") private var doneBy = 23
     @AppStorage("studyBlockMinutes") private var blockMinutes = 90
     @AppStorage("sundayPlan") private var sundayPlan = true

@@ -66,11 +66,19 @@ enum WeekPlan {
                 }.joined(separator: ", "))
             }
             var planned = 0
+            var today: [String: Int] = [:]
             for block in Daybook.freeBlocks(on: day, busy: busy) where block.end > now {
-                guard let item = work.first(where: { (wanted[$0.id] ?? 0) > 0 && $0.start > block.end }) else { continue }
-                wanted[item.id, default: 0] -= 1
+                // At most two blocks a day for one thing, so a test gets spread over the days before it.
+                let candidates = work.filter { $0.start > block.end && (today[$0.id] ?? 0) < 2 }
+                var ahead = false
+                var pick = candidates.first { (wanted[$0.id] ?? 0) > 0 }
+                // Everything has its blocks: a free day's first block gets ahead on the nearest one.
+                if pick == nil, planned == 0, let next = candidates.first { pick = next; ahead = true }
+                guard let item = pick else { continue }
+                if !ahead { wanted[item.id, default: 0] -= 1 }
+                today[item.id, default: 0] += 1
                 let subject = item.subject.map { $0 == "project" ? "" : " · \($0)" } ?? ""
-                lines.append("- [ ] \(Daybook.hhmm(block.start))–\(Daybook.hhmm(block.end)) (\(block.label)): \(item.title)\(subject) — due \(short(item.start))")
+                lines.append("- [ ] \(Daybook.hhmm(block.start))–\(Daybook.hhmm(block.end)) (\(block.label)): \(ahead ? "get ahead on " : "")\(item.title)\(subject) — due \(short(item.start))")
                 planned += 1
             }
             if planned == 0 { lines.append("Nothing planned.") }

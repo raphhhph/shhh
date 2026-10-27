@@ -308,6 +308,12 @@ enum Daybook {
         let carried = section("Today's five", of: last).filter { $0.hasPrefix("- [ ]") && !isOverdue($0) }
             .filter { line in !line.contains("· project") || openMilestones.contains { sameTask($0, taskTitle(line)) } }
             .map(carriedAgain)
+            .map { line -> String in
+                // "due tomorrow" from yesterday is "due today" now: re-read it from the calendar.
+                guard let item = all.first(where: { $0.kind == .deadline && sameTask($0.title, taskTitle(line)) }),
+                      let range = line.range(of: #"— due [^·—]+"#, options: .regularExpression) else { return line }
+                return line.replacingCharacters(in: range, with: "— due \(when(item, now)) ")
+            }
         let inbox = section("Inbox", of: last).filter { $0.hasPrefix("- ") }
 
         // Backlog, aged: stamped the first day it's seen, raised at a week with a decision to make,
@@ -564,13 +570,19 @@ enum Daybook {
         }
         if let start = at(19, 30), let end = at(21) { blocks.append(("evening", start, end)) }
         let edge = at(23)
-        return blocks.compactMap { block in
+        // In time order, and never overlapping: a free last period and "after school" can meet
+        // (free P5 14:25–15:25, after school from 14:55), so a later block starts when the one before ends.
+        var previousEnd = Date.distantPast
+        return blocks.sorted { $0.start < $1.start }.compactMap { block in
             var block = block
             for (start, end) in busy.sorted(by: { $0.0 < $1.0 }) where start < block.end && end > block.start {
                 if start > block.start, start.timeIntervalSince(block.start) >= 30 * 60 { block.end = start } else { block.start = end }
             }
+            if block.start < previousEnd { block.start = previousEnd }
             if let edge, block.end > edge { block.end = edge }
-            return block.end.timeIntervalSince(block.start) >= 30 * 60 ? block : nil
+            guard block.end.timeIntervalSince(block.start) >= 30 * 60 else { return nil }
+            previousEnd = block.end
+            return block
         }
     }
 

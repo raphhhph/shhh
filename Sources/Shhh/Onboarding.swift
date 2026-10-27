@@ -2,6 +2,7 @@ import EventKit
 import AppKit
 import AVFoundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The first launch, as a window of its own: Joe says hi at the notch, learns the user's name,
 /// shows what he does in short animations, sets up school, notes, permissions and Claude, and ends
@@ -34,7 +35,8 @@ final class Onboarding: NSObject, NSWindowDelegate {
     var isVisible: Bool { window?.isVisible == true }
 
     func show() {
-        model.step = .hello
+        // A first setup that was quit or crashed partway picks up where it stopped; a replay starts over.
+        model.step = Profile.isSetUp ? .hello : OnboardingModel.savedStep
         model.heard = nil
         if window == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 660),
@@ -65,7 +67,14 @@ final class Onboarding: NSObject, NSWindowDelegate {
 
 @MainActor
 final class OnboardingModel: ObservableObject {
-    enum Step: Int, CaseIterable { case hello, name, models, tour, school, notes, permissions, claude, connect, tryIt, done }
+    // The ManageBac link comes before School, so the subjects are already filled in from it.
+    enum Step: Int, CaseIterable { case hello, name, models, tour, connect, school, notes, morning, permissions, claude, tryIt, done }
+
+    /// The step a first setup reached, so quitting halfway doesn't mean clicking through it all again.
+    static var savedStep: Step {
+        get { Step(rawValue: UserDefaults.standard.integer(forKey: "onboardingStep")) ?? .hello }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "onboardingStep") }
+    }
 
     @Published var step: Step = .hello
     @Published var heard: String?
@@ -77,12 +86,14 @@ final class OnboardingModel: ObservableObject {
         guard let following = Step(rawValue: step.rawValue + 1) else { return }
         if step == .tour { actions.narrate("", "") } // moving on: he stops mid-sentence
         withAnimation(.easeInOut(duration: 0.35)) { step = following }
+        Self.savedStep = following
         arrived()
     }
 
     func back() {
         guard let previous = Step(rawValue: step.rawValue - 1) else { return }
         withAnimation(.easeInOut(duration: 0.35)) { step = previous }
+        Self.savedStep = previous
     }
 
     /// What Joe says at the notch as each step comes up.
@@ -123,6 +134,7 @@ private struct OnboardingView: View {
                     case .tour: TourStep(model: model)
                     case .school: SchoolStep(model: model)
                     case .notes: NotesStep(model: model)
+                    case .morning: MorningStep(model: model)
                     case .connect: ConnectStep(model: model)
                     case .models: ModelsStep(model: model)
                     case .permissions: PermissionsStep(model: model)
@@ -302,7 +314,11 @@ private struct NameStep: View {
                 Primary(title: "Continue", enabled: !trimmed.isEmpty) { model.next() }
             }
         }
-        .onAppear { focused = true }
+        .onAppear {
+            focused = true
+            // The Mac already knows their name: one less thing to type.
+            if trimmed.isEmpty, let first = NSFullUserName().split(separator: " ").first { name = String(first) }
+        }
     }
 
     private var trimmed: String { name.trimmingCharacters(in: .whitespaces) }
@@ -523,7 +539,10 @@ private struct SchoolStep: View {
     ]
 
     var body: some View {
-        StepFrame(model: model, title: "Your school", subtitle: "So I know your classes, your deadlines and how each subject is assessed.") {
+        StepFrame(model: model, title: "Your school",
+                  subtitle: subjects.isEmpty || CalendarFeed.links.isEmpty
+                      ? "So I know your classes, your deadlines and how each subject is assessed."
+                      : "I filled in your subjects from ManageBac. Fix anything I got wrong, and set HL or SL.") {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(spacing: 12) {
                     field("School", "Your school’s name", $school)
@@ -575,10 +594,12 @@ private struct SchoolStep: View {
                                 Button { withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) { toggle(subject) } } label: {
                                     HStack(spacing: 6) {
                                         Image(systemName: picked ? "checkmark" : "plus").font(.system(size: 11, weight: .bold))
-                                        Text(subject).font(.system(size: 13, weight: picked ? .semibold : .regular)).lineLimit(1).minimumScaleFactor(0.85)
+                                        // Two lines for the long names ("Literature & Performance") rather than cut short.
+                                        Text(subject).font(.system(size: 12.5, weight: picked ? .semibold : .regular)).lineLimit(2)
+                                            .minimumScaleFactor(0.9).fixedSize(horizontal: false, vertical: true)
                                         Spacer(minLength: 0)
                                     }
-                                    .padding(.horizontal, 12).frame(height: 36)
+                                    .padding(.horizontal, 12).frame(minHeight: 36)
                                     .background(picked ? Tint.accent.opacity(0.2) : Tint.card, in: RoundedRectangle(cornerRadius: 10))
                                     .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(picked ? Tint.accent : Tint.line))
                                     .foregroundStyle(picked ? Tint.accent : .white)
@@ -686,7 +707,12 @@ private struct SchoolStep: View {
 private struct ModelsStep: View {
     @ObservedObject var model: OnboardingModel
     @State private var tick = 0
+    /// Each download's last progress and when it last moved, to tell a stalled one from a slow one.
+    @State private var lastMoved: [ModelGuard.Model: (fraction: Double, at: Date)] = [:]
+    @State private var mirrorNote: String?
+    @State private var chinese = Transcriber.languages == .chinese
     private let timer = Timer.publish(every: 0.7, on: .main, in: .common).autoconnect()
+    private static let stallSeconds: TimeInterval = 45
 
     private var models: [ModelGuard.Model] {
         Transcriber.languages == .chinese ? [.speech, .chinese, .voice, .mandarin] : [.speech, .voice]
@@ -696,20 +722,84 @@ private struct ModelsStep: View {
         StepFrame(model: model, title: "Get Joe ready", subtitle: "Joe runs on this Mac: speech and his voice download once (about \(String(format: "%.1f", models.reduce(0) { $0 + $1.megabytes } / 1024)) GB). You can continue while they download.") {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(models) { item in row(item) }
+                // Many IB students speak Chinese: both languages, in one sentence too. Adds two downloads.
+                if Transcriber.languages != .european { // chose European languages in Settings: theirs
+                    Toggle("I speak Chinese too (Mandarin or Cantonese)", isOn: $chinese)
+                        .font(.system(size: 13.5)).tint(Tint.accent)
+                        .onChange(of: chinese) { Transcriber.languages = chinese ? .chinese : .english }
+                }
                 HStack {
-                    Primary(title: "Download all", enabled: models.contains { ModelGuard.status($0) != .ready }) {
-                        for item in models where ModelGuard.status(item) != .ready { model.actions.download(item) }
+                    // Only what isn't already on its way: a second start of the same download doesn't help.
+                    Primary(title: "Download all", enabled: models.contains { canStart($0) }) {
+                        for item in models where canStart(item) { model.actions.download(item) }
                     }
                     .frame(width: 180)
                     Spacer()
-                    Text("In mainland China without a VPN: Settings → Advanced → Download models from → China mirror.")
+                    Text(mirrorNote ?? "In mainland China without a VPN: Settings → Advanced → Download models from → China mirror.")
                         .font(.system(size: 11.5)).foregroundStyle(Tint.soft).frame(maxWidth: 360, alignment: .trailing)
                 }
                 .padding(.top, 6)
+                if let space = diskWarning {
+                    Label(space, systemImage: "externaldrive.badge.exclamationmark").font(.system(size: 12.5)).foregroundStyle(.orange)
+                }
             }
             .id(tick)
         }
-        .onReceive(timer) { _ in tick += 1 }
+        .onReceive(timer) { _ in
+            tick += 1
+            for item in models {
+                guard case .downloading(let fraction) = ModelGuard.status(item) else { lastMoved[item] = nil; continue }
+                if lastMoved[item]?.fraction != fraction { lastMoved[item] = (fraction, Date()) }
+            }
+        }
+        .task { await chooseMirror() }
+        .onAppear {
+            // A Mac set up in Chinese, and no choice made yet: start with Chinese on.
+            if UserDefaults.standard.string(forKey: "speechLanguages") == nil, Transcriber.languages == .english,
+               Locale.preferredLanguages.contains(where: { $0.hasPrefix("zh") }) {
+                chinese = true
+            }
+        }
+    }
+
+    /// No progress for a while. Not near the end: a finished download sits at 99% while macOS
+    /// prepares it, which can take a minute.
+    private func isStalled(_ item: ModelGuard.Model) -> Bool {
+        guard let moved = lastMoved[item], moved.fraction < 0.97 else { return false }
+        return Date().timeIntervalSince(moved.at) > Self.stallSeconds
+    }
+
+    private func canStart(_ item: ModelGuard.Model) -> Bool {
+        switch ModelGuard.status(item) {
+        case .notDownloaded, .failed: true
+        case .downloading, .ready: false
+        }
+    }
+
+    /// Not enough room for what's left to download, said before it fails halfway.
+    private var diskWarning: String? {
+        let needed = models.filter { ModelGuard.status($0) != .ready }.reduce(0) { $0 + $1.megabytes } * 1_048_576
+        guard needed > 0,
+              let free = try? FileManager.default.homeDirectoryForCurrentUser
+                  .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage,
+              Double(free) < needed * 1.2 else { return nil }
+        return "Only \(free / 1_073_741_824) GB free on this Mac: these need about \(String(format: "%.1f", needed / 1_073_741_824)) GB. Free some space first."
+    }
+
+    /// In mainland China without a VPN, Hugging Face doesn't load and every download fails. If they
+    /// haven't chosen yet, and Hugging Face can't be reached but the mirror can, use the mirror.
+    private func chooseMirror() async {
+        guard UserDefaults.standard.object(forKey: "modelMirrorChina") == nil else { return }
+        func reachable(_ address: String) async -> Bool {
+            var request = URLRequest(url: URL(string: address)!, timeoutInterval: 6)
+            request.httpMethod = "HEAD"
+            return (try? await URLSession.shared.data(for: request)) != nil
+        }
+        let huggingFace = await reachable("https://huggingface.co")
+        let mirror = await reachable("https://hf-mirror.com")
+        guard !huggingFace, mirror else { return }
+        ModelDownloads.useChinaMirror = true
+        mirrorNote = "Hugging Face can't be reached from here, so I'm downloading from the China mirror (Settings → Advanced)."
     }
 
     private func row(_ item: ModelGuard.Model) -> some View {
@@ -720,8 +810,12 @@ private struct ModelsStep: View {
                 switch status {
                 case .notDownloaded: Text("\(Int(item.megabytes)) MB").font(.system(size: 12)).foregroundStyle(Tint.soft)
                 case .downloading(let fraction):
-                    ProgressView(value: fraction).tint(Tint.accent).frame(maxWidth: 380)
-                    Text("\(Int(fraction * 100))% of \(Int(item.megabytes)) MB").font(.system(size: 11.5)).foregroundStyle(Tint.soft)
+                    ProgressView(value: fraction).tint(isStalled(item) ? .orange : Tint.accent).frame(maxWidth: 380)
+                    // A hung download can't be restarted from here; after a relaunch it resumes (FluidAudio's
+                    // .partial files, kept by ModelGuard) and the welcome reopens on this page.
+                    Text(isStalled(item) ? "Stuck at \(Int(fraction * 100))%. Check your internet. If it still doesn't move, quit and reopen Joe: the download carries on from where it stopped, and you'll be back on this page."
+                                         : "\(Int(fraction * 100))% of \(Int(item.megabytes)) MB")
+                        .font(.system(size: 11.5)).foregroundStyle(isStalled(item) ? .orange : Tint.soft)
                 case .ready: Label("Ready", systemImage: "checkmark.circle.fill").font(.system(size: 12.5)).foregroundStyle(.green)
                 case .failed(let message): Text(message).font(.system(size: 12)).foregroundStyle(.orange).lineLimit(2)
                 }
@@ -739,50 +833,74 @@ private struct ModelsStep: View {
     }
 }
 
-/// Everything Joe reads, connected here once: ManageBac and Google by their calendar links (or the
-/// Mac's Calendar), and Spotify. All optional; each is one paste or one click.
+/// The student's school, connected once: the ManageBac link (or Google's) feeds deadlines, events,
+/// the Daybook and the morning briefing, and fills in their subjects for the next step. The Mac's
+/// Calendar is only offered without a link, so nothing is asked for twice. Spotify and messages
+/// aren't set up here: they connect from the dashboard when the student wants them.
 private struct ConnectStep: View {
     @ObservedObject var model: OnboardingModel
     @State private var link = ""
     @State private var links = CalendarFeed.links
     @State private var linkStatus: String?
+    @State private var found: [String] = []
+    @State private var reading = false
     @State private var macCalendar = EKEventStore.authorizationStatus(for: .event) == .fullAccess
-    @State private var spotify = Spotify.Account.isConnected
-    @State private var spotifyStatus: String?
+    @State private var dayToday = ""
+    @State private var timetableStatus: String?
+    @State private var importing = false
 
     var body: some View {
-        StepFrame(model: model, title: "Your school, connected", subtitle: "One paste or one click each. Skip any and add it later in Settings.") {
+        StepFrame(model: model, title: "Your school, connected",
+                  subtitle: "Paste your ManageBac link once: I'll keep your deadlines and events up to date and fill in your subjects. Skip it and add it later in Settings.") {
             VStack(alignment: .leading, spacing: 10) {
-                card(icon: "flag.fill", tint: .red, title: "ManageBac deadlines",
-                     detail: "ManageBac → Calendar → Subscribe → copy the link. (Google: settings → Secret address in iCal format.)") {
+                card(icon: "flag.fill", tint: .red, title: "ManageBac",
+                     detail: "ManageBac → Calendar → Subscribe → copy the link. (No ManageBac? A Google Calendar iCal link works too: settings → Secret address in iCal format.)") {
                     HStack(spacing: 10) {
                         TextField("webcal://…managebac.com/… or a Google iCal link", text: $link)
                             .textFieldStyle(.plain).padding(.horizontal, 12).frame(height: 36)
                             .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
-                        Primary(title: "Add", enabled: link.contains("://")) { add() }.frame(width: 90)
+                            .onSubmit { if link.contains("://") { add() } }
+                        Primary(title: reading ? "Reading…" : "Add", enabled: link.contains("://") && !reading) { add() }.frame(width: 110)
                     }
                     if let linkStatus { Text(linkStatus).font(.system(size: 12.5)).foregroundStyle(Tint.soft) }
-                    if !links.isEmpty { Text("\(links.count) calendar link\(links.count == 1 ? "" : "s") added").font(.system(size: 12.5)).foregroundStyle(.green) }
-                }
-                card(icon: "calendar", tint: .blue, title: "Classes and events", detail: "If your Google or school calendar is in the Mac's Calendar app, Joe can read it.") {
-                    if macCalendar {
-                        Label("Connected", systemImage: "checkmark.circle.fill").foregroundStyle(.green).font(.system(size: 13))
-                    } else {
-                        Primary(title: "Use my Mac's Calendar", enabled: true) {
-                            CalendarFeed.requestMacCalendar { macCalendar = EKEventStore.authorizationStatus(for: .event) == .fullAccess }
-                        }.frame(width: 220)
+                    if !found.isEmpty {
+                        VStack(alignment: .leading, spacing: 5) {
+                            ForEach(found, id: \.self) { line in
+                                Label(line, systemImage: "checkmark.circle.fill").font(.system(size: 13)).foregroundStyle(.green)
+                            }
+                        }
+                        .transition(.opacity)
+                    } else if !links.isEmpty {
+                        Text("\(links.count) calendar link\(links.count == 1 ? "" : "s") added").font(.system(size: 12.5)).foregroundStyle(.green)
                     }
                 }
-                card(icon: "music.note", tint: .green, title: "Spotify", detail: "For “play…”, your liked songs and playlists. Optional.") {
-                    if spotify {
-                        Label("Connected", systemImage: "checkmark.circle.fill").foregroundStyle(.green).font(.system(size: 13))
-                    } else {
-                        Primary(title: "Connect Spotify", enabled: true) { connectSpotify() }.frame(width: 180)
-                        if let spotifyStatus { Text(spotifyStatus).font(.system(size: 12.5)).foregroundStyle(Tint.soft) }
+                // Lessons aren't in the ManageBac link: a picture of the timetable gives Joe today's classes,
+                // Now and Next, and the Daybook's lessons.
+                card(icon: "tablecells", tint: .purple, title: "Your timetable",
+                     detail: "A photo, screenshot or PDF of your class timetable. I'll read it once; it takes a minute or two.") {
+                    HStack(spacing: 10) {
+                        Primary(title: importing ? "Reading…" : "Choose a file", enabled: !importing) { chooseTimetable() }.frame(width: 160)
+                        TextField("Rotating timetable? Today's day, e.g. Day 3", text: $dayToday)
+                            .textFieldStyle(.plain).padding(.horizontal, 12).frame(height: 36)
+                            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9))
+                        if importing { ProgressView().controlSize(.small) }
+                    }
+                    if let timetableStatus { Text(timetableStatus).font(.system(size: 12.5)).foregroundStyle(Tint.soft) }
+                }
+                if links.isEmpty {
+                    card(icon: "calendar", tint: .blue, title: "Or your Mac's Calendar", detail: "If your school calendar is already in the Calendar app, I can read it from there.") {
+                        if macCalendar {
+                            Label("Connected", systemImage: "checkmark.circle.fill").foregroundStyle(.green).font(.system(size: 13))
+                        } else {
+                            Primary(title: "Use my Mac's Calendar", enabled: true) {
+                                CalendarFeed.requestMacCalendar { macCalendar = EKEventStore.authorizationStatus(for: .event) == .fullAccess }
+                            }.frame(width: 220)
+                        }
                     }
                 }
             }
         }
+        .onAppear { if !links.isEmpty { found = summary() } }
     }
 
     private func card<Content: View>(icon: String, tint: Color, title: String, detail: String, @ViewBuilder content: () -> Content) -> some View {
@@ -807,21 +925,53 @@ private struct ConnectStep: View {
         links = CalendarFeed.links
         link = ""
         linkStatus = "Reading it…"
+        reading = true
         Task {
             let result = await CalendarFeed.refreshLinks()
-            linkStatus = result.hasSuffix("items") ? "Found \(result)." : "Couldn't read it: \(result)"
+            reading = false
+            guard result.hasSuffix("items") else { linkStatus = "Couldn't read it: \(result)"; return }
+            // The school's ManageBac address names it ("swis.managebac.cn"): the School step's first field.
+            if Profile.school.isEmpty, let host = URL(string: new.replacingOccurrences(of: "webcal://", with: "https://"))?.host,
+               host.contains("managebac"), let name = host.split(separator: ".").first, name.lowercased() != "managebac" {
+                Profile.school = name.count <= 5 ? name.uppercased() : name.capitalized
+            }
+            // Their subjects, so the next step is already filled in (only if they haven't picked any).
+            let subjects = CalendarFeed.subjectGuesses()
+            if Profile.subjects.isEmpty, !subjects.isEmpty { Profile.subjects = subjects.joined(separator: ", ") }
+            linkStatus = nil
+            withAnimation { found = summary() }
         }
     }
 
-    private func connectSpotify() {
-        spotifyStatus = "The sign-in page is open in your browser: log in and press Agree."
-        Task.detached {
-            let result = Spotify.Account.login()
-            await MainActor.run {
-                spotify = Spotify.Account.isConnected
-                spotifyStatus = result
-            }
+    private func chooseTimetable() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image, .pdf]
+        panel.message = "Choose a photo, screenshot or PDF of your timetable"
+        guard panel.runModal() == .OK, let file = panel.url else { return }
+        importing = true
+        timetableStatus = "Reading your timetable…"
+        let day = dayToday.trimmingCharacters(in: .whitespaces)
+        Task {
+            timetableStatus = await Daybook.importTimetable(from: file, dayToday: day.isEmpty ? nil : day)
+            importing = false
         }
+    }
+
+    /// What the link gave Joe, in a few lines, so the student sees it worked without checking.
+    private func summary() -> [String] {
+        let items = CalendarFeed.linkItems()
+        guard !items.isEmpty else { return [] }
+        var lines = ["\(items.count) items: deadlines and events, kept up to date every 30 minutes"]
+        if let next = CalendarFeed.upcomingDeadlines(1).first {
+            lines.append("Next due: \(next.title), \(next.start.formatted(.dateTime.weekday(.wide).day().month()))")
+        }
+        // Only when it filled them in: subjects they'd already chosen stay theirs, and listing other
+        // guesses here would disagree with the next page.
+        let subjects = CalendarFeed.subjectGuesses()
+        if !subjects.isEmpty, Profile.subjects == subjects.joined(separator: ", ") {
+            lines.append("Subjects: \(subjects.joined(separator: ", ")). Check them on the next page")
+        }
+        return lines
     }
 }
 
@@ -831,8 +981,7 @@ private struct NotesStep: View {
 
     var body: some View {
         StepFrame(model: model, title: "Where should I keep notes?",
-                  subtitle: "Lecture notes, your daily plan and my memory of your days go in one folder you own.",
-                  canContinue: Assistant.vaultURL != nil) {
+                  subtitle: "Lecture notes, your daily plan and my memory of your days go in one folder you own. Not sure? Just continue and I'll make a Joe folder.") {
             VStack(spacing: 16) {
                 HStack(spacing: 16) {
                     option("book.closed", "My Obsidian vault", "Use the vault you already have.") { model.actions.chooseVault(); refresh += 1 }
@@ -845,6 +994,10 @@ private struct NotesStep: View {
                 }
             }
             .id(refresh)
+        }
+        .onDisappear {
+            // Moving on without choosing: the Joe folder, so notes and the Daybook work anyway.
+            if Assistant.vaultURL == nil, model.step.rawValue > OnboardingModel.Step.notes.rawValue { makeFolder() }
         }
     }
 
@@ -869,6 +1022,85 @@ private struct NotesStep: View {
             try? FileManager.default.createDirectory(at: folder.appendingPathComponent(sub), withIntermediateDirectories: true)
         }
         Assistant.vaultURL = folder
+    }
+}
+
+/// Their wake-up time, so the wake-up alarm (with its challenge) and the morning briefing work from
+/// the first morning instead of waiting to be discovered. Skippable; an existing wake-up alarm is kept.
+private struct MorningStep: View {
+    @ObservedObject var model: OnboardingModel
+    /// Their wake-up alarm if they have one: shown in the picker to change, never a second one.
+    private let existing = AlarmStore.load().first { $0.repeats != nil && $0.title.lowercased().contains("wake") }
+    @State private var time = Calendar.current.date(bySettingHour: 7, minute: 0, second: 0, of: Date()) ?? Date()
+    @State private var schoolDays = true
+    @State private var wanted = true
+
+    var body: some View {
+        StepFrame(model: model, title: "Your mornings",
+                  subtitle: "I'll wake you up, check you're really awake with a quick question, then tell you what your day looks like.",
+                  continueTitle: existing == nil && wanted ? "Set my alarm" : "Continue") {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 18) {
+                    Image(systemName: "alarm.fill").font(.system(size: 22)).foregroundStyle(Tint.accent)
+                        .frame(width: 48, height: 48).background(Tint.accent.opacity(0.14), in: Circle())
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(existing == nil ? "Wake me up at" : "Your wake-up alarm").font(.system(size: 15, weight: .semibold))
+                        DatePicker("", selection: $time, displayedComponents: .hourAndMinute)
+                            .labelsHidden().datePickerStyle(.field).frame(width: 110)
+                    }
+                    Spacer()
+                    Picker("", selection: $schoolDays) {
+                        Text("School days").tag(true)
+                        Text("Every day").tag(false)
+                    }
+                    .pickerStyle(.segmented).labelsHidden().frame(width: 220)
+                }
+                .padding(18)
+                .background(Tint.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .opacity(wanted ? 1 : 0.4)
+                .disabled(!wanted)
+                if existing == nil {
+                    Toggle("I don't want a wake-up alarm", isOn: Binding(get: { !wanted }, set: { wanted = !$0 }))
+                        .font(.system(size: 13.5)).tint(Tint.accent)
+                } else {
+                    Label("You already have one. Change the time or days here, or leave it as it is.", systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 13.5)).foregroundStyle(.green)
+                }
+            }
+        }
+        .onAppear {
+            guard let existing else { return }
+            time = existing.fireAt
+            schoolDays = existing.repeatDays != Set(1...7)
+        }
+        .onDisappear(perform: save)
+    }
+
+    /// On the way forward only: going back doesn't set anything.
+    private func save() {
+        guard wanted, model.step.rawValue > OnboardingModel.Step.morning.rawValue else { return }
+        let calendar = Calendar.current
+        let parts = calendar.dateComponents([.hour, .minute], from: time)
+        let today = calendar.date(bySettingHour: parts.hour ?? 7, minute: parts.minute ?? 0, second: 0, of: Date()) ?? time
+        let repeats = schoolDays ? "weekdays" : "daily"
+        var alarm = existing ?? Alarm(fireAt: today, title: "Wake up", kind: .alarm, repeats: repeats)
+        if let existing {
+            guard !AlarmStore.isLocked(existing) else { return } // in its last hour: only the challenge stops it
+            let before = calendar.dateComponents([.hour, .minute], from: existing.fireAt)
+            let sameDays = (existing.repeatDays != Set(1...7)) == schoolDays
+            guard before.hour != parts.hour || before.minute != parts.minute || !sameDays else { return } // unchanged
+            // Days they set by voice ("mon,wed,fri") stay unless they picked the other option.
+            if !sameDays { alarm.repeats = repeats }
+            alarm.fireAt = today
+        }
+        // The first ring has to fall on one of its days: set up on a Friday evening, a weekday alarm
+        // waits for Monday instead of ringing on Saturday once.
+        alarm.fireAt = alarm.next(after: Date()) ?? today
+        if existing != nil {
+            AlarmStore.save(AlarmStore.load().map { $0.id == alarm.id ? alarm : $0 })
+        } else {
+            AlarmStore.add(alarm)
+        }
     }
 }
 
@@ -958,6 +1190,30 @@ private struct ClaudeStep: View {
                 .padding(18)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Tint.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                // Gmail, Google Calendar and Drive reach Joe through the student's claude.ai connectors,
+                // so they're one click away here instead of something to discover later.
+                if claude.isReady, !useAPIKey {
+                    HStack(spacing: 14) {
+                        Image(systemName: "envelope.fill").font(.system(size: 18)).foregroundStyle(Tint.accent).frame(width: 32)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Your email and Google Calendar").font(.system(size: 14.5, weight: .semibold))
+                            Text("Connect Gmail, Google Calendar and Drive on claude.ai, and I can read your school email and draft replies.")
+                                .font(.system(size: 12.5)).foregroundStyle(Tint.soft).fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer()
+                        if ClaudeConnectors.has("gmail") {
+                            Label("Gmail connected", systemImage: "checkmark.circle.fill").font(.system(size: 13)).foregroundStyle(.green)
+                        } else {
+                            Button("Open claude.ai") { NSWorkspace.shared.open(URL(string: "https://claude.ai/settings/connectors")!) }
+                                .buttonStyle(.plain)
+                                .font(.system(size: 13.5, weight: .semibold))
+                                .padding(.horizontal, 18).frame(height: 34)
+                                .background(Color.white.opacity(0.12), in: Capsule())
+                        }
+                    }
+                    .padding(.horizontal, 18).padding(.vertical, 14)
+                    .background(Tint.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
                 if claude.needsCode {
                     HStack(spacing: 10) {
                         TextField("Paste the code from the Claude page", text: $code)
@@ -1004,13 +1260,33 @@ private struct ClaudeStep: View {
     }
 }
 
+/// The first real request. Speech recognition has to be there for it: if they skipped the download
+/// or it's still going, this step shows it and starts it, instead of a key that silently does nothing.
 private struct TryStep: View {
     @ObservedObject var model: OnboardingModel
 
     var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.7)) { _ in content(ModelGuard.status(.speech)) }
+            .onAppear {
+                switch ModelGuard.status(.speech) {
+                case .notDownloaded, .failed: model.actions.download(.speech)
+                default: break
+                }
+            }
+    }
+
+    @ViewBuilder private func content(_ speech: ModelGuard.Status) -> some View {
         VStack(spacing: 24) {
             Spacer()
-            if let heard = model.heard {
+            if model.heard == nil, speech != .ready {
+                ProgressView(value: progress(speech)).tint(Tint.accent).frame(width: 320)
+                Text("Almost ready to listen").font(.system(size: 34, weight: .bold))
+                Text(waiting(speech)).font(.system(size: 16)).foregroundStyle(Tint.soft)
+                    .multilineTextAlignment(.center).frame(maxWidth: 620)
+                if case .failed = speech {
+                    Primary(title: "Retry", enabled: true) { model.actions.download(.speech) }.frame(width: 140)
+                }
+            } else if let heard = model.heard {
                 Image(systemName: "checkmark.circle.fill").font(.system(size: 64)).foregroundStyle(.green)
                     .transition(.scale.combined(with: .opacity))
                 Text("I heard you").font(.system(size: 34, weight: .bold))
@@ -1037,29 +1313,77 @@ private struct TryStep: View {
             }
         }
     }
+
+    private func progress(_ speech: ModelGuard.Status) -> Double {
+        if case .downloading(let fraction) = speech { return fraction }
+        return 0
+    }
+
+    private func waiting(_ speech: ModelGuard.Status) -> String {
+        switch speech {
+        case .downloading(let fraction): "Speech recognition is downloading (\(Int(fraction * 100))%). You can try me as soon as it's done."
+        case .failed(let message): message
+        default: "Getting speech recognition ready. This takes a minute the first time."
+        }
+    }
 }
 
 private struct DoneStep: View {
     @ObservedObject var model: OnboardingModel
 
     var body: some View {
-        VStack(spacing: 22) {
+        VStack(spacing: 16) {
             Spacer()
-            Star(size: 80).frame(height: 200)
+            Star(size: 56).frame(height: 120)
             Typed(text: "You’re all set, \(Profile.name).")
             VStack(alignment: .leading, spacing: 10) {
                 tip("command", "Hold right ⌘ to write with your voice")
                 tip("option", "Hold right ⌥ to ask me anything (double-tap for a long one)")
-                tip("graduationcap", "Say “quiz me on economics” to study on the whiteboard")
-                tip("sparkle", "Click my star in the menu bar for your dashboard")
+            }
+            // What's working now, so nothing is left to discover; anything missing is one place away.
+            LazyVGrid(columns: [GridItem(.fixed(300), alignment: .leading), GridItem(.fixed(300), alignment: .leading)], spacing: 8) {
+                ForEach(ready, id: \.0) { title, done in
+                    HStack(spacing: 8) {
+                        Image(systemName: done ? "checkmark.circle.fill" : "circle.dashed").frame(width: 18)
+                        Text(title)
+                    }
+                    .font(.system(size: 13)).foregroundStyle(done ? Color.green : Tint.soft)
+                }
+            }
+            .padding(14)
+            .background(Tint.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            if ready.contains(where: { !$0.1 }) {
+                Text("Anything not ticked can be added any time in Settings.").font(.system(size: 12)).foregroundStyle(Tint.soft)
             }
             Spacer()
-            Primary(title: "Start using Joe") { model.actions.finished() }
+            Primary(title: "Start using Joe") {
+                OnboardingModel.savedStep = .hello
+                model.actions.finished()
+            }
         }
     }
 
+    /// Icons in a fixed-width column, so each line's text starts in the same place.
     private func tip(_ symbol: String, _ text: String) -> some View {
-        Label(text, systemImage: symbol).font(.system(size: 15)).foregroundStyle(Tint.soft)
+        HStack(spacing: 10) {
+            Image(systemName: symbol).frame(width: 22)
+            Text(text)
+        }
+        .font(.system(size: 15)).foregroundStyle(Tint.soft)
+    }
+
+    private var ready: [(String, Bool)] {
+        let timetable = Daybook.timetableURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+        return [
+            ("Speech recognition", ModelGuard.status(.speech) == .ready),
+            ("My voice", ModelGuard.status(.voice) == .ready),
+            ("ManageBac deadlines and events", !CalendarFeed.links.isEmpty),
+            ("Your subjects", !Profile.subjects.isEmpty),
+            ("Your timetable", timetable),
+            ("Wake-up alarm and morning briefing", AlarmStore.load().contains { $0.repeats != nil && $0.title.lowercased().contains("wake") }),
+            ("Notes folder", Assistant.vaultURL != nil),
+            ("Gmail", ClaudeConnectors.has("gmail")),
+        ]
     }
 }
 

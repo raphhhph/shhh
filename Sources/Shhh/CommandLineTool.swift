@@ -354,6 +354,59 @@ enum CommandLineTool {
             print(Daybook.instructions)
             print("\n--- If it had to build today's:\n" + Daybook.buildRules)
             exit(0)
+        case ("--timetable-import", 2...):
+            // Joe --timetable-import <photo or pdf> ["Day 3"]: reads a timetable and saves timetable.json.
+            let file = URL(fileURLWithPath: args[1])
+            run { print(await Daybook.importTimetable(from: file, dayToday: args.count > 2 ? args[2] : nil)) }
+        case ("--daybook-preview", 1...3):
+            // Joe --daybook-preview [<vault>] [yyyy-mm-dd]: the Daybook Joe would build this morning by
+            // himself, from that vault and for that day (nothing is written).
+            var day = Date()
+            for arg in args.dropFirst() {
+                if let date = IBProjects.isoDate(arg), arg.count == 10 {
+                    if !Calendar.current.isDateInToday(date) { day = Calendar.current.date(bySettingHour: 7, minute: 0, second: 0, of: date) ?? date }
+                } else {
+                    useFolder(arg)
+                }
+            }
+            print(Daybook.localText(day) ?? "No notes vault set.")
+            exit(0)
+        case ("--projects", 1...2):
+            // Joe --projects [<vault or School folder>]: each IB project's progress, and what it adds to today's Daybook.
+            if args.count > 1 { useFolder(args[1]) }
+            print(IBProjects.report())
+            exit(0)
+        case ("--project-new", 2...5):
+            // Joe --project-new <ee|ia|tok-essay|tok-exhibition|io|cas> ["<subject>"] [yyyy-mm-dd] ["<supervisor>"]:
+            // makes the project's note from its template (or finds the one already there).
+            guard let kind = IBProjects.Kind(loose: args[1]) else { fail("Kinds: ee, ia, tok-essay, tok-exhibition, io, cas") }
+            var subject = "", supervisor = ""
+            var finalDate: Date?
+            for arg in args.dropFirst(2) {
+                if let date = IBProjects.isoDate(arg), arg.count == 10 { finalDate = date }
+                else if subject.isEmpty { subject = arg } else { supervisor = arg }
+            }
+            guard let url = IBProjects.create(kind, subject: subject, finalDate: finalDate, supervisor: supervisor),
+                  let text = try? String(contentsOf: url, encoding: .utf8) else { fail("Couldn't make the note: is the notes vault set?") }
+            print(url.path)
+            print(text)
+            exit(0)
+        case ("--week-preview", 1...2):
+            // Joe --week-preview [<vault>]: the week plan Joe would write from today, and what a re-plan
+            // of the saved Week.md would move (nothing is written).
+            if args.count > 1 { useFolder(args[1]) }
+            print(WeekPlan.text(from: Date()))
+            if let url = WeekPlan.url, let saved = try? String(contentsOf: url, encoding: .utf8) {
+                let moves = WeekPlan.replanned(saved)?.moves ?? []
+                print("--- Re-plan of the saved \(url.lastPathComponent): " + (moves.isEmpty ? "nothing to move." : "\n" + moves.joined(separator: "\n")))
+            }
+            exit(0)
+        case ("--week-plan", 1):
+            // Joe --week-plan: writes Daybook/Week.md for the seven days from today (for "plan my week").
+            guard let url = WeekPlan.build(), let text = try? String(contentsOf: url, encoding: .utf8) else { fail("No notes vault set.") }
+            print("Wrote \(url.path)\n")
+            print(text)
+            exit(0)
         case ("--look", 1):
             // Shhh --look: for the assistant, a screenshot and the front window's controls.
             run { print(await ScreenControl.look()) }
@@ -381,6 +434,26 @@ enum CommandLineTool {
         default:
             fail(usage)
         }
+    }
+
+    /// Points the Daybook, projects and week plan at a folder given on the command line: a vault (its
+    /// Brain folder is used when it has one), a Brain folder, or a School folder.
+    private static func useFolder(_ path: String) {
+        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true)
+        let manager = FileManager.default
+        let brain = url.appendingPathComponent("Brain", isDirectory: true)
+        if manager.fileExists(atPath: brain.path) {
+            Daybook.rootOverride = brain
+        } else if url.lastPathComponent == "School" {
+            Daybook.rootOverride = url.deletingLastPathComponent()
+        } else {
+            Daybook.rootOverride = url
+            let projects = url.appendingPathComponent("Projects", isDirectory: true)
+            if !manager.fileExists(atPath: url.appendingPathComponent("School").path), manager.fileExists(atPath: projects.path) {
+                IBProjects.folderOverride = projects
+            }
+        }
+        Daybook.timetableChanged()
     }
 
     private static func transcribe(files: [String]) async throws {

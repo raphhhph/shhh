@@ -687,7 +687,7 @@ private struct HomePage: View {
                     }
                 }
             }
-            DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil, stretch: true,
+            DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil || CalendarFeed.linksReadAt != nil, stretch: true,
                     connect: { model.openSettings("general") }, start: { model.actions.ask($0.startRequest) }) { model.page = .calendar }
                 .frame(width: narrow ? nil : 320)
         }
@@ -912,8 +912,10 @@ private struct DueSoon: View {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(item.title).font(.system(size: 13, weight: .medium)).lineLimit(2)
                                 .fixedSize(horizontal: false, vertical: true)
-                            if let group = SubjectGroup.of(item.title) ?? SubjectGroup.of(item.detail) {
-                                Text(group.name).font(.system(size: 11)).foregroundStyle(group.color)
+                            if let group = SubjectGroup.of(item.subject ?? item.title) ?? SubjectGroup.of(item.detail) {
+                                Text(item.subject ?? group.name).font(.system(size: 11)).foregroundStyle(group.color)
+                            } else if let subject = item.subject {
+                                Text(subject).font(.system(size: 11)).foregroundStyle(.secondary)
                             }
                         }
                         Spacer(minLength: 4)
@@ -1609,8 +1611,8 @@ private struct CalendarPage: View {
                 } else {
                     if let selected { detail(selected) }
                     Card { week(dates, items, now) }
-                    DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil, connect: { model.openSettings("general") },
-                    start: { model.actions.ask($0.startRequest) }) {}
+                    DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil || CalendarFeed.linksReadAt != nil,
+                            connect: { model.openSettings("general") }, start: { model.actions.ask($0.startRequest) }) {}
                 }
             }
         }
@@ -1857,8 +1859,8 @@ private struct CalendarPage: View {
     private func rail(_ now: Date) -> some View {
         VStack(spacing: 16) {
             if let selected { detail(selected) }
-            DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil, connect: { model.openSettings("general") },
-                    start: { model.actions.ask($0.startRequest) }) {}
+            DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil || CalendarFeed.linksReadAt != nil,
+                    connect: { model.openSettings("general") }, start: { model.actions.ask($0.startRequest) }) {}
             Card(title: "Subjects", symbol: "square.grid.2x2") {
                 VStack(alignment: .leading, spacing: 7) {
                     ForEach(SubjectGroup.allCases, id: \.self) { group in
@@ -1880,7 +1882,7 @@ private struct CalendarPage: View {
         let color = color(item)
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(item.kind == .lesson ? (SubjectGroup.of(item.title)?.name ?? "Class") : item.kind == .deadline ? "ManageBac deadline" : item.kind == .alarm ? "Alarm" : "Event")
+                Text(Self.label(item))
                     .font(.system(size: 11, weight: .semibold)).foregroundStyle(color)
                 Spacer()
                 Button { selected = nil } label: { Image(systemName: "xmark").font(.system(size: 10, weight: .bold)) }
@@ -1904,6 +1906,16 @@ private struct CalendarPage: View {
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(color.opacity(0.3)))
     }
 
+    /// "Mathematics", "Deadline · Economics HL", "Alarm", "Event".
+    private static func label(_ item: CalendarFeed.Item) -> String {
+        switch item.kind {
+        case .lesson: SubjectGroup.of(item.title)?.name ?? "Class"
+        case .deadline: item.subject.map { "Deadline · \($0)" } ?? "Deadline"
+        case .alarm: "Alarm"
+        case .event: "Event"
+        }
+    }
+
     private static func when(_ item: CalendarFeed.Item) -> String {
         let day = item.start.formatted(.dateTime.weekday(.wide).day().month(.wide))
         if item.allDay { return day }
@@ -1915,6 +1927,109 @@ private struct CalendarPage: View {
 // MARK: - Study
 
 /// Joe as a study buddy: a card per subject with how the quizzes have gone and a button to start one.
+/// The IB projects (EE, IAs, TOK, IO, CAS) from School/Projects: each one's progress, next
+/// milestone and days left, with Open note; and Start a project, which makes the note from its template.
+private struct ProjectsCard: View {
+    @ObservedObject var model: DashboardModel
+    var subjects: [String]
+    @State private var projects: [IBProjects.Project] = []
+    @State private var words: [String: Int] = [:]
+
+    var body: some View {
+        Card(title: "Projects", symbol: "flag.checkered") {
+            if projects.isEmpty {
+                Text("Your EE, IAs, TOK, IO and CAS, each with its IB milestones, supervisor meetings and next step. Start one and Joe puts its next milestone in your Daybook.")
+                    .font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(projects) { project in row(project) }
+            Menu {
+                ForEach(IBProjects.Kind.allCases.filter { $0 != .ia }) { kind in
+                    Button(kind.title) { start(kind) }
+                }
+                Divider()
+                ForEach(subjects, id: \.self) { subject in
+                    Button("\(subject) IA") { start(.ia, subject: subject) }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus").font(.system(size: 10, weight: .bold))
+                    Text("Start a project").font(.system(size: 13, weight: .medium))
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 28)
+                .background(Color.primary.opacity(0.06), in: Capsule())
+                .overlay(Capsule().strokeBorder(Look.line))
+                .contentShape(Capsule())
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+        }
+        .onAppear(perform: reload)
+    }
+
+    private func row(_ project: IBProjects.Project) -> some View {
+        let left = project.next?.date.map { IBProjects.daysLeft($0) }
+        let late = (left ?? 0) < 0
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Text(project.label).font(.system(size: 14, weight: .semibold)).lineLimit(1)
+                if !project.subject.isEmpty, project.kind != .ia {
+                    Text(project.subject).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer()
+                Text("\(project.done)/\(project.milestones.count)")
+                    .font(.system(size: 12, weight: .semibold).monospacedDigit()).foregroundStyle(.secondary)
+                Button("Open note") { model.openInObsidian(project.url) }.buttonStyle(PillButton())
+            }
+            ProgressView(value: project.progress).tint(late ? Color.red : Look.accent)
+            Text(detail(project, left: left))
+                .font(.system(size: 12)).foregroundStyle(late ? Color.red : Color.secondary).lineLimit(1)
+        }
+    }
+
+    /// "Next: Outline · 5 days left · 1,240/4,000 words".
+    private func detail(_ project: IBProjects.Project, left: Int?) -> String {
+        var parts: [String] = []
+        if let next = project.next {
+            parts.append("Next: \(next.title)")
+            if let left {
+                parts.append(left < 0 ? "overdue by \(-left) day\(left == -1 ? "" : "s")"
+                             : left == 0 ? "due today" : "\(left) day\(left == 1 ? "" : "s") left")
+            }
+        } else {
+            parts.append(project.milestones.isEmpty ? "No milestones yet" : "All milestones done")
+        }
+        if let count = words[project.id] {
+            parts.append("\(count.formatted())" + (project.words.map { "/\($0.formatted())" } ?? "") + " words")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func start(_ kind: IBProjects.Kind, subject: String = "") {
+        guard let url = IBProjects.create(kind, subject: subject) else { return }
+        reload()
+        model.openInObsidian(url)
+    }
+
+    /// The notes now, and the words in each local doc after (textutil can take a moment).
+    private func reload() {
+        let found = IBProjects.all()
+        projects = found
+        let docs = found.map { (id: $0.id, doc: $0.doc) }.filter { !$0.doc.isEmpty }
+        guard !docs.isEmpty else { return }
+        Task {
+            let counts = await Task.detached { () -> [String: Int] in
+                var counts: [String: Int] = [:]
+                for entry in docs { if let count = IBProjects.wordCount(doc: entry.doc) { counts[entry.id] = count } }
+                return counts
+            }.value
+            words = counts
+        }
+    }
+}
+
 private struct StudyPage: View {
     @ObservedObject var model: DashboardModel
     @Environment(\.narrow) private var narrow

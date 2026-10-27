@@ -654,7 +654,7 @@ final class StudyBoardModel: ObservableObject {
             a short quote from the draft in quotation marks (or what's missing)
             **To lift it a band:** one or two concrete changes</criterion>. TOK essay and exhibition: one holistic criterion out of 10. \
             Mark honestly against the descriptors below (best fit; most drafts sit mid-band), never inflate.
-            - Then <summary score="<predicted total>" total="<maximum>">**Predicted:** the total, and the grade when the rubric gives bands
+            - Then <summary score="<predicted total>" total="<maximum>">**Grade:** the grade when the rubric gives bands (the total is shown from score and total, don't repeat it)
             **Word count:** n of the limit, and what to cut or add when it's over or well under
             **The three biggest fixes:** a numbered list, most marks first</summary>
             - Outside the tags, at most one short sentence, said aloud. Quote only their words; never invent quotes.
@@ -931,7 +931,7 @@ private struct StudyBoardView: View {
             VStack(alignment: .leading, spacing: 8) {
                 let label = model.mode == .review ? "Mark" : model.mode == .feedback ? "Predicted" : "Session"
                 Text(total > 0 ? "\(label): \(score)/\(total)" : model.mode == .feedback ? "Feedback summary" : "\(label) summary").font(.system(size: 16, weight: .bold))
-                BoardText(text, size: 13.5, spacing: 0)
+                BoardText(total > 0 ? Self.withoutScoreLine(text) : text, size: 13.5, spacing: 0)
                 // What next, without typing: the session's own advice, as buttons.
                 if !model.isBusy, model.mode == .review {
                     HStack(spacing: 8) {
@@ -1093,6 +1093,16 @@ private struct StudyBoardView: View {
             .background(Color.primary.opacity(0.06), in: Capsule())
     }
 
+    /// A summary's body without a first line that repeats the score the title already shows
+    /// ("**Predicted:** 21/34, a B (low)" keeps just "**Grade:** a B (low)").
+    static func withoutScoreLine(_ text: String) -> String {
+        let pattern = #"^\s*\*\*(Predicted|Mark|Score|Total):\*\*\s*\d+\s*/\s*\d+[,.;:]?[ \t]*"#
+        guard let range = text.range(of: pattern, options: .regularExpression) else { return text }
+        let rest = text[range.upperBound...]
+        if rest.isEmpty || rest.hasPrefix("\n") { return rest.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return "**Grade:** " + rest
+    }
+
     private static func color(_ score: Int, _ total: Int) -> Color {
         let ratio = Double(score) / Double(max(total, 1))
         return ratio >= 0.7 ? .green : ratio >= 0.45 ? .orange : .red
@@ -1234,7 +1244,7 @@ extension StudyBoard {
                 **To lift it a band:** say why the firm interviews and the trade data were chosen, and what each can't show.</criterion>
                 <criterion name="C · Critical thinking" score="6" total="12" band="5–8">**Evidence:** sections 3 and 4 describe the export figures ("exports rose by 8%") without weighing other causes.
                 **To lift it a band:** separate the exchange rate effect from demand changes, and evaluate the reliability of the interview data.</criterion>
-                <summary score="21" total="34">**Predicted:** 21/34, a B (low)
+                <summary score="21" total="34">**Grade:** a B (low)
                 **Word count:** 3,912 of 4,000, fine
                 **The three biggest fixes:**
                 1. Turn description into analysis in sections 3 and 4.

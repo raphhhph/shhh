@@ -8,13 +8,16 @@ import SwiftUI
 @MainActor
 final class NotchOverview {
     enum Widget: String, CaseIterable, Identifiable {
-        case clock, nextClass, dueSoon, today, tasks, alarm, music, ask, focus
+        case clock, nextClass, studyBlock, overdue, dueSoon, projects, today, tasks, alarm, music, ask, focus
         var id: String { rawValue }
 
         var title: String {
             switch self {
             case .clock: "Clock"
             case .nextClass: "Next class"
+            case .studyBlock: "Next study block"
+            case .overdue: "Overdue"
+            case .projects: "Projects"
             case .dueSoon: "Due soon"
             case .today: "Today's five"
             case .tasks: "Joe's tasks"
@@ -29,6 +32,9 @@ final class NotchOverview {
             switch self {
             case .clock: "clock"
             case .nextClass: "graduationcap"
+            case .studyBlock: "book.closed"
+            case .overdue: "exclamationmark.circle"
+            case .projects: "flag.checkered"
             case .dueSoon: "calendar.badge.exclamationmark"
             case .today: "checklist"
             case .tasks: "sparkle"
@@ -40,8 +46,16 @@ final class NotchOverview {
         }
     }
 
-    /// How many widgets fit side by side in the overview.
-    static let maxWidgets = 5
+    /// How many widgets fit side by side in the overview (it widens to fit them).
+    static let maxWidgets = 7
+
+    /// The overview's size for so many tiles: about 150 pt each, with room for their words.
+    static func size(for count: Int) -> NSSize {
+        NSSize(width: max(520, CGFloat(count) * 150 + 60), height: 190)
+    }
+
+    /// The student order (Oct 2026): the study plan up front, music last.
+    static let studentDefault: [Widget] = [.clock, .nextClass, .studyBlock, .overdue, .dueSoon, .projects, .music]
 
     static var isEnabled: Bool {
         get { UserDefaults.standard.object(forKey: "notchOverview") as? Bool ?? true }
@@ -50,7 +64,22 @@ final class NotchOverview {
 
     /// The widgets shown, in order.
     static var widgets: [Widget] {
-        get { (UserDefaults.standard.stringArray(forKey: "notchWidgets") ?? ["clock", "nextClass", "dueSoon", "tasks", "music"]).compactMap(Widget.init) }
+        get {
+            guard let saved = UserDefaults.standard.stringArray(forKey: "notchWidgets") else { return studentDefault }
+            var widgets = saved.compactMap(Widget.init)
+            // Once: a saved arrangement from before the study widgets gets them, in their places.
+            if !UserDefaults.standard.bool(forKey: "notchWidgetsStudy") {
+                UserDefaults.standard.set(true, forKey: "notchWidgetsStudy")
+                let after = widgets.firstIndex(of: .nextClass).map { $0 + 1 } ?? min(1, widgets.count)
+                for (offset, widget) in [Widget.studyBlock, .overdue].enumerated() where !widgets.contains(widget) {
+                    widgets.insert(widget, at: min(after + offset, widgets.count))
+                }
+                if !widgets.contains(.projects) { widgets.insert(.projects, at: widgets.firstIndex(of: .music) ?? widgets.count) }
+                widgets = Array(widgets.prefix(maxWidgets))
+                UserDefaults.standard.set(widgets.map(\.rawValue), forKey: "notchWidgets")
+            }
+            return widgets
+        }
         set { UserDefaults.standard.set(newValue.map(\.rawValue), forKey: "notchWidgets") }
     }
 
@@ -97,7 +126,7 @@ final class NotchOverview {
         data.reload()
         model.fill(from: data, tasks: runningTasks())
         let notch = Notch.rect(on: screen)
-        let size = NSSize(width: 780, height: 190) // five tiles with room for their words
+        let size = Self.size(for: model.widgets.count)
         let panel = NotchPanel(contentRect: NSRect(x: notch.midX - size.width / 2, y: notch.maxY - size.height, width: size.width, height: size.height),
                                styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .statusBar
@@ -179,6 +208,10 @@ private final class OverviewModel: ObservableObject {
     @Published var artwork: URL?
     /// A timer running now (the focus timer's, or one asked for).
     @Published var timer: Alarm?
+    /// The study plan: the next block, what's overdue, the EE/IAs.
+    @Published var block: StudyToday.Block?
+    @Published var overdue: [StudyToday.Overdue] = []
+    @Published var projects: [IBProjects.Project] = []
 
     func fill(from data: DashboardModel, tasks: [String]) {
         widgets = NotchOverview.widgets
@@ -199,6 +232,9 @@ private final class OverviewModel: ObservableObject {
         alarm = data.alarms.first
         music = data.nowPlaying ?? music // the dashboard only checks while it's open; `refreshMusic` asks Spotify itself
         timer = data.alarms.filter { $0.kind == .timer && $0.fireAt > now }.min { $0.fireAt < $1.fireAt }
+        block = data.studyNext
+        overdue = data.overdue
+        if widgets.contains(.projects) { projects = Array(IBProjects.all().filter { $0.progress < 1 }.prefix(3)) }
     }
 }
 
@@ -285,6 +321,46 @@ private struct OverviewView: View {
                             .font(.system(size: 10.5, weight: .medium)).foregroundStyle(.red.opacity(0.85)).lineLimit(2)
                     }
                 } else { empty("Nothing more today") }
+            case .studyBlock:
+                if let block = model.block {
+                    Text(block.title).font(.system(size: 13, weight: .semibold)).lineLimit(2)
+                    Text("\(Daybook.hhmm(block.start))–\(Daybook.hhmm(block.end))" + (block.subject.map { " · \($0)" } ?? ""))
+                        .font(.system(size: 11)).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
+                    Button { ask(block.startRequest) } label: {
+                        Label("Start", systemImage: "play.fill").font(.system(size: 11.5, weight: .semibold))
+                            .padding(.horizontal, 10).frame(height: 22)
+                            .background(Color.orange.opacity(0.9), in: Capsule())
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                } else { empty("No more blocks today") }
+            case .overdue:
+                if model.overdue.isEmpty { empty("Nothing overdue") }
+                ForEach(model.overdue.prefix(3), id: \.line) { item in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(item.title).font(.system(size: 11.5)).foregroundStyle(.red.opacity(0.9)).lineLimit(1)
+                        HStack(spacing: 10) {
+                            if let link = item.link ?? CalendarFeed.manageBacHome.flatMap(URL.init(string:)) {
+                                Button { NSWorkspace.shared.open(link) } label: { Image(systemName: "arrow.up.doc") }.help("Upload it")
+                            }
+                            Button { ask(item.emailRequest) } label: { Image(systemName: "envelope") }.help("Email the teacher")
+                            Button { tick(item.line) } label: { Image(systemName: "checkmark") }.help("Mark it done")
+                        }
+                        .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.white.opacity(0.7))
+                    }
+                }
+            case .projects:
+                if model.projects.isEmpty { empty("No projects yet") }
+                ForEach(model.projects) { project in
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack {
+                            Text(project.label).font(.system(size: 11.5, weight: .medium)).lineLimit(1)
+                            Spacer(minLength: 2)
+                            Text("\(project.done)/\(project.milestones.count)").font(.system(size: 10).monospacedDigit()).foregroundStyle(.white.opacity(0.5))
+                        }
+                        ProgressView(value: project.progress).tint(.orange).controlSize(.mini)
+                    }
+                }
             case .dueSoon:
                 if model.deadlines.isEmpty { empty("Nothing due soon") }
                 ForEach(model.deadlines) { item in
@@ -406,10 +482,11 @@ extension NotchOverview {
     func preview(to file: URL, done: @escaping () -> Void) {
         data.reload()
         model.fill(from: data, tasks: ["Consolidating Econ notes"])
-        model.widgets = [.clock, .nextClass, .dueSoon, .ask, .focus] // a full row, as wide as on screen
+        model.widgets = NotchOverview.studentDefault // a full row, as wide as on screen
         model.isOpen = true
         let host = NSHostingView(rootView: OverviewView(model: model, notchHeight: 32, notchWidth: 200, music: { _ in }))
-        let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 780, height: 190), styleMask: [.borderless], backing: .buffered, defer: false)
+        let size = Self.size(for: model.widgets.count)
+        let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: size.width, height: size.height), styleMask: [.borderless], backing: .buffered, defer: false)
         window.backgroundColor = .gray
         window.contentView = host
         window.orderFrontRegardless()

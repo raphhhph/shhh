@@ -3158,7 +3158,7 @@ private struct WidgetEditor: View {
             } isTargeted: { overTray = $0 && dragging != nil }
 
             HStack {
-                Button("Reset") { withAnimation(.snappy) { widgets = [.clock, .nextClass, .dueSoon, .tasks, .music] } }
+                Button("Reset") { withAnimation(.snappy) { widgets = NotchOverview.studentDefault } }
                     .buttonStyle(PillButton())
                 Spacer()
                 Button("Done") { done() }.buttonStyle(PillButton(prominent: true)).keyboardShortcut(.defaultAction)

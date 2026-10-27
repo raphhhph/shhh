@@ -75,13 +75,14 @@ final class Dashboard: NSObject, NSWindowDelegate {
 @MainActor
 final class DashboardModel: ObservableObject {
     enum Page: String, CaseIterable, Identifiable {
-        case home, calendar, study, history, routines, alarms, notes, dictionary, music, usage, settings
+        case home, calendar, study, projects, history, routines, alarms, notes, dictionary, music, usage, settings
         var id: String { rawValue }
         var title: String {
             switch self {
             case .home: "Home"
             case .calendar: "Calendar"
             case .study: "Study"
+            case .projects: "Projects"
             case .usage: "Usage"
             case .history: "History"
             case .routines: "Routines"
@@ -97,6 +98,7 @@ final class DashboardModel: ObservableObject {
             case .home: "house"
             case .calendar: "calendar"
             case .study: "graduationcap"
+            case .projects: "flag.checkered"
             case .usage: "chart.bar"
             case .history: "clock.arrow.circlepath"
             case .routines: "wand.and.stars"
@@ -446,6 +448,7 @@ private struct DashboardView: View {
                         case .home: HomePage(model: model)
                         case .calendar: CalendarPage(model: model)
                         case .study: StudyPage(model: model)
+                        case .projects: ProjectsPage(model: model)
                         case .usage: UsagePage()
                         case .history: HistoryPage(model: model)
                         case .routines: RoutinesPage(model: model)
@@ -474,10 +477,12 @@ private struct DashboardView: View {
     }
 
     /// The pages in groups, like Linear's sidebar: your day, Joe's tools, and the app.
+    /// What a student opens every day first; the rest folds under More.
     private static let groups: [(title: String?, pages: [DashboardModel.Page])] = [
-        (nil, [.home, .calendar, .study, .history]),
-        ("Joe", [.routines, .alarms, .notes, .dictionary, .music]),
+        (nil, [.home, .study, .projects, .calendar, .notes]),
+        ("More", [.routines, .alarms, .music, .dictionary, .history, .usage]),
     ]
+    @AppStorage("sidebarMoreOpen") private var moreOpen = false
 
     private func sidebar(compact: Bool) -> some View {
         VStack(alignment: compact ? .center : .leading, spacing: 1) {
@@ -490,18 +495,34 @@ private struct DashboardView: View {
             .padding(.bottom, 16)
             ForEach(Self.groups.indices, id: \.self) { index in
                 let group = Self.groups[index]
+                // Folded unless opened, or the page showing is in it.
+                let open = group.title == nil || compact || moreOpen || group.pages.contains(model.page)
                 if let title = group.title {
                     if compact {
                         Divider().frame(width: 28).padding(.vertical, 8)
                     } else {
-                        Text(title.uppercased()).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(.tertiary)
-                            .padding(.horizontal, 10).padding(.top, 16).padding(.bottom, 4)
+                        Button { withAnimation(.snappy) { moreOpen.toggle() } } label: {
+                            HStack(spacing: 4) {
+                                Text(title.uppercased()).font(.system(size: 10.5, weight: .semibold))
+                                Image(systemName: "chevron.right").font(.system(size: 8.5, weight: .bold))
+                                    .rotationEffect(.degrees(open ? 90 : 0))
+                                Spacer()
+                                if !open, !model.alarms.isEmpty {
+                                    Image(systemName: "alarm").font(.system(size: 10)).help("\(model.alarms.count) alarm\(model.alarms.count == 1 ? "" : "s") set")
+                                }
+                            }
+                            .foregroundStyle(.tertiary)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 10).padding(.top, 16).padding(.bottom, 4)
                     }
                 }
-                ForEach(group.pages) { page in item(page, compact: compact) }
+                if open {
+                    ForEach(group.pages) { page in item(page, compact: compact) }
+                }
             }
             Spacer()
-            item(.usage, compact: compact)
             item(.settings, compact: compact)
             let trouble = model.status.range(of: #"loading|no microphone|blocking|failed|couldn"#, options: [.regularExpression, .caseInsensitive]) != nil
             if compact {
@@ -2133,6 +2154,74 @@ private struct ProjectsCard: View {
                 return counts
             }.value
             words = counts
+        }
+    }
+}
+
+/// Every IB project (EE, IAs, TOK, IO, CAS) on one page: the list with progress and Start a
+/// project, then a card each with its milestones, supervisor meetings and next step.
+private struct ProjectsPage: View {
+    @ObservedObject var model: DashboardModel
+    @State private var projects: [IBProjects.Project] = []
+
+    private var subjects: [String] {
+        Profile.subjects.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && StudyBuddy.pack(for: $0) != "Theory of Knowledge" }
+    }
+
+    var body: some View {
+        PageTitle(title: "Projects", subtitle: "Your EE, IAs, TOK, IO and CAS: milestones, supervisor meetings and word counts.")
+        ProjectsCard(model: model, subjects: subjects)
+            .onAppear { projects = IBProjects.all() }
+        ForEach(projects) { project in detail(project) }
+    }
+
+    private func detail(_ project: IBProjects.Project) -> some View {
+        Card(title: project.label, symbol: project.kind == .cas ? "figure.run" : "doc.text") {
+            if !project.nextStep.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.right.circle.fill").foregroundStyle(Look.accent)
+                    Text("Next: \(project.nextStep)").font(.system(size: 13, weight: .medium)).lineLimit(2)
+                    Spacer(minLength: 8)
+                    Button { model.actions.ask("Help me with the next step of my \(project.label): \(project.nextStep)") } label: {
+                        Label("Work on it", systemImage: "play.fill")
+                    }
+                    .buttonStyle(PillButton(prominent: true))
+                }
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(project.milestones, id: \.self) { milestone in
+                    HStack(spacing: 8) {
+                        Image(systemName: milestone.done ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(milestone.done ? Look.accent : .secondary)
+                        Text(milestone.title).font(.system(size: 12.5)).strikethrough(milestone.done)
+                            .foregroundStyle(milestone.done ? .secondary : .primary)
+                        Spacer()
+                        if let date = milestone.date {
+                            let left = IBProjects.daysLeft(date)
+                            Text(date.formatted(.dateTime.day().month(.abbreviated)))
+                                .font(.system(size: 11.5).monospacedDigit())
+                                .foregroundStyle(!milestone.done && left < 0 ? Look.deadline : .secondary)
+                        }
+                    }
+                }
+            }
+            if !project.meetings.isEmpty {
+                Text("Meetings").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(.secondary)
+                ForEach(project.meetings.suffix(3), id: \.self) { meeting in
+                    Text(meeting.hasPrefix("- ") ? String(meeting.dropFirst(2)) : meeting)
+                        .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
+                }
+            }
+            HStack(spacing: 12) {
+                if !project.supervisor.isEmpty { Label(project.supervisor, systemImage: "person").font(.system(size: 12)).foregroundStyle(.secondary) }
+                if let final = project.finalDate {
+                    Label("Final \(final.formatted(.dateTime.day().month(.abbreviated).year()))", systemImage: "flag.checkered")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Open note") { model.openInObsidian(project.url) }.buttonStyle(PillButton())
+            }
         }
     }
 }

@@ -236,7 +236,7 @@ final class DashboardModel: ObservableObject {
     }
 
     /// A "decide:" task settled from Home: kept for today (the question goes), or dropped (the line
-    /// goes, and it's logged as done so it isn't carried again).
+    /// goes, so tomorrow's Daybook doesn't carry it).
     func decide(_ line: String, keep: Bool) {
         guard let url = Daybook.url, var text = try? String(contentsOf: url, encoding: .utf8),
               let range = text.range(of: line) else { return }

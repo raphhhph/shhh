@@ -139,6 +139,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return true
     }
 
+    /// A study request done here, without Claude ("start my Econ IA", "plan my week", "done with
+    /// Paper 2", "how's my EE going"): its one-line answer on the card, read aloud when the voice is on.
+    private func showLocalAnswer(_ reply: StudyLoop.Reply, question: String, in task: AssistantTask) {
+        task.beginTurn(question)
+        answerPanel.beginTurn(question: question)
+        task.reply = "Subject: \(reply.subject)\n\(reply.card)"
+        task.isDone = true
+        task.doneAt = Date()
+        task.canFollowUp = true
+        answerPanel.setSubject(reply.subject)
+        answerPanel.update(.answer(reply.card))
+        answerPanel.update(.turnFinished)
+        Daybook.log(question: question, reply: task.reply)
+        ActivityLog.record(.ask, question, answer: reply.subject, reply: reply.card)
+        if SpeechOutput.engine != .off, !reply.spoken.isEmpty {
+            speech.update(reply.spoken)
+            speech.finish()
+        }
+        refreshShelf()
+    }
+
+    /// Sunday evening's week plan was just written: on the card when Joe's free (read aloud when
+    /// the voice is on, with its first clash question), else a toast. Its questions stay in Week.md.
+    private func announceWeekPlan(_ url: URL) {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return }
+        let reply = StudyLoop.weekReply(text, sunday: true)
+        guard state == .idle, !answerPanel.isVisible, !alarms.isRinging, !studyBoard.isTakingAnswers else {
+            toast.show(reply.subject + ": open Week.md", symbol: "calendar", tint: .orange)
+            return
+        }
+        let task = newTask()
+        focused = task
+        answerPanel.reset()
+        showLocalAnswer(reply, question: "Next week's plan", in: task)
+        answerPanel.holdOpen(for: 10)
+    }
+
     /// Joe at the notch, saying a line out loud: for the tour, with no conversation behind it.
     private func greetAtNotch(_ subject: String, _ line: String) {
         guard state == .idle else { return }
@@ -315,10 +352,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         overview.start()
         // ManageBac and Google calendar links: read at launch and every half hour.
         Task { await CalendarFeed.refreshLinks() }
-        let calendarLinks = Timer(timeInterval: 1800, repeats: true) { _ in
+        let calendarLinks = Timer(timeInterval: 1800, repeats: true) { [weak self] _ in
             Task {
                 await CalendarFeed.refreshLinks()
-                WeekPlan.buildIfSundayEvening() // next week's plan, once, on Sunday evening
+                // Next week's plan, once, on Sunday evening: Joe says so, with its clash questions.
+                if let week = WeekPlan.buildIfSundayEvening() {
+                    await MainActor.run { self?.announceWeekPlan(week) }
+                }
             }
         }
         RunLoop.main.add(calendarLinks, forMode: .common)
@@ -481,6 +521,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let request = AlarmRequest.parse(text) { alarms.handle(request); return }
         if openStudy(text) { return }
         if screenshot == nil, openPen(text) { return }
+        if screenshot == nil, let intent = StudyIntent.parse(text), let reply = intent.run() {
+            if let current = focused { sendToBackground(current) }
+            let task = newTask()
+            focused = task
+            answerPanel.reset()
+            showLocalAnswer(reply, question: text, in: task)
+            return
+        }
         if let music = Spotify.command(in: text) {
             Task.detached { [weak self] in
                 let result = Spotify.run(music)
@@ -962,7 +1010,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             tasks, anything due today or tomorrow, the emails that need me, and today's regular meetings from my \
             patterns.
             On a day off (a weekend or holiday) it's a lighter brief instead, in a relaxed tone: what's due when \
-            school is back (and later this week), anything on today's calendar, \(Profile.project.isEmpty ? "" : "the one \(Profile.project) thing that matters most, ")and one thing from my backlog worth doing today. No classes.\(Self.ibQuestion)
+            school is back (and later this week), anything on today's calendar, \(Profile.project.isEmpty ? "" : "the one \(Profile.project) thing that matters most, ")and one thing from my backlog worth doing today. No classes.\(StudyLoop.briefFacts(now))\(Self.ibQuestion)
             """)
     }
 
@@ -1013,7 +1061,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         task.beginTurn("Night shutdown")
         answerPanel.beginTurn(question: "Night shutdown")
         if SpeechOutput.speakBriefing, SpeechOutput.engine == .off { speech.useForThisReply(.lifelike) }
-        task.assistant.ask("[Night shutdown: it's \(now.formatted(date: .omitted, time: .shortened)).] Run my Night shutdown routine.")
+        task.assistant.ask("[Night shutdown: it's \(now.formatted(date: .omitted, time: .shortened)).] Run my Night shutdown routine."
+                           + StudyLoop.shutdownSteps(now))
     }
 
     // MARK: - Never stuck
@@ -1568,6 +1617,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     noteSaver.kind = kind
                     notepad.show(kind: kind)
                     toast.show("Got it: \(kind.label.lowercased())", symbol: "note.text", tint: .orange)
+                    return
+                }
+                // "Start my Econ IA", "plan my week", "done with Paper 2", "how's my EE going": done
+                // here, with a line on the card. A follow-up, or what Joe can't settle alone, goes to Claude.
+                if !followingUp, let intent = StudyIntent.parse(text), let reply = intent.run() {
+                    showLocalAnswer(reply, question: text, in: task)
+                    asked = true
                     return
                 }
                 // "Next task, …": each job after the first is a conversation of its own, working in

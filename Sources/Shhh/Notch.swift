@@ -130,6 +130,22 @@ final class RestingNotch {
         panel?.orderOut(nil)
     }
 
+    /// The study plan at a glance, read every 30 s: a block on now (minutes left) or starting
+    /// within the hour (its time) in the right ear, and a red dot on the ✦ when something is overdue.
+    private var studyRead = Date.distantPast
+
+    func updateStudy(_ now: Date = Date()) {
+        guard now.timeIntervalSince(studyRead) > 30 else { return }
+        studyRead = now
+        let next = StudyToday.next(now).flatMap { $0.start.timeIntervalSince(now) < 3600 ? $0 : nil }
+        let chip = next.map { block in
+            block.start <= now ? "\(max(1, Int(block.end.timeIntervalSince(now) / 60)))m" : Daybook.hhmm(block.start)
+        }
+        if model.chip != chip { model.chip = chip }
+        let late = !StudyToday.overdue().isEmpty
+        if model.late != late { model.late = late }
+    }
+
     /// Where it belongs: macOS has been seen moving it down the screen (while the assistant
     /// was working the Mac), so it's checked every second and put back.
     private var place: NSRect?
@@ -151,6 +167,10 @@ final class RestingNotch {
 
 final class RestingModel: ObservableObject {
     @Published var open = false
+    /// "40m" (a study block on now) or "16:10" (one starting soon).
+    @Published var chip: String?
+    /// Something in Today's five is overdue.
+    @Published var late = false
 }
 
 private struct RestingView: View {
@@ -165,8 +185,21 @@ private struct RestingView: View {
                 .padding(.bottom, model.open ? 0 : NotchShape.tuck)
             HStack(spacing: 0) {
                 JoeMark()
+                    .overlay(alignment: .topTrailing) {
+                        if model.late {
+                            Circle().fill(Color.red).frame(width: 5, height: 5).offset(x: 3, y: -2)
+                        }
+                    }
                     .frame(width: RestingNotch.ear)
                 Spacer()
+                if let chip = model.chip {
+                    HStack(spacing: 3) {
+                        Image(systemName: "book.closed.fill").font(.system(size: 8.5))
+                        Text(chip).font(.system(size: 10.5, weight: .semibold).monospacedDigit())
+                    }
+                    .foregroundStyle(.white.opacity(0.85))
+                    .frame(width: RestingNotch.ear)
+                }
             }
             .opacity(model.open ? 1 : 0)
             .animation(model.open ? .easeOut(duration: 0.14).delay(0.03) : .easeIn(duration: 0.08), value: model.open)

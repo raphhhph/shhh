@@ -720,7 +720,7 @@ private struct HomePage: View {
                 }
             }
             DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil || CalendarFeed.linksReadAt != nil, stretch: true,
-                    connect: { model.openSettings("general") }, start: { model.actions.ask($0.startRequest) }) { model.page = .calendar }
+                    connect: { model.openSettings("school") }, start: { model.actions.ask($0.startRequest) }) { model.page = .calendar }
                 .frame(width: narrow ? nil : 320)
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -1740,7 +1740,7 @@ private struct CalendarPage: View {
                     if let selected { detail(selected) }
                     Card { week(dates, items, now) }
                     DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil || CalendarFeed.linksReadAt != nil,
-                            connect: { model.openSettings("general") }, start: { model.actions.ask($0.startRequest) }) {}
+                            connect: { model.openSettings("school") }, start: { model.actions.ask($0.startRequest) }) {}
                 }
             }
         }
@@ -1988,7 +1988,7 @@ private struct CalendarPage: View {
         VStack(spacing: 16) {
             if let selected { detail(selected) }
             DueSoon(deadlines: model.deadlines, synced: CalendarFeed.syncedAt != nil || CalendarFeed.linksReadAt != nil,
-                    connect: { model.openSettings("general") }, start: { model.actions.ask($0.startRequest) }) {}
+                    connect: { model.openSettings("school") }, start: { model.actions.ask($0.startRequest) }) {}
             Card(title: "Subjects", symbol: "square.grid.2x2") {
                 VStack(alignment: .leading, spacing: 7) {
                     ForEach(SubjectGroup.allCases, id: \.self) { group in
@@ -3367,6 +3367,10 @@ private struct SettingsPage: View {
     @AppStorage("profileProgramme") private var profileProgramme = ""
     @AppStorage("profileSubjects") private var profileSubjects = ""
     @AppStorage("profileProject") private var profileProject = ""
+    @AppStorage("examSession") private var examSession = ""
+    @AppStorage("studyDoneBy") private var doneBy = 23
+    @AppStorage("studyBlockMinutes") private var blockMinutes = 90
+    @AppStorage("sundayPlan") private var sundayPlan = true
 
     private func profileRow(_ label: String, _ detail: String, _ value: Binding<String>, _ placeholder: String, last: Bool = false) -> some View {
         row(label, detail, last: last) {
@@ -3424,6 +3428,7 @@ private struct SettingsPage: View {
     /// fit, so a saved tab and `openSettings("general")` still land in the right place.
     private static let tabs: [(id: String, title: String, symbol: String)] = [
         ("general", "You", "person.crop.circle"),
+        ("school", "School", "graduationcap"),
         ("personality", "Joe", "sparkle"),
         ("listening", "Listening", "waveform"),
         ("automations", "Daily", "sun.horizon"),
@@ -3435,10 +3440,15 @@ private struct SettingsPage: View {
     private static let index: [(label: String, words: String, tab: String)] = [
         ("Your name", "name call me", "general"),
         ("School", "school", "general"),
-        ("Programme", "ib diploma year dp1 dp2 myp", "general"),
-        ("Subjects", "subjects hl sl classes", "general"),
+        ("Programme", "ib diploma year dp1 dp2 myp", "school"),
+        ("Exam session", "exam exams may november finals session", "school"),
+        ("Subjects", "subjects hl sl classes", "school"),
+        ("EE, IAs, TOK, IO and CAS", "projects ee ia extended essay internal assessment tok io cas milestones", "school"),
+        ("Done by", "done by bedtime sleep late night week plan", "school"),
+        ("After-school block", "block length study time week plan", "school"),
+        ("Plan next week on Sunday", "sunday week plan weekly", "school"),
         ("Your project", "business club project", "general"),
-        ("Calendar links", "managebac google ical calendar timetable deadlines link subscribe", "general"),
+        ("Calendar links", "managebac google ical calendar timetable deadlines overdue link subscribe", "school"),
         ("Style", "theme colour color classic midnight paper ocean look", "general"),
         ("Appearance", "dark light mode auto", "general"),
         ("Open Joe at login", "startup start login launch", "general"),
@@ -3463,7 +3473,7 @@ private struct SettingsPage: View {
         ("Morning briefing", "morning brief wake", "automations"),
         ("Evening check", "evening managebac grades daybook", "automations"),
         ("Night shutdown", "night bedtime shutdown sleep", "automations"),
-        ("IB question of the day", "question daily quiz", "automations"),
+        ("IB question of the day", "question daily quiz study loop", "school"),
         ("Wake-up challenge", "alarm wake challenge verse fact", "automations"),
         ("Alarms on iPhone", "iphone reminders alarms phone", "automations"),
         ("Ask from iPhone", "iphone siri phone", "automations"),
@@ -3524,6 +3534,7 @@ private struct SettingsPage: View {
 
             Group {
                 switch tab {
+                case "school": school
                 case "personality": personality
                 case "listening": listening
                 case "automations": automations
@@ -3584,24 +3595,7 @@ private struct SettingsPage: View {
                     .overlay(Capsule().strokeBorder(Look.line))
             }
             profileRow("School", "Where you study", $profileSchool, "Your school")
-            profileRow("Programme", "e.g. IB Diploma, year 1 (DP1)", $profileProgramme, "IB Diploma, year 1")
-            profileRow("Subjects", "Joe’s IB help and daily question use these", $profileSubjects, "Math AI HL, ESS SL…")
             profileRow("Your project", "A business or club Joe should know about", $profileProject, "Optional", last: true)
-        }
-        section("School calendar", "calendar") {
-            row("Calendar links", calendarLinks.isEmpty ? "ManageBac: Calendar → Subscribe → copy the link. Google: settings → Secret address in iCal format" : "\(calendarLinks.count) added: read every half hour", last: true) {
-                HStack(spacing: 6) {
-                    TextField("Paste a calendar link", text: $newLink)
-                        .textFieldStyle(.plain).font(.system(size: 12.5))
-                        .padding(.horizontal, 10).frame(width: 200, height: 28)
-                        .background(Color.primary.opacity(0.06), in: Capsule())
-                        .onSubmit(addLink)
-                    Button("Add", action: addLink).buttonStyle(PillButton()).disabled(!newLink.contains("://"))
-                    if !calendarLinks.isEmpty {
-                        Button("Clear") { CalendarFeed.links = []; calendarLinks = [] }.buttonStyle(PillButton(destructive: true))
-                    }
-                }
-            }
         }
         section("Look", "paintbrush") {
             row("Style", "How Joe looks: Classic, Midnight (navy and gold), Paper (serif, warm) or Ocean") {
@@ -3625,6 +3619,46 @@ private struct SettingsPage: View {
             row("Quit Joe", "Dictation and the notch stop until you open Joe again", last: true) {
                 Button("Quit") { NSApp.terminate(nil) }.buttonStyle(PillButton())
             }
+        }
+    }
+
+    @ViewBuilder private var school: some View {
+        section("Your IB", "graduationcap") {
+            profileRow("Programme", "IB Diploma, year 1 (DP1), or MYP", $profileProgramme, "IB Diploma, year 1")
+            profileRow("Exam session", "When your final exams are", $examSession, "May 2027")
+            profileRow("Subjects", "With HL or SL: Joe’s quizzes, plans and daily question use these", $profileSubjects, "Math AI HL, ESS SL…", last: true)
+        }
+        section("School calendar", "calendar") {
+            row("Calendar links", calendarLinks.isEmpty ? "ManageBac: Calendar → Subscribe → copy the link. Google: settings → Secret address in iCal format" : "\(calendarLinks.count) added: read every half hour", last: true) {
+                HStack(spacing: 6) {
+                    TextField("Paste a calendar link", text: $newLink)
+                        .textFieldStyle(.plain).font(.system(size: 12.5))
+                        .padding(.horizontal, 10).frame(width: 200, height: 28)
+                        .background(Color.primary.opacity(0.06), in: Capsule())
+                        .onSubmit(addLink)
+                    Button("Add", action: addLink).buttonStyle(PillButton()).disabled(!newLink.contains("://"))
+                    if !calendarLinks.isEmpty {
+                        Button("Clear") { CalendarFeed.links = []; calendarLinks = [] }.buttonStyle(PillButton(destructive: true))
+                    }
+                }
+            }
+        }
+        section("Projects", "flag.checkered") {
+            row("EE, IAs, TOK, IO and CAS", "Start one, change its dates or see its milestones", last: true) {
+                Button("Open Projects") { model.page = .projects }.buttonStyle(PillButton())
+            }
+        }
+        section("Week plan", "calendar.badge.clock") {
+            row("Done by", "No study block runs past this, so sleep stays protected") {
+                Choice(options: [(21, "21:00"), (22, "22:00"), (23, "23:00"), (24, "Midnight")], selection: $doneBy)
+            }
+            row("After-school block", "How long the block after your last class is") {
+                Choice(options: [(60, "1 hour"), (90, "1½ hours"), (120, "2 hours")], selection: $blockMinutes)
+            }
+            row("Plan next week on Sunday", "Sunday evening, Joe writes next week's blocks in Week.md", last: true) { switchOn($sundayPlan) }
+        }
+        section("Study loop", "arrow.triangle.2.circlepath") {
+            row("IB question of the day", "One short question from your subjects, at the end of the morning brief", last: true) { switchOn($ibQuestion) }
         }
     }
 
@@ -3700,7 +3734,6 @@ private struct SettingsPage: View {
             row("Morning briefing", "On your first wake of the day") { switchOn($morning) }
             row("Evening check", "19:30: new ManageBac tasks and grades into your Daybook") { switchOn($evening) }
             row("Night shutdown", "21:30 on school nights") { switchOn($night) }
-            row("IB question of the day", "One short question from your subjects, at the end of the morning brief") { switchOn($ibQuestion) }
             row("Wake-up challenge", "Morning alarms only stop once you read a verse or a fact aloud, or answer a question (right ⌥)", last: true) { switchOn($wakeChallenge) }
         }
         section("iPhone", "iphone") {

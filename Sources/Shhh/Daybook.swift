@@ -581,13 +581,14 @@ enum Daybook {
             }
             if let last = lessons.map({ $0.end ?? $0.start }).max() {
                 let start = last.addingTimeInterval(30 * 60)
-                blocks.append(("after school", start, start.addingTimeInterval(90 * 60)))
+                blocks.append(("after school", start, start.addingTimeInterval(Double(StudyToday.Settings.blockMinutes) * 60)))
             }
         } else if let start = at(10), let end = at(12) {
             blocks.append(("morning", start, end))
         }
         if let start = at(19, 30), let end = at(21) { blocks.append(("evening", start, end)) }
-        let edge = at(23)
+        let doneBy = StudyToday.Settings.doneByHour // Settings → School → Week plan
+        let edge = doneBy >= 24 ? calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: day)) : at(doneBy)
         // In time order, and never overlapping: a free last period and "after school" can meet
         // (free P5 14:25–15:25, after school from 14:55), so a later block starts when the one before ends.
         var previousEnd = Date.distantPast

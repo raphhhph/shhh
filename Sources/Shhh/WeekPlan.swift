@@ -122,7 +122,7 @@ enum WeekPlan {
     /// On Sunday evening, next week's plan, once.
     static func buildIfSundayEvening(_ now: Date = Date()) {
         let calendar = Calendar.current
-        guard calendar.component(.weekday, from: now) == 1, calendar.component(.hour, from: now) >= 17, let url,
+        guard StudyToday.Settings.sundayPlan, calendar.component(.weekday, from: now) == 1, calendar.component(.hour, from: now) >= 17, let url,
               let monday = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) else { return }
         let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         guard !existing.contains("from: \(monday.formatted(.localDay))") else { return }

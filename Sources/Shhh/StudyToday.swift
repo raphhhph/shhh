@@ -4,6 +4,20 @@ import Foundation
 /// today's Daybook Plan), the overdue lines in Today's five, and the week's blocks per day. The
 /// plans themselves are written by `Daybook` and `WeekPlan`; this only reads them.
 enum StudyToday {
+    /// Settings → School → Week plan: when study ends each night, how long the after-school block
+    /// is, and whether Sunday evening plans the next week.
+    enum Settings {
+        static var doneByHour: Int {
+            let hour = UserDefaults.standard.integer(forKey: "studyDoneBy")
+            return (20...24).contains(hour) ? hour : 23
+        }
+        static var blockMinutes: Int {
+            let minutes = UserDefaults.standard.integer(forKey: "studyBlockMinutes")
+            return (30...180).contains(minutes) ? minutes : 90
+        }
+        static var sundayPlan: Bool { UserDefaults.standard.object(forKey: "sundayPlan") as? Bool ?? true }
+    }
+
     struct Block: Hashable {
         var start: Date
         var end: Date

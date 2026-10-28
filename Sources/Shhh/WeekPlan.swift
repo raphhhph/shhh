@@ -130,14 +130,16 @@ enum WeekPlan {
         return (try? plan.write(to: url, atomically: true, encoding: .utf8)) != nil ? url : nil
     }
 
-    /// On Sunday evening, next week's plan, once.
-    static func buildIfSundayEvening(_ now: Date = Date()) {
+    /// On Sunday evening, next week's plan, once. Returns Week.md when it was just written, so
+    /// Joe can tell the student (and ask its clash questions).
+    @discardableResult
+    static func buildIfSundayEvening(_ now: Date = Date()) -> URL? {
         let calendar = Calendar.current
         guard calendar.component(.weekday, from: now) == 1, calendar.component(.hour, from: now) >= 17, let url,
-              let monday = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) else { return }
+              let monday = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) else { return nil }
         let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-        guard !existing.contains("from: \(monday.formatted(.localDay))") else { return }
-        build(from: monday, now: now)
+        guard !existing.contains("from: \(monday.formatted(.localDay))") else { return nil }
+        return build(from: monday, now: now)
     }
 
     // MARK: - Clashes
@@ -169,6 +171,14 @@ enum WeekPlan {
         return String(line[range].dropFirst(6).prefix(5))
     }
 
+    /// When a block line ends on its day ("17:40" in "- [ ] 16:10–17:40 (after school): …").
+    private static func blockEnd(_ line: String, on day: Date) -> Date? {
+        guard let range = line.range(of: #"^- \[[ xX]\] \d{2}:\d{2}–\d{2}:\d{2}"#, options: .regularExpression) else { return nil }
+        let parts = line[range].suffix(5).split(separator: ":").compactMap { Int($0) }
+        guard parts.count == 2 else { return nil }
+        return Calendar.current.date(bySettingHour: parts[0], minute: parts[1], second: 0, of: day)
+    }
+
     /// A block line's task title, however the line was written: "- [ ] 15:55–17:25 (after school):
     /// get ahead on Paper 1 Writing · Chinese B — due Thu 29 Oct · moved from Tue 27 Oct 15:55" →
     /// "Paper 1 Writing". Nil when it isn't a block line.
@@ -192,8 +202,9 @@ enum WeekPlan {
     /// Re-plans `text` (a Week.md): a block left unticked on a day before today is struck through
     /// and moves to the next free slot this week (before its deadline); "## Moved" says what moved,
     /// and one that fits nowhere becomes a question in Needs you. A block whose task was marked done
-    /// elsewhere is ticked instead. Nil when there's nothing to change.
-    static func replanned(_ text: String, now: Date = Date()) -> (text: String, moves: [String])? {
+    /// elsewhere is ticked instead. Nil when there's nothing to change. `tonight` (the night
+    /// shutdown) also moves today's blocks that are over and still unticked.
+    static func replanned(_ text: String, now: Date = Date(), tonight: Bool = false) -> (text: String, moves: [String])? {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
         var lines = text.components(separatedBy: "\n")
@@ -210,6 +221,12 @@ enum WeekPlan {
         }
         // A plan for a week that's over isn't re-planned: the next one is built instead.
         guard days.contains(where: { $0 >= today }) else { return nil }
+        // A block that slipped: an open one on an earlier day, or (tonight) one today that's over.
+        func slipped(_ index: Int) -> Bool {
+            guard let day = dayOf[index], lines[index].hasPrefix("- [ ] ") else { return false }
+            if day < today { return true }
+            return tonight && day == today && (blockEnd(lines[index], on: day).map { $0 <= now } ?? false)
+        }
 
         let items = CalendarFeed.items(from: today, days: 21)
         let pending = items.filter { $0.kind == .deadline } + IBProjects.openMilestoneItems(now)
@@ -237,7 +254,7 @@ enum WeekPlan {
         var reported: [String] = []
         for index in lines.indices {
             let line = lines[index]
-            guard let day = dayOf[index], day < today, line.hasPrefix("- [ ] "), let time = blockTime(line),
+            guard slipped(index), let day = dayOf[index], let time = blockTime(line),
                   let colon = line.range(of: "): ") else { continue }
             changed = true
             let body = String(line.dropFirst(6)) // after "- [ ] "
@@ -260,7 +277,7 @@ enum WeekPlan {
                 // Still open in a block from today on: say so instead of asking. Matched on the title
                 // alone (an overdue milestone's due date is made up, so dates can't be compared).
                 let planned = (lines.indices.compactMap { other -> (day: Date, line: String)? in
-                    guard let otherDay = dayOf[other], otherDay >= today else { return nil }
+                    guard let otherDay = dayOf[other], otherDay >= today, !slipped(other) else { return nil }
                     return (day: otherDay, line: lines[other])
                 } + additions.compactMap { addition -> (day: Date, line: String)? in
                     IBProjects.isoDate(addition.heading).map { (day: $0, line: addition.line) }
@@ -302,11 +319,11 @@ enum WeekPlan {
         return (lines.joined(separator: "\n"), moves + questions)
     }
 
-    /// Re-plans Week.md (at the morning build). Returns what moved.
+    /// Re-plans Week.md (at the morning build; `tonight` at the night shutdown). Returns what moved.
     @discardableResult
-    static func replan(_ now: Date = Date()) -> [String] {
+    static func replan(_ now: Date = Date(), tonight: Bool = false) -> [String] {
         guard let url, let text = try? String(contentsOf: url, encoding: .utf8),
-              let result = replanned(text, now: now) else { return [] }
+              let result = replanned(text, now: now, tonight: tonight) else { return [] }
         try? result.text.write(to: url, atomically: true, encoding: .utf8)
         return result.moves
     }

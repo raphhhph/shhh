@@ -14,6 +14,7 @@ Alarms, timers and reminders, the wake-up challenge, routines (spoken phrases th
 - Challenge applies to alarms between 4:00 and 11:00 and to any alarm with "wake" in its title. No Stop button; one snooze; rings up to 20 min.
 - A wake-up alarm **can't be cancelled in its last hour** (a spoken "cancel my alarm" at 7:27 deleted the 7:30 one). Spoken alarm commands are logged in History.
 - After passing: the morning briefing (if not already given today).
+- The morning brief and the 21:30 night shutdown carry the study loop (see 08, "Study loop in the routines"): the brief says one overdue item with its action, today's study blocks and this week's milestone; the shutdown ticks what got done, re-plans slipped blocks into Week.md, says tomorrow's first block and offers one email draft for an overdue item. Sunday from 17:00 the week plan is built once and announced. Preview with `Joe --prompt brief|shutdown|sunday`.
 
 ## Known issues / to-do
 - Raph's daily 7:30 "Wake up" alarm was deleted on 21 Oct; he may need to set it again.

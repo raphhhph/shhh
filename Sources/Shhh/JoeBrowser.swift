@@ -205,9 +205,19 @@ enum JoeBrowser {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var elements: [String: (role: String, name: String)] = [:]
 
-    /// Reads `uid=1_4 button "Submit"` lines out of a tool result.
-    static func remember(_ result: String) {
-        guard result.contains("uid=") else { return }
+    /// The page each uid was seen on, and the page Joe's browser is on, for telling a CAS
+    /// reflection (Joe may file it alone) from a graded task (always asks).
+    nonisolated(unsafe) private static var pages: [String: String] = [:]
+    nonisolated(unsafe) static var currentPage = ""
+
+    /// Reads `uid=1_4 button "Submit"` lines out of a tool result, with the page they're on: given
+    /// (`--tab read`), or the selected one a Chrome DevTools result lists ("0: <url> [selected]").
+    static func remember(_ result: String, page: String? = nil) {
+        guard result.contains("uid=") || result.contains("[selected]") else { return }
+        var page = page
+        if page == nil, let selected = result.firstMatch(of: #/(\S+) \[selected\]/#) {
+            page = String(selected.1)
+        }
         let pattern = try! NSRegularExpression(pattern: #"uid=(\S+)\s+(\w+)(?:\s+"([^"]*)")?"#)
         let range = NSRange(result.startIndex..., in: result)
         var found: [String: (role: String, name: String)] = [:]
@@ -217,8 +227,12 @@ enum JoeBrowser {
             found[String(result[uid])] = (String(result[role]), name)
         }
         lock.lock()
-        if elements.count > 5000 { elements.removeAll() }
+        if elements.count > 5000 { elements.removeAll(); pages.removeAll() }
         elements.merge(found) { $1 }
+        if let page {
+            if result.contains("[selected]") { currentPage = page }
+            for uid in found.keys { pages[uid] = page }
+        }
         lock.unlock()
     }
 
@@ -228,6 +242,25 @@ enum JoeBrowser {
         lock.lock()
         defer { lock.unlock() }
         return elements[uid].map { "\($0.role) \($0.name)" } ?? ""
+    }
+
+    /// The address of the page a uid was seen on, or "".
+    static func page(_ uid: Any?) -> String {
+        guard let uid = uid as? String else { return "" }
+        lock.lock()
+        defer { lock.unlock() }
+        return pages[uid] ?? ""
+    }
+
+    /// Pages where submitting isn't graded, so Joe may file things there without asking (in
+    /// Hands-off): ManageBac's CAS (reflections, evidence, experiences). Tasks, dropboxes and
+    /// anything assessed stay behind the approval card.
+    static func isUngraded(_ address: String) -> Bool {
+        let url = address.lowercased()
+        guard url.contains("managebac") else { return false }
+        let graded = ["/core_tasks", "/tasks", "/assignments", "/dropbox", "/submission", "/assessment", "/grades", "/exam", "/units"]
+        if graded.contains(where: url.contains) { return false }
+        return ["/activity/cas", "/cas/", "/cas?", "/reflections", "/cas_"].contains(where: url.contains) || url.hasSuffix("/cas")
     }
 
     /// What the last fill typed into, so pressing Enter there can be judged (a search box is fine,

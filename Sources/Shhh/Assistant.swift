@@ -771,7 +771,8 @@ final class Session {
                 if name?.hasPrefix("mcp__\(JoeBrowser.server)__") == true { JoeBrowser.remember(text) }
                 // `Joe --tab read`: its element lines (the page's own text is quoted with "| ").
                 if name == "Bash", text.contains("\nuid=t") {
-                    JoeBrowser.remember(text.split(separator: "\n").filter { $0.hasPrefix("uid=t") }.joined(separator: "\n"))
+                    let page = text.prefix(while: { $0 != "\n" }).firstMatch(of: #/https?:\/\/\S+/#).map { String($0.0) }
+                    JoeBrowser.remember(text.split(separator: "\n").filter { $0.hasPrefix("uid=t") }.joined(separator: "\n"), page: page)
                 }
                 guard let tool = creating.removeValue(forKey: id) else { continue }
                 CreatedItems.shared.record(result: text, tool: tool)
@@ -1162,8 +1163,8 @@ final class Session {
         its fields, buttons and links as uid lines; --tab fill "<words>" <uid> "<text>" types into a field or editor \
         (use \\n for new paragraphs), and --tab click "<words>" <uid> clicks a button, link or checkbox. Read again after \
         each click. This is the first choice for anything on a site they're signed in to, such as a ManageBac CAS \
-        reflection: open it with --tab open if it isn't open, read, fill, tick, then click the save button (Joe asks \
-        them before it submits). If it says the browser doesn't let Joe work in pages yet, run --tab allow-js with that \
+        reflection: open it with --tab open if it isn't open, read, fill, tick, then click the save button. On \
+        ManageBac CAS pages (not graded) Joe files it without asking in Hands-off; graded tasks always ask. If it says the browser doesn't let Joe work in pages yet, run --tab allow-js with that \
         browser (Joe asks them first) and carry on. Don't give up and offer a note instead: if one route fails, use this one.\(JoeBrowser.isReady ? Assistant.joeBrowserNotes : "")
         When a connected account and the browser can both do something, use the account: it's much faster.\(ScreenControl.isEnabled ? Assistant.controlRules : "")\(music)\(alarms)\(messages)\(slides)\(Assistant.schoolWork)\(StudyBuddy.instructions)\(files)\(memory)\(habits)\(Assistant.personality)
 
@@ -1321,6 +1322,10 @@ struct ToolPolicy {
         let pattern = typing ? Self.submitPattern : Self.outwardPattern
         if (!typing && label.isEmpty) || label.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
             || (!typing && label.range(of: #"\b(add|save|post|create|done|finish|ok)\b"#, options: [.regularExpression, .caseInsensitive]) != nil && label.hasPrefix("button")) {
+            let page = JoeBrowser.page(words.count > 4 ? words[4] : nil)
+            if !label.isEmpty, Self.mayFileAlone(label, on: page) {
+                return Action(key: "tab:ungraded", verdict: .allow, title: "\(title) (not graded, so Joe files it)")
+            }
             return Action(key: "tab:outward:\(label)", verdict: .ask, title: "\(title) (this may send or submit something)")
         }
         return Action(key: "tab:\(words[2])", verdict: .allow, title: title)
@@ -1332,6 +1337,7 @@ struct ToolPolicy {
         let looks: Set = ["navigate_page", "new_page", "list_pages", "select_page", "close_page", "take_snapshot",
                           "take_screenshot", "wait_for", "hover", "resize_page", "list_console_messages",
                           "get_console_message", "list_network_requests", "get_network_request"]
+        if ["navigate_page", "new_page"].contains(tool), let url = input["url"] as? String { JoeBrowser.currentPage = url }
         if looks.contains(tool) {
             // Opening a page waits for it to settle, which Meet, Docs and Classroom never quite do, so
             // it's capped at 15 seconds: by then the page is loaded enough to read.
@@ -1378,10 +1384,22 @@ struct ToolPolicy {
         guard autonomy == .handsOff else { return Action(key: "joe-browser:\(tool)", verdict: .ask, title: title) }
         let pattern = typing ? Self.submitPattern : Self.outwardPattern
         // A click on an element no snapshot named can't be judged, so it asks.
-        if (!typing && what.isEmpty) || target.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil {
+        if (!typing && what.isEmpty) || target.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+            || (!typing && target.range(of: #"\b(add|save|post|create)\b"#, options: [.regularExpression, .caseInsensitive]) != nil && what.hasPrefix("button")) {
+            let page = JoeBrowser.page(input["uid"]).isEmpty ? JoeBrowser.currentPage : JoeBrowser.page(input["uid"])
+            if !what.isEmpty, Self.mayFileAlone(what, on: page) {
+                return Action(key: "joe-browser:ungraded", verdict: .allow, title: "\(title) (not graded, so Joe files it)")
+            }
             return Action(key: "joe-browser:outward:\(what)", verdict: .ask, title: "\(title) (this may send or submit something)")
         }
         return Action(key: "joe-browser:\(tool)", verdict: .allow, title: title)
+    }
+
+    /// Submitting on a page where it isn't graded (a CAS reflection), in Hands-off: Joe goes ahead.
+    /// Deleting, sharing or messaging people still asks there.
+    private static func mayFileAlone(_ label: String, on page: String) -> Bool {
+        JoeBrowser.isUngraded(page) && label.range(of: #"\b(delete|deletes|remove|removes|trash|unsubscribe|sign out|log out|share|shares|invite|invites|send|sends|email|message|reply|forward|decline)\b"#,
+                                                    options: [.regularExpression, .caseInsensitive]) == nil
     }
 
     private static let moneyPattern = #"\b(pay|pays|paying|payment|purchase|purchases|buy|buys|checkout|check out|place (an |the |my )?order|order now|subscribe|subscription|donate|to (the |your |my )?(cart|basket|bag)|card number|billing|top up|transfer money|send money)\b"#

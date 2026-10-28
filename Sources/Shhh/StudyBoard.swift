@@ -557,7 +557,12 @@ final class StudyBoardModel: ObservableObject {
             gray (black by default); add dashed for a curve after a shift. Draw in the order you'd explain: axes, the original \
             curves and equilibrium, then the shift (new curve in a colour, an arrow), the new equilibrium, then shaded areas. \
             Compute the coordinates so the lines really cross where the points say. Label every curve and axis as the IB expects \
-            (P and Q or the real names, D, S, S+tax, MSC, MPB, AD, SRAS, LRAS…). Up to about 14 lines.
+            (P and Q or the real names, D, S, S+tax, MSC, MPB, AD, SRAS, LRAS…). Up to about 14 lines. IB conventions: \
+            axes "Quantity of <good> (Q)" and "Price (P)" (or "Price level", "Real GDP" for macro); one name per curve, written in \
+            its own line command, at its right end, with any second name in the same label ("S = MPC", "D = MSB"), never as a text \
+            on the curve; a curve that is also another (S + tax set at the external cost is MSC) is drawn once, labelled \
+            "MSC = S + tax"; the welfare-loss triangle points at the socially optimal quantity; tax revenue, spending and surplus \
+            rectangles start on the price axis (x=0); texts go in empty space, away from curves and other labels.
             - After they answer: <feedback n="1" score="3" total="4">✓ what earned marks, one bullet each; ✗ missing: what was missing, one bullet each</feedback> \
             then <model>the answer a markscheme would credit, concise</model>, then the next <question>.
             - Outside the tags, at most one short sentence, said aloud ("Nice, three out of four."). No other chatter.

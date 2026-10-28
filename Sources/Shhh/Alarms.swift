@@ -386,7 +386,9 @@ final class AlarmClock {
     func answer(_ heard: String) -> Bool {
         guard let challenge = model.challenge else { return false }
         model.heard = heard
-        if challenge.check(heard) {
+        let passed = challenge.check(heard)
+        NSLog("Joe alarm: answer %@ to “%@”: “%@”", passed ? "passed" : "failed", challenge.prompt, heard) // `log show --predicate 'process == "Joe"'`
+        if passed {
             // A "questions" alarm wants two right answers before it stops.
             if questionsLeft > 1 {
                 questionsLeft -= 1
@@ -545,6 +547,7 @@ final class AlarmClock {
     // MARK: Ring, stop, snooze
 
     private func ring(_ alarm: Alarm) {
+        NSLog("Joe alarm: ringing %@ (pid %d)", alarm.title, ProcessInfo.processInfo.processIdentifier)
         ringing = alarm
         model.alarm = alarm
         // A morning alarm only stops once they've read the verse or fact, or answered the question.
@@ -588,6 +591,7 @@ final class AlarmClock {
 
     func stop(missed: Bool = false) {
         guard let alarm = ringing else { return }
+        NSLog("Joe alarm: stopped %@%@", alarm.title, missed ? " (rang out)" : "")
         // A challenge left to ring out ends the wake-up streak.
         if missed, model.challenge != nil { UserDefaults.standard.set(0, forKey: "wakeStreak") }
         ringing = nil

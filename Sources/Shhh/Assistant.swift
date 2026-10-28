@@ -271,6 +271,18 @@ final class Assistant {
         session = Session(executable: executable, model: modelOverride, effort: effortOverride, tutor: tutorPrompt, onEvent: { [weak self] in self?.relay($0) })
     }
 
+    /// Where finished walkthroughs are kept, so the next "show me how to submit on ManageBac" starts
+    /// from the steps that worked last time.
+    nonisolated static var walkthroughNotes: String {
+        guard let folder = NoteSaver.root?.appendingPathComponent("Walkthroughs", isDirectory: true) else { return "" }
+        return """
+             Finished walkthroughs are saved in \(Daybook.relative(folder))/: after the last step, write the steps \
+            that worked there as "<Task>.md" (the site or app, then numbered steps naming each button as it's \
+            labelled), without asking. When a walkthrough starts, look there first; if one fits, follow it, \
+            still checking each step against the screen, and fix the note if something has changed.
+            """
+    }
+
     // MARK: Hard jobs
 
     /// The whiteboard's tutor: a short quiz-only prompt instead of Joe's, no connectors or browser,
@@ -315,6 +327,13 @@ final class Assistant {
         // Medium, not high: high effort roughly doubled what each of these cost.
         effortOverride = Assistant.effort < .medium ? .medium : Assistant.effort
         prepare(onEvent: onEvent) // a fresh session with the stronger model
+    }
+
+    /// A walkthrough places each step on a screenshot, which Haiku misreads: Sonnet at least.
+    func useScreenModel() {
+        guard modelOverride == nil, Assistant.model == .haiku else { return }
+        modelOverride = .sonnet
+        prepare(onEvent: onEvent) // a fresh session with that model
     }
 
     // MARK: Dropped connections
@@ -1117,7 +1136,14 @@ final class Session {
         screenshot (from its top left) and a 1–3 word label. For several steps, one tag per step, in \
         order. The tags are hidden and drawn as markers on their screen, so refer to them naturally \
         ("click the button I've marked"). If a request is about their screen but no screenshot came \
-        with it, say so in one line and suggest asking again with "on my screen".\(spoken)
+        with it, say so in one line and suggest asking again with "on my screen". \
+        When they ask you to walk them through something ("show me how to submit on ManageBac", "walk me \
+        through sharing this doc"), guide them one step per reply, from the screenshot: "Step N: <what to do>" \
+        in one short sentence, with one [POINT] tag on the thing to click or type in. Don't do it for them and \
+        don't click. They say "next" when they've done it, and you get a fresh screenshot. If the right app or \
+        page isn't open, the first step is getting there (the site to open, or open it in Bash with open \
+        "<url>"). Say plainly when a step submits, sends or deletes something ("This hands it in"). If the \
+        screen shows the step went wrong, say what to fix. When it's done, say so in one line, without a tag.\(Assistant.walkthroughNotes)\(spoken)
 
         You can use:
         - The web (WebSearch, WebFetch).

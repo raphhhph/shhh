@@ -40,7 +40,12 @@ final class StudyBoard: NSObject, NSWindowDelegate {
         }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
-        if let subject { model.start(subject: subject, request: request, mode: mode) }
+        // Another "draw…" while Joe is already explaining this subject: the next question on the same board.
+        if subject == model.subject, mode == .explain, model.mode == .explain, model.isActive, let request {
+            model.submit(request, spoken: true)
+        } else if let subject {
+            model.start(subject: subject, request: request, mode: mode)
+        }
     }
 
     /// Open and in front: a voice answer (right ⌥) goes here, not to the notch.
@@ -95,8 +100,9 @@ final class StudyBoard: NSObject, NSWindowDelegate {
 
 @MainActor
 final class StudyBoardModel: ObservableObject {
-    /// review: going through a returned test's lost marks; feedback: a draft against the IB criteria.
-    enum Mode: String { case quiz, exam, cards, review, feedback }
+    /// review: going through a returned test's lost marks; feedback: a draft against the IB criteria;
+    /// explain: no quiz, they ask and Joe answers at the board, drawing the diagrams as he goes.
+    enum Mode: String { case quiz, exam, cards, review, feedback, explain }
 
     enum Item: Identifiable, Equatable {
         case question(n: Int, marks: Int, topic: String, source: String, text: String)
@@ -113,6 +119,8 @@ final class StudyBoardModel: ObservableObject {
         case returned(assessment: String, mark: String, boundary: String)
         /// One criterion of draft feedback: its mark, band, quoted evidence and what lifts it a band.
         case criterion(name: String, score: Int, total: Int, band: String, text: String)
+        /// A diagram Joe draws as the reply streams in: supply and demand, a tax, cost curves…
+        case diagram(BoardDiagram)
         case note(String)
 
         var id: String {
@@ -125,6 +133,7 @@ final class StudyBoardModel: ObservableObject {
             case let .cards(cards): "c\(cards.count)\(cards.first?.term ?? "")"
             case let .returned(assessment, mark, _): "r\(assessment)\(mark)"
             case let .criterion(name, score, _, _, _): "k\(name)\(score)"
+            case let .diagram(diagram): "d\(diagram.title)\(diagram.pieces.count)"
             case let .note(text): "n\(text.hashValue)"
             }
         }
@@ -145,8 +154,13 @@ final class StudyBoardModel: ObservableObject {
     // Reviewing their flashcards: the cards still to go (the next one first), and how it's going.
     @Published private(set) var deck: [Flashcards.Card] = []
     @Published private(set) var deckSize = 0
-    @Published private(set) var known = 0
+    /// Cards graded Good or better (or Hard) this session; Again sends a card round once more.
+    @Published private(set) var reviewed = 0
     @Published private(set) var again: Set<String> = []
+    /// Practising the whole deck, not today's reviews: grades don't move the schedule.
+    @Published private(set) var practising = false
+    /// The deck's numbers when there's nothing to review now.
+    @Published private(set) var deckStats = Flashcards.Stats()
     @Published var flipped = false {
         didSet { if flipped, !oldValue, readAloud, let card = deck.first { speak(BoardMath.speakable(card.definition)) } }
     }
@@ -194,10 +208,14 @@ final class StudyBoardModel: ObservableObject {
         live = []
         draft = ""
         startedAt = Date()
+        DiagramClock.drawn = []
         questionSince = nil
         savedUpTo = 0
         nettedUpTo = 0
-        if mode == .cards { shuffleDeck(); return }
+        if mode == .cards {
+            loadDeck(practise: request?.range(of: #"\bpractis|\bpractic|\ball (my |of my )?.*flash ?cards"#, options: [.regularExpression, .caseInsensitive]) != nil)
+            return
+        }
         let assistant = Assistant()
         assistant.tutorPrompt = mode == .feedback ? Self.feedbackPrompt(project: subject) : Self.tutorPrompt(subject: subject, mode: mode)
         // New or changed past papers are read in the background, for the next session's index.
@@ -207,6 +225,7 @@ final class StudyBoardModel: ObservableObject {
         var opening = request ?? { () -> String in
             switch mode {
             case .exam: return "Give me one full exam-style question."
+            case .explain: return "I'm at the whiteboard. In one line, ask what I'd like explained."
             case .review: return "I've had a marked test back in \(subject). Start the mark review."
             case .feedback: return "Give me feedback on my \(subject) draft against the IB criteria."
             default: return "Start the quiz: five questions, focusing on my weak spots if you know them."
@@ -262,13 +281,13 @@ final class StudyBoardModel: ObservableObject {
 
     // MARK: Flashcards
 
-    /// The subject's cards, shuffled, with the ones they missed last time first.
-    private func shuffleDeck() {
-        let cards = Flashcards.cards(subject)
-        let missed = Set(Flashcards.missed(subject))
-        deck = cards.filter { missed.contains($0.id) }.shuffled() + cards.filter { !missed.contains($0.id) }.shuffled()
+    /// Today's reviews (due cards, then new ones), or the whole deck shuffled to practise.
+    private func loadDeck(practise: Bool) {
+        practising = practise
+        deck = practise ? Flashcards.cards(subject).shuffled() : Flashcards.session(subject)
+        deckStats = Flashcards.stats(subject)
         deckSize = deck.count
-        known = 0
+        reviewed = 0
         again = []
         flipped = false
         said = nil
@@ -284,15 +303,24 @@ final class StudyBoardModel: ObservableObject {
         start(subject: subject, request: nil, mode: .cards)
     }
 
-    /// "Got it", or "Again": the card comes back at the end of the deck.
-    func mark(gotIt: Bool) {
+    func practiseCards() {
+        start(subject: subject, request: "practise all", mode: .cards)
+    }
+
+    /// Again, Hard, Good or Easy: the card's next review is set from it (not when practising), and
+    /// Again sends it round once more at the end of this session.
+    func grade(_ grade: Flashcards.Grade) {
         guard !deck.isEmpty else { return }
-        let card = deck.removeFirst()
+        var card = deck.removeFirst()
+        if !practising {
+            card = Flashcards.schedule(card, grade)
+            Flashcards.update(card, subject: subject)
+        }
         turn += 1
         flipped = false
         said = nil
-        if gotIt { known += 1 } else { deck.append(card); again.insert(card.id) }
-        if deck.isEmpty { Flashcards.setMissed(Array(again), subject: subject) } else { sayTerm() }
+        if grade == .again { deck.append(card); again.insert(card.id) } else { reviewed += 1 }
+        if deck.isEmpty { deckStats = Flashcards.stats(subject) } else { sayTerm() }
     }
 
     /// A quiz on the cards they needed another go at (or the whole deck).
@@ -313,7 +341,7 @@ final class StudyBoardModel: ObservableObject {
     }
 
     /// Their answer (typed or said), or "hint", "skip", "end".
-    func submit(_ text: String, spoken: Bool = false, image: Data? = nil) {
+    func submit(_ text: String, spoken: Bool = false, image: Data? = nil, onYourDiagram: Bool = false) {
         if mode == .cards { said = text; flipped = true; return }
         var text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // Said while Joe is still marking: kept in the box to send, not lost.
@@ -325,7 +353,11 @@ final class StudyBoardModel: ObservableObject {
         items.append(.answer(text: counted ? text + "\n\n· \(pastedWords) words" : text, spoken: spoken, image: image))
         draft = ""
         if counted { text = "[Pasted draft. Word count (Joe counted it): \(pastedWords).]\n" + text }
-        if image != nil { text = (text.isEmpty ? "" : text + "\n\n") + "[My diagram is attached: mark it as part of my answer.]" }
+        if image != nil {
+            text = (text.isEmpty ? "" : text + "\n\n") + (onYourDiagram
+                ? "[I drew on your diagram: my strokes are in black, red or blue over yours. Mark what I added as part of my answer.]"
+                : "[My diagram is attached: mark it as part of my answer.]")
+        }
         send(text, image: image)
     }
 
@@ -333,6 +365,14 @@ final class StudyBoardModel: ObservableObject {
         guard assistant != nil, !isBusy else { return }
         items.append(.note(text))
         send(text)
+    }
+
+    /// From explaining to testing, in the same session: the tutor already knows what was covered.
+    func quizOnThis() {
+        guard assistant != nil, !isBusy else { return }
+        mode = .quiz
+        items.append(.note("Quiz me on this"))
+        send("Now quiz me on what we just went through: quiz mode, five questions, easier to harder, then the summary.")
     }
 
     private func send(_ text: String, image: Data? = nil) {
@@ -566,7 +606,7 @@ final class StudyBoardModel: ObservableObject {
             }
             pendingFeedback = nil
         }
-        while let open = rest.range(of: #"<(question|feedback|model|summary|lesson|cards|ms|returned|criterion)\b[^>]*>"#, options: .regularExpression) {
+        while let open = rest.range(of: #"<(question|feedback|model|summary|lesson|cards|diagram|ms|returned|criterion)\b[^>]*>"#, options: .regularExpression) {
             let before = rest[..<open.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
             if !before.isEmpty { flushFeedback(); items.append(.note(before)) }
             let tag = String(rest[open])
@@ -603,6 +643,11 @@ final class StudyBoardModel: ObservableObject {
             case "lesson":
                 flushFeedback()
                 items.append(.lesson(title: attribute("title"), text: body))
+            case "diagram":
+                flushFeedback()
+                // Drawn line by line while it streams; a half-written last line waits for the rest.
+                let diagram = BoardDiagram.parse(body, title: attribute("title"), complete: close != nil)
+                if !diagram.pieces.isEmpty || close == nil { items.append(.diagram(diagram)) }
             case "cards":
                 flushFeedback()
                 let cards = body.components(separatedBy: "\n").compactMap(Flashcards.parse)
@@ -690,6 +735,7 @@ final class StudyBoardModel: ObservableObject {
             marks split by cause (e.g. 9 didn't know, 4 command term, 3 careless); then **3 things to fix** as a numbered list, each concrete \
             (a topic to relearn with its syllabus number, a command-term habit, a checking habit)</summary>. No <cards> unless definitions were lost.
             """
+        let quizRules = "Quiz mode: five questions, easier to harder, IB command terms and marks in brackets, a mix of definitions, application to a short context, calculations where the subject has them, and one exam-style question. Cover the topic they ask for; otherwise the topics due for review below first (they're about to forget them), then their weakest topics from the results. After the fifth, the summary."
         return """
             You are Joe, an IB Diploma tutor running a practice session on a whiteboard for \(Profile.name.isEmpty ? "a student" : Profile.name). \
             \(Profile.description) Subject: \(subject).
@@ -701,7 +747,38 @@ final class StudyBoardModel: ObservableObject {
             - Right after each question, its markscheme, hidden from them: <ms>each mark point as the IB would write it (M1, A1, \
             or one point per mark; for markband questions, what each band needs), and acceptable alternatives</ms>. Mark their answer \
             strictly against it, so the same answer always gets the same mark.
-            - They can draw: a diagram sent as an image with their answer. Mark what's drawn (axes, labels, curves, shifts, areas) as an examiner would.
+            - They can draw: a diagram sent as an image with their answer. You see it. Mark what's drawn (axes, labels, curves, shifts, areas) \
+            as an examiner would, then draw the correct version yourself in a <diagram> (below) so they can compare.
+            - You draw on the board too, live: it draws each line of a <diagram> as you write it, like a teacher at a whiteboard. \
+            Draw whenever a diagram is part of the answer: every economics diagram (supply and demand, shifts, taxes and subsidies, \
+            price controls, externalities and welfare loss, elasticity, PPC, AD/AS, cost and revenue curves, market structures, \
+            Lorenz curve, J-curve), graphs in maths and the sciences, flows and cycles. Put the diagram first, before the text \
+            that explains it, so it builds while they read. Never inside another tag. The format, one command per line, \
+            positions as x,y from 0 to 100 inside the axes (0,0 is the origin, 100,100 the top right):
+            <diagram title="Specific tax">
+            axes "Quantity" "Price"
+            line D 10,90 90,15
+            line S1 10,15 90,80 blue
+            line S2 10,35 75,90 red dashed
+            arrow 66,62 66,78 red
+            point E1 53,50 x="Q1" y="P1"
+            point E2 41,61 x="Q2" y="Pc"
+            point "" 41,40 y="Pp"
+            area 0,61 41,61 41,40 0,40 orange "Tax revenue"
+            area 41,61 53,50 41,40 gray
+            text 76,38 "Welfare loss"
+            arrow 68,40 45,50 gray
+            text 80,30 "Excess supply"
+            </diagram>
+            Commands: axes "x label" "y label"; line <label> x,y x,y [more points make a smooth curve, e.g. MC or AC]; \
+            arrow x,y x,y [label] for a shift or movement; point <label> x,y [x="Q1"] [y="P1"] (dashed guides to the axes with \
+            those marks); area x,y x,y x,y… [label] to shade (tax revenue, welfare loss, \
+            surplus; a small one like a welfare-loss triangle gets no label: a text beside it and an arrow ending at its middle); text x,y "words"; \
+            box x,y "label" for flow diagrams (with arrows between boxes, no axes). Colours: blue, red, green, orange, purple, \
+            gray (black by default); add dashed for a curve after a shift. Draw in the order you'd explain: axes, the original \
+            curves and equilibrium, then the shift (new curve in a colour, an arrow), the new equilibrium, then shaded areas. \
+            Compute the coordinates so the lines really cross where the points say. Label every curve and axis as the IB expects \
+            (P and Q or the real names, D, S, S+tax, MSC, MPB, AD, SRAS, LRAS…). Up to about 14 lines.
             - After they answer: <feedback n="1" score="3" total="4">✓ what earned marks, one bullet each; ✗ missing: what was missing, one bullet each</feedback> \
             then <model>the answer a markscheme would credit, concise, using only methods on this subject's syllabus</model>, then the next <question>. \
             ✗ lines are only lost mark points; any caveat or note goes outside the tag.
@@ -718,13 +795,16 @@ final class StudyBoardModel: ObservableObject {
 
             \(myp ? "# MYP\nThey're in the MYP (\(Profile.programme)). Name the criterion each question targets, and mark on that criterion's band and level out of 8 (score=\"6\" total=\"8\"), using the descriptors below. No DP papers.\n" : "")
             # The session
-            \(mode == .review ? reviewSession : mode == .exam
+            \(mode == .review ? reviewSession : mode == .explain
+                ? "Explain mode: no quiz. They ask questions, by voice or typing, and you answer like a teacher at a whiteboard: first the <diagram> when one helps (always for an economics diagram), then <lesson title=\"…\">the explanation in Markdown: definitions word for word, the steps of the diagram, what to write in an exam to get the marks</lesson>. Before it, at most two short sentences outside the tags, said aloud. Follow-ups build on what's on the board (\"now add a subsidy\": draw the whole diagram again with it). When they say \"quiz me\", switch to quiz mode: " + quizRules
+                : mode == .exam
                 ? "Exam mode: one full question in the style of a real paper for this subject (with parts (a), (b)…, a stimulus or data where the paper has one, marks per part), with time=\"<minutes>\" in the question tag: the time the real paper allows for those marks. Mark it part by part; long parts with markbands. Then the summary, saying whether they'd have finished in time."
-                : "Quiz mode: five questions, easier to harder, IB command terms and marks in brackets, a mix of definitions, application to a short context, calculations where the subject has them, and one exam-style question. Cover the topic they ask for; otherwise the topics due for review below first (they're about to forget them), then their weakest topics from the results. After the fifth, the summary.")
+                : quizRules)
             - "hint": a hint, not the answer. "skip": the model answer and 0 marks (a feedback tag with score 0), then go on. "end": the summary now, unless it's been given (then one short closing line, no second summary). \
             Any other question from them: answer it briefly, then carry on.
             - Mark strictly but fairly, like an IB examiner: the command term sets the depth, partial marks are fine, follow-through for \
-            a slip carried correctly. Diagrams: they describe them in words; mark the description.
+            a slip carried correctly. Diagrams: they draw them or describe them in words; mark what they gave. Model answers to \
+            diagram questions get a <diagram> after the <model>.
             \(pack == "Chinese B" ? "- Chinese B: questions in simplified Chinese; corrections as 原句 → 改正; explanations in English.\n" : "")
             # Material
             - Real past-paper questions beat invented ones. \(material)
@@ -802,7 +882,80 @@ final class StudyBoardModel: ObservableObject {
 
 // MARK: - View
 
-private let accent = Color(red: 1, green: 0.58, blue: 0.12)
+/// The board in the app's calm style (see the shared style guide): one accent for the main action,
+/// plain surfaces with a hairline, hierarchy by size and weight, no decoration.
+private enum BoardLook {
+    static var accent: Color {
+        switch Theme.current {
+        case .classic: Color(red: 1, green: 0.58, blue: 0.12)
+        case .midnight: Color(red: 0.96, green: 0.77, blue: 0.33)
+        case .paper: Color(red: 0.74, green: 0.25, blue: 0.2)
+        case .ocean: Color(red: 0.16, green: 0.5, blue: 0.96)
+        }
+    }
+    /// A card's face.
+    static var card: Color {
+        switch Theme.current {
+        case .midnight: Color(red: 0.1, green: 0.13, blue: 0.22)
+        case .paper: dynamic(light: (1, 0.99, 0.97), dark: (0.17, 0.16, 0.14))
+        default: Color(nsColor: .controlBackgroundColor)
+        }
+    }
+    /// Behind the cards.
+    static var page: Color {
+        switch Theme.current {
+        case .midnight: Color(red: 0.07, green: 0.09, blue: 0.16)
+        case .paper: dynamic(light: (0.98, 0.96, 0.92), dark: (0.13, 0.12, 0.11))
+        case .ocean: dynamic(light: (0.96, 0.97, 1), dark: (0.09, 0.1, 0.13))
+        case .classic: Color(nsColor: .textBackgroundColor)
+        }
+    }
+    static let line = Color.primary.opacity(0.06)
+    /// Only for late: over the exam time.
+    static let late = Color(red: 0.88, green: 0.24, blue: 0.3)
+
+    private static func dynamic(light: (Double, Double, Double), dark: (Double, Double, Double)) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let rgb = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+            return NSColor(srgbRed: rgb.0, green: rgb.1, blue: rgb.2, alpha: 1)
+        })
+    }
+}
+
+private var accent: Color { BoardLook.accent }
+
+/// Flat buttons: 7 pt corners, 28 pt tall, a filled accent for the one main action, a faint fill
+/// and no outline for the rest.
+private struct BoardButton: ButtonStyle {
+    var prominent = false
+    @Environment(\.isEnabled) private var enabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(prominent ? Color.white : Color.primary)
+            .padding(.horizontal, 12)
+            .frame(height: 28)
+            .background(prominent ? accent : Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .opacity(!enabled ? 0.4 : configuration.isPressed ? 0.7 : 1)
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+    }
+}
+
+private extension View {
+    /// A plain card: the surface, 12 pt corners, a hairline, 16 pt padding.
+    func boardCard(padding: CGFloat = 16) -> some View {
+        self.padding(padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(BoardLook.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(BoardLook.line))
+    }
+
+    /// Card and section titles: plain text, 12.5 pt semibold, secondary.
+    func boardLabel() -> some View {
+        font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.secondary)
+    }
+}
 
 private struct StudyBoardView: View {
     @ObservedObject var model: StudyBoardModel
@@ -814,11 +967,14 @@ private struct StudyBoardView: View {
     @State private var started = false
     @State private var strokes: [SketchPad.Stroke] = []
     @State private var ink = Color.black // the pad is white whatever the theme
+    /// Joe's diagram under the sketch pad, to draw the shift or the labels on.
+    @State private var base: BoardDiagram?
+    @State private var padSize = CGSize(width: 600, height: 220)
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
+            Divider().opacity(0.5)
             if model.mode == .cards {
                 deckView
             } else {
@@ -826,7 +982,7 @@ private struct StudyBoardView: View {
             }
         }
         .frame(minWidth: 620, minHeight: 520)
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(BoardLook.page)
         .onAppear { if !started { started = true; sketching = startSketching; strokes = demoStrokes } }
         .tint(accent)
     }
@@ -835,25 +991,25 @@ private struct StudyBoardView: View {
     private var session: some View {
         ScrollViewReader { scroll in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
+                LazyVStack(alignment: .leading, spacing: 12) {
                     if model.items.isEmpty && model.live.isEmpty && !model.isBusy {
                         empty
                     }
                     // By position: two rows can be alike ("Nice." twice), and SwiftUI needs unique ids.
-                    ForEach(Array((model.items + model.live).enumerated()), id: \.offset) { _, item in
-                        row(item)
+                    ForEach(Array((model.items + model.live).enumerated()), id: \.offset) { index, item in
+                        row(item, at: index)
                     }
                     if model.isBusy {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
-                            Text(model.status ?? "Thinking…").font(.system(size: 12.5)).foregroundStyle(.secondary)
+                            Text(model.status ?? "Thinking…").font(.system(size: 12)).foregroundStyle(.secondary)
                         }
-                        .padding(.leading, 4)
+                        .padding(.leading, 2)
                     }
                     Color.clear.frame(height: 1).id("end")
                 }
-                .padding(24)
-                .frame(maxWidth: 820)
+                .padding(.horizontal, 24).padding(.vertical, 20)
+                .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)
             }
             // A marked paper or a draft dropped on the board.
@@ -862,72 +1018,100 @@ private struct StudyBoardView: View {
                 model.attach(url)
                 return true
             }
-            .onChange(of: model.items.count) { withAnimation { scroll.scrollTo("end", anchor: .bottom) } }
+            .onChange(of: model.items.count) { withAnimation(.easeOut(duration: 0.2)) { scroll.scrollTo("end", anchor: .bottom) } }
             .onChange(of: model.live) { scroll.scrollTo("end", anchor: .bottom) }
         }
-        Divider()
+        Divider().opacity(0.5)
         composer
     }
 
     // MARK: Flashcards
 
+    /// One card in focus, its controls in a row underneath, keyboard first.
     private var deckView: some View {
-        VStack(spacing: 18) {
+        VStack(spacing: 16) {
             Spacer(minLength: 0)
             if let card = model.deck.first {
-                Text("\(model.known) of \(model.deckSize) known").font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary)
-                FlipCard(angle: model.flipped ? 180 : 0) {
-                    VStack(spacing: 14) {
-                        Text(card.term).font(.system(size: 26, weight: .bold)).multilineTextAlignment(.center)
-                        Text("Hold right ⌥ and say the definition, or think it, then click to flip")
-                            .font(.system(size: 12.5)).foregroundStyle(.tertiary).multilineTextAlignment(.center)
+                VStack(spacing: 6) {
+                    HStack {
+                        Text(model.practising ? "Practice · not scheduled" : model.again.contains(card.id) ? "Again" : card.isNew ? "New card" : "Review")
+                        Spacer()
+                        Text("\(min(model.reviewed + 1, model.deckSize)) of \(model.deckSize)").monospacedDigit()
                     }
-                    .cardFace(tint: accent)
-                } back: {
-                    VStack(spacing: 12) {
-                        Text(card.term).font(.system(size: 15, weight: .bold)).foregroundStyle(accent).multilineTextAlignment(.center)
-                        if let said = model.said, !said.isEmpty {
-                            Text("You said: \(said)").font(.system(size: 13)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                    // Progress: a thin line.
+                    GeometryReader { geometry in
+                        ZStack(alignment: .leading) {
+                            Rectangle().fill(Color.primary.opacity(0.08))
+                            Rectangle().fill(accent).frame(width: geometry.size.width * Double(model.reviewed) / Double(max(1, model.deckSize)))
                         }
-                        Divider()
-                        BoardText(card.definition, size: 16, spacing: 3)
                     }
-                    .cardFace(tint: accent, back: true)
+                    .frame(height: 2)
                 }
-                // A springy turn, whether clicked, spaced or said; each new card slides in from the right.
-                .animation(.spring(response: 0.55, dampingFraction: 0.68), value: model.flipped)
+                .frame(maxWidth: 560)
+                FlipCard(angle: model.flipped ? 180 : 0) {
+                    VStack(spacing: 10) {
+                        Text(card.term).font(.system(size: 24, weight: .semibold)).multilineTextAlignment(.center)
+                    }
+                    .cardFace()
+                } back: {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(card.term).boardLabel()
+                        BoardText(card.definition, size: 15, spacing: 3)
+                        if let said = model.said, !said.isEmpty {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("You said").font(.system(size: 11.5)).foregroundStyle(.secondary)
+                                Text(said).font(.system(size: 13)).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .cardFace()
+                }
+                .animation(.easeInOut(duration: 0.2), value: model.flipped)
                 .id(model.turn)
-                .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity),
-                                        removal: .move(edge: .leading).combined(with: .opacity)))
+                .transition(.opacity.animation(.easeOut(duration: 0.15)))
                 .contentShape(Rectangle())
                 .onTapGesture { model.flipped.toggle() }
-                HStack(spacing: 12) {
+                HStack(spacing: 8) {
                     if model.flipped {
-                        Button("Again") { withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) { model.mark(gotIt: false) } }
-                            .keyboardShortcut("1", modifiers: [])
-                        Button("Got it") { withAnimation(.spring(response: 0.45, dampingFraction: 0.8)) { model.mark(gotIt: true) } }
-                            .keyboardShortcut("2", modifiers: []).buttonStyle(.borderedProminent)
+                        ForEach(Flashcards.Grade.allCases, id: \.self) { grade in
+                            Button { withAnimation(.easeOut(duration: 0.15)) { model.grade(grade) } } label: {
+                                VStack(spacing: 0) {
+                                    Text(grade.title)
+                                    if !model.practising {
+                                        Text(Flashcards.short(Flashcards.interval(after: grade, for: card)))
+                                            .font(.system(size: 10.5).monospacedDigit()).opacity(0.7)
+                                    }
+                                }
+                                .frame(minWidth: 64)
+                            }
+                            .buttonStyle(BoardTallButton(prominent: grade == .good))
+                            .keyboardShortcut(KeyEquivalent(Character(String(grade.rawValue))), modifiers: [])
+                        }
                     } else {
-                        Button("Turn over") { model.flipped = true }
+                        Button("Show answer") { model.flipped = true }
+                            .buttonStyle(BoardButton(prominent: true))
                             .keyboardShortcut(.space, modifiers: [])
                     }
                 }
-                .buttonStyle(.bordered).controlSize(.large)
-            } else if model.deckSize == 0 {
-                Text("No \(model.subject) flashcards yet").font(.system(size: 16, weight: .bold))
+                .frame(height: 40)
+                Text("Space shows the answer, 1 to 4 grade it. Or hold right ⌥ and say the definition.")
+                    .font(.system(size: 11.5)).foregroundStyle(.tertiary)
+            } else if model.deckStats.total == 0 {
+                Text("No \(model.subject) flashcards yet").font(.system(size: 17, weight: .semibold))
                 Text("Joe makes them after each quiz, from the definitions it asked you.").font(.system(size: 13)).foregroundStyle(.secondary)
-                Button("Quiz me on \(model.subject)") { model.quizOnCards() }.buttonStyle(.borderedProminent).controlSize(.large)
+                Button("Quiz me on \(model.subject)") { model.quizOnCards() }.buttonStyle(BoardButton(prominent: true))
             } else {
-                Image(systemName: "checkmark.circle.fill").font(.system(size: 34)).foregroundStyle(.green)
-                Text("Deck done").font(.system(size: 18, weight: .bold))
-                Text(model.again.isEmpty ? "All \(model.deckSize) known first time."
-                     : "\(model.deckSize) cards, \(model.again.count) needed another go. Those come first next time.")
-                    .font(.system(size: 13)).foregroundStyle(.secondary)
-                HStack(spacing: 12) {
-                    Button("Go again") { model.reviewCards() }
-                    Button(model.again.isEmpty ? "Quiz me on these" : "Quiz me on the hard ones") { model.quizOnCards() }.buttonStyle(.borderedProminent)
+                // Done for today, or nothing was due.
+                Text(model.deckSize == 0 ? "Nothing due in \(model.subject)" : model.practising ? "Practice done" : "Done for today")
+                    .font(.system(size: 17, weight: .semibold))
+                Text(doneLine).font(.system(size: 13)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                HStack(spacing: 8) {
+                    Button(model.again.isEmpty ? "Quiz me on these" : "Quiz me on the hard ones") { model.quizOnCards() }
+                        .buttonStyle(BoardButton(prominent: true))
+                    Button("Practise all \(model.deckStats.total)") { model.practiseCards() }.buttonStyle(BoardButton())
                 }
-                .buttonStyle(.bordered).controlSize(.large)
             }
             Spacer(minLength: 0)
         }
@@ -935,13 +1119,22 @@ private struct StudyBoardView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private var doneLine: String {
+        let next = model.deckStats.next.flatMap { date -> String? in
+            let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: Date()), to: date).day ?? 0
+            return days <= 0 ? nil : days == 1 ? "Next review tomorrow." : "Next review in \(days) days."
+        } ?? ""
+        let did = model.deckSize == 0 ? "" : "\(model.reviewed) card\(model.reviewed == 1 ? "" : "s") reviewed"
+            + (model.again.isEmpty ? ". " : ", \(model.again.count) needed another go. ")
+        return (did + next).trimmingCharacters(in: .whitespaces)
+    }
+
     private var header: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "graduationcap.fill").foregroundStyle(accent).font(.system(size: 16))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(model.subject.isEmpty ? "Study" : model.subject).font(.system(size: 16, weight: .bold))
-                Text(model.mode == .cards ? "Flashcards" + (model.deck.isEmpty ? "" : " · \(model.deck.count) to go")
-                     : model.mode == .exam ? "Exam question"
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(model.subject.isEmpty ? "Study" : model.subject).font(.system(size: 16, weight: .semibold))
+                Text(model.mode == .cards ? "Flashcards"
+                     : model.mode == .exam ? "Exam question" : model.mode == .explain ? "Ask anything: Joe draws it"
                      : model.mode == .review ? "Mark review" + (model.questionCount > 0 ? " · question \(model.questionCount)" : "")
                      : model.mode == .feedback ? "Draft feedback against the IB criteria"
                      : "Quiz" + (model.questionCount > 0 ? " · question \(model.questionCount)" : "")).font(.system(size: 11.5)).foregroundStyle(.secondary)
@@ -951,20 +1144,15 @@ private struct StudyBoardView: View {
                 TimelineView(.periodic(from: since, by: 1)) { context in
                     let seconds = Int(context.date.timeIntervalSince(since))
                     let over = model.questionMinutes.map { seconds > $0 * 60 } ?? false
-                    Text(String(format: "%d:%02d", seconds / 60, seconds % 60) + (model.questionMinutes.map { " / \($0) min" } ?? ""))
-                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(over ? Color.orange : Color.secondary)
-                        .padding(.horizontal, 10).frame(height: 26)
-                        .background(Color.primary.opacity(0.06), in: Capsule())
+                    Text(String(format: "%d:%02d", seconds / 60, seconds % 60) + (model.questionMinutes.map { " of \($0) min" } ?? ""))
+                        .font(.system(size: 12).monospacedDigit())
+                        .foregroundStyle(over ? BoardLook.late : Color.secondary)
                         .help("Time on this question, and what the real paper allows")
                 }
             }
             let (score, total) = model.score
             if total > 0 {
-                Text("\(score)/\(total)").font(.system(size: 15, weight: .bold).monospacedDigit())
-                    .foregroundStyle(Double(score) / Double(total) >= 0.7 ? .green : Double(score) / Double(total) >= 0.45 ? .orange : .red)
-                    .padding(.horizontal, 10).frame(height: 26)
-                    .background(Color.primary.opacity(0.06), in: Capsule())
+                Text("\(score)/\(total) marks").font(.system(size: 13, weight: .semibold).monospacedDigit())
             }
             Toggle(isOn: $model.readAloud) { Image(systemName: model.readAloud ? "speaker.wave.2" : "speaker.slash") }
                 .toggleStyle(.button).buttonStyle(.plain).foregroundStyle(.secondary)
@@ -976,78 +1164,67 @@ private struct StudyBoardView: View {
     }
 
     private var empty: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(model.mode == .review || model.mode == .feedback
-                 ? "Drop your \(model.mode == .review ? "marked paper" : "draft") here (PDF, photo, Word, Pages or text), or paste it below."
-                 : "Pick a subject on the Study page, or say “quiz me on…”.").font(.system(size: 14)).foregroundStyle(.secondary)
-        }
-        .padding(.top, 40)
+        Text(model.mode == .review || model.mode == .feedback
+             ? "Drop your \(model.mode == .review ? "marked paper" : "draft") here (PDF, photo, Word, Pages or text), or paste it below."
+             : "Pick a subject on the Study page, or say “quiz me on…” or “draw me a diagram of…”.")
+            .font(.system(size: 13)).foregroundStyle(.secondary)
+            .padding(.top, 40)
     }
 
     @ViewBuilder
-    private func row(_ item: StudyBoardModel.Item) -> some View {
+    private func row(_ item: StudyBoardModel.Item, at index: Int) -> some View {
         switch item {
         case let .question(n, marks, topic, source, text):
             VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 8) {
-                    Text(n > 0 ? "Question \(n)" : "Question").font(.system(size: 12, weight: .bold)).foregroundStyle(accent)
-                    if !topic.isEmpty { chip(topic) }
-                    if !source.isEmpty, source.lowercased() != "ib-style" { chip(source) }
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(n > 0 ? "Question \(n)" : "Question").font(.system(size: 12.5, weight: .semibold))
+                    Text([topic, source.lowercased() == "ib-style" ? "" : source].filter { !$0.isEmpty }.joined(separator: " · "))
+                        .font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
                     Spacer()
-                    if marks > 0 { Text("[\(marks)]").font(.system(size: 13, weight: .bold).monospacedDigit()).foregroundStyle(.secondary) }
+                    if marks > 0 { Text("\(marks) mark\(marks == 1 ? "" : "s")").font(.system(size: 11.5).monospacedDigit()).foregroundStyle(.secondary) }
                 }
                 // The marks are in the corner; a "[4]" at the end of the text would say it twice.
                 BoardText(marks > 0 ? text.replacingOccurrences(of: #"\s*\[\d{1,2}\]\s*$"#, with: "", options: .regularExpression) : text,
-                          size: 15.5, spacing: 3)
+                          size: 15, spacing: 3)
             }
-            .padding(18)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(accent.opacity(0.35)))
+            .boardCard()
         case let .answer(text, spoken, image):
             HStack {
                 Spacer(minLength: 80)
                 VStack(alignment: .trailing, spacing: 4) {
                     if let image, let picture = NSImage(data: image) {
                         Image(nsImage: picture).resizable().scaledToFit().frame(maxWidth: 320, maxHeight: 220)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .clipShape(RoundedRectangle(cornerRadius: 7))
                     }
                     if !text.isEmpty {
-                        Text(text).font(.system(size: 14)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                        Text(text).font(.system(size: 13.5)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                     }
-                    if spoken { Label("said", systemImage: "waveform").font(.system(size: 10.5)).foregroundStyle(.secondary) }
+                    if spoken { Text("Said").font(.system(size: 11)).foregroundStyle(.secondary) }
                 }
-                .padding(.horizontal, 14).padding(.vertical, 10)
-                .background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .padding(.horizontal, 12).padding(.vertical, 9)
+                .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
         case let .feedback(score, total, text, modelAnswer, _, _):
             VStack(alignment: .leading, spacing: 10) {
                 if total > 0 {
-                    HStack(spacing: 8) {
-                        Text("\(score)/\(total)").font(.system(size: 20, weight: .bold).monospacedDigit()).foregroundStyle(Self.color(score, total))
-                        Text("marks").font(.system(size: 12)).foregroundStyle(.secondary)
-                    }
+                    Text("\(score) of \(total) marks").font(.system(size: 15, weight: .semibold).monospacedDigit())
                 }
                 if !text.isEmpty {
                     BoardText(text, size: 13.5)
                 }
                 if !modelAnswer.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("MODEL ANSWER").font(.system(size: 10.5, weight: .bold)).foregroundStyle(.secondary)
+                        Text("Model answer").boardLabel()
                         BoardText(modelAnswer, size: 13.5)
                     }
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .padding(.top, 2)
                 }
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Self.color(score, max(total, 1)).opacity(total > 0 ? 0.07 : 0), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .boardCard()
         case let .summary(score, total, text):
             VStack(alignment: .leading, spacing: 8) {
                 let label = model.mode == .review ? "Mark" : model.mode == .feedback ? "Predicted" : "Session"
-                Text(total > 0 ? "\(label): \(score)/\(total)" : model.mode == .feedback ? "Feedback summary" : "\(label) summary").font(.system(size: 16, weight: .bold))
+                Text(total > 0 ? "\(label) · \(score) of \(total) marks" : model.mode == .feedback ? "Feedback summary" : "\(label) summary").font(.system(size: 15, weight: .semibold))
                 BoardText(total > 0 ? Self.withoutScoreLine(text) : text, size: 13.5, spacing: 0)
                 // What next, without typing: the session's own advice, as buttons.
                 if !model.isBusy, model.mode == .review {
@@ -1066,24 +1243,25 @@ private struct StudyBoardView: View {
                 } else if !model.isBusy {
                     HStack(spacing: 8) {
                         Button("Another quiz") { model.start(subject: model.subject, request: "Another quiz: five new questions, starting with what I just got wrong.", mode: .quiz) }
+                            .buttonStyle(BoardButton(prominent: true))
                         Button("Teach me my weakest topic") { model.start(subject: model.subject, request: "Teach me the weakest topic from my last session with a short lesson, then test me on it.", mode: .quiz) }
-                        if model.mode != .exam { Button("Exam question") { model.start(subject: model.subject, request: nil, mode: .exam) } }
+                            .buttonStyle(BoardButton())
+                        if model.mode != .exam {
+                            Button("Exam question") { model.start(subject: model.subject, request: nil, mode: .exam) }.buttonStyle(BoardButton())
+                        }
                     }
-                    .buttonStyle(.bordered).controlSize(.small).padding(.top, 4)
+                    .padding(.top, 4)
                 }
             }
-            .padding(18)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .boardCard()
         case let .note(text):
             BoardText(text, size: 13, spacing: 0, secondary: true)
         case let .cards(cards):
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Label("\(cards.count) flashcard\(cards.count == 1 ? "" : "s") saved", systemImage: "rectangle.on.rectangle.angled")
-                        .font(.system(size: 13, weight: .bold)).foregroundStyle(accent)
+                    Text("\(cards.count) flashcard\(cards.count == 1 ? "" : "s") added to your deck").boardLabel()
                     Spacer()
-                    Button("Review them") { model.reviewCards() }.buttonStyle(.bordered).disabled(model.isBusy)
+                    Button("Review") { model.reviewCards() }.buttonStyle(BoardButton()).disabled(model.isBusy)
                 }
                 ForEach(cards) { card in
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -1092,9 +1270,7 @@ private struct StudyBoardView: View {
                     }
                 }
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .boardCard()
         case let .returned(assessment, mark, boundary):
             HStack(spacing: 12) {
                 Image(systemName: "doc.text.magnifyingglass").font(.system(size: 18)).foregroundStyle(accent)
@@ -1106,9 +1282,7 @@ private struct StudyBoardView: View {
                 }
                 Spacer()
             }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .boardCard(padding: 14)
         case let .criterion(name, score, total, band, text):
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
@@ -1123,75 +1297,83 @@ private struct StudyBoardView: View {
                 }
                 BoardText(text, size: 13.5)
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .boardCard()
             .overlay(alignment: .leading) { Rectangle().fill(total > 0 ? Self.color(score, total) : Color.secondary.opacity(0.4)).frame(width: 3).padding(.vertical, 12) }
+        case let .diagram(diagram):
+            BoardDiagramView(diagram: diagram, key: "\(index)", onDrawOn: model.isActive && !model.isBusy ? {
+                withAnimation(.easeOut(duration: 0.15)) { base = diagram; strokes = []; sketching = true }
+            } : nil)
         case let .lesson(title, text):
             VStack(alignment: .leading, spacing: 8) {
-                Label(title.isEmpty ? "Lesson" : title, systemImage: "book.closed.fill")
-                    .font(.system(size: 13, weight: .bold)).foregroundStyle(accent)
+                Text(title.isEmpty ? "Lesson" : title).font(.system(size: 15, weight: .semibold))
                 BoardText(text, size: 14, spacing: 3)
             }
-            .padding(18)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(alignment: .leading) { Rectangle().fill(accent).frame(width: 3).padding(.vertical, 14) }
+            .boardCard(padding: 18)
         }
     }
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
             if sketching {
-                SketchPad(strokes: $strokes, ink: $ink)
-                    .frame(height: 220)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.15)))
+                // The picture sent to Joe is the pad at its size on screen, so the strokes stay on his curves.
+                GeometryReader { geometry in
+                    SketchPad(strokes: $strokes, ink: $ink, base: base)
+                        .onAppear { padSize = geometry.size }
+                        .onChange(of: geometry.size) { _, size in padSize = size }
+                }
+                    .frame(height: base == nil ? 220 : 300)
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(BoardLook.line))
             }
             ZStack(alignment: .topLeading) {
                 if model.draft.isEmpty {
-                    Text("Type your answer… (⌘↩ to submit) or hold right ⌥ and say it")
-                        .font(.system(size: 14)).foregroundStyle(.tertiary).padding(.top, 8).padding(.leading, 5)
+                    Text(model.mode == .explain ? "Ask a question, or hold right ⌥ and say it" : "Type your answer, or hold right ⌥ and say it")
+                        .font(.system(size: 13.5)).foregroundStyle(.tertiary).padding(.top, 8).padding(.leading, 5)
                 }
                 TextEditor(text: $model.draft)
-                    .font(.system(size: 14))
+                    .font(.system(size: 13.5))
                     .scrollContentBackground(.hidden)
                     .focused($typing)
-                    .frame(minHeight: 70, maxHeight: 160)
+                    .frame(minHeight: 64, maxHeight: 160)
             }
             .padding(8)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(typing ? 0.25 : 0.1)))
+            .background(BoardLook.card, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(Color.primary.opacity(typing ? 0.18 : 0.06)))
             HStack(spacing: 8) {
-                Button { withAnimation(.easeOut(duration: 0.15)) { sketching.toggle() } } label: {
-                    Label(sketching ? "Hide sketch" : "Draw a diagram", systemImage: "pencil.and.scribble")
-                }
+                Button(sketching ? "Hide sketch" : "Draw") { withAnimation(.easeOut(duration: 0.15)) { sketching.toggle() } }
                 if sketching {
                     ForEach([Color.black, Color.red, Color.blue], id: \.self) { color in
-                        Circle().fill(color).frame(width: 16, height: 16)
-                            .overlay(Circle().strokeBorder(Color.accentColor, lineWidth: ink == color ? 2 : 0).padding(-3))
+                        Circle().fill(color).frame(width: 14, height: 14)
+                            .overlay(Circle().strokeBorder(accent, lineWidth: ink == color ? 2 : 0).padding(-3))
                             .onTapGesture { ink = color }
                     }
                     Button("Clear") { strokes = [] }
+                    if base != nil { Button("Blank page") { base = nil; strokes = [] } }
                 }
-                if model.mode == .review || model.mode == .feedback {
-                    Button { choose() } label: { Label(model.mode == .review ? "Add paper" : "Add draft", systemImage: "paperclip") }
-                        .help("A PDF or photo of the paper, or the draft as Word, Pages, PDF or text. Or drop it on the board.")
+                if model.mode == .explain {
+                    Button("Quiz me on this") { model.quizOnThis() }.disabled(model.items.isEmpty)
                 } else {
-                    Button("Hint") { model.command("hint") }
+                    if model.mode == .review || model.mode == .feedback {
+                        Button { choose() } label: { Label(model.mode == .review ? "Add paper" : "Add draft", systemImage: "paperclip") }
+                            .help("A PDF or photo of the paper, or the draft as Word, Pages, PDF or text. Or drop it on the board.")
+                    } else {
+                        Button("Hint") { model.command("hint") }
+                    }
+                    Button("Skip") { model.command("skip") }
+                    Button("End") { model.command("end") }
                 }
-                Button("Skip") { model.command("skip") }
-                Button("End") { model.command("end") }
                 Spacer()
-                Button {
-                    model.submit(model.draft, image: strokes.isEmpty ? nil : SketchPad.jpeg(strokes))
+                Text("⌘↩").font(.system(size: 11)).foregroundStyle(.tertiary)
+                Button(model.mode == .explain ? "Ask" : "Submit") {
+                    model.submit(model.draft, image: strokes.isEmpty ? nil : SketchPad.jpeg(strokes, base: base, size: padSize), onYourDiagram: base != nil && !strokes.isEmpty)
                     strokes = []
-                } label: { Label("Submit", systemImage: "arrow.up") }
+                    base = nil
+                }
                     .keyboardShortcut(.return, modifiers: .command)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(BoardButton(prominent: true))
                     .disabled((model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && strokes.isEmpty) || model.isBusy)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(BoardButton())
             .disabled(!model.isActive)
         }
         .padding(16)
@@ -1229,10 +1411,26 @@ private struct StudyBoardView: View {
 
 }
 
+/// A grade button with its next interval under the name.
+private struct BoardTallButton: ButtonStyle {
+    var prominent = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(prominent ? Color.white : Color.primary)
+            .padding(.horizontal, 10)
+            .frame(height: 40)
+            .background(prominent ? accent : Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .opacity(configuration.isPressed ? 0.7 : 1)
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+    }
+}
+
 // MARK: - Flip card
 
-/// A flashcard that turns over in 3D: the front until halfway, then the back (drawn mirrored so
-/// it reads the right way round), lifting a little mid-turn so it feels like a card in the hand.
+/// A flashcard that turns over: one 0.2 s turn about its vertical axis, the front until halfway,
+/// then the back (drawn mirrored so it reads the right way round).
 private struct FlipCard<Front: View, Back: View>: View, Animatable {
     var angle: Double
     @ViewBuilder var front: Front
@@ -1249,21 +1447,18 @@ private struct FlipCard<Front: View, Back: View>: View, Animatable {
             front.opacity(showingBack ? 0 : 1)
             back.rotation3DEffect(.degrees(180), axis: (x: 0, y: 1, z: 0)).opacity(showingBack ? 1 : 0)
         }
-        .frame(maxHeight: 380) // both sides the same size
-        .scaleEffect(1 + 0.06 * sin(angle * .pi / 180))
-        .rotation3DEffect(.degrees(angle), axis: (x: 0, y: 1, z: 0), perspective: 0.4)
-        .shadow(color: .black.opacity(0.12 + 0.12 * sin(angle * .pi / 180)), radius: 10 + 10 * sin(angle * .pi / 180), y: 6)
+        .frame(maxHeight: 340) // both sides the same size
+        .rotation3DEffect(.degrees(angle), axis: (x: 0, y: 1, z: 0), perspective: 0.3)
     }
 }
 
 private extension View {
-    /// One side of a flashcard: the same size front and back, so the turn doesn't jump.
-    func cardFace(tint: Color, back: Bool = false) -> some View {
+    /// One side of a flashcard: the plain card surface, the same size front and back.
+    func cardFace() -> some View {
         padding(28)
-            .frame(maxWidth: 560, minHeight: 260, maxHeight: .infinity)
-            .background(back ? Color(nsColor: .textBackgroundColor) : Color(nsColor: .controlBackgroundColor),
-                        in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(tint.opacity(back ? 0.6 : 0.35), lineWidth: back ? 1.5 : 1))
+            .frame(maxWidth: 560, minHeight: 240, maxHeight: .infinity)
+            .background(BoardLook.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(BoardLook.line))
     }
 }
 
@@ -1276,11 +1471,18 @@ struct SketchPad: View {
 
     @Binding var strokes: [Stroke]
     @Binding var ink: Color
+    /// Joe's diagram to draw on, under the strokes.
+    var base: BoardDiagram?
     @State private var drawing = false
 
     var body: some View {
-        Canvas { context, size in Self.draw(strokes, in: &context, size: size) }
+        ZStack {
+            if let base { DiagramDrawing(diagram: base, animated: false) }
+            Canvas { context, size in Self.draw(strokes, in: &context, size: size) }
+        }
             .background(Color.white)
+            .environment(\.colorScheme, .light)
+            .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0)
                 .onChanged { value in
                     if drawing, !strokes.isEmpty {
@@ -1292,7 +1494,7 @@ struct SketchPad: View {
                 }
                 .onEnded { _ in drawing = false })
             .overlay(alignment: .topLeading) {
-                if strokes.isEmpty {
+                if strokes.isEmpty && base == nil {
                     Text("Draw here: axes, curves, labels, arrows").font(.system(size: 12)).foregroundStyle(.gray).padding(10)
                 }
             }
@@ -1309,11 +1511,16 @@ struct SketchPad: View {
     }
 
     /// The drawing as a JPEG, on white, for Claude to look at.
-    @MainActor static func jpeg(_ strokes: [Stroke]) -> Data? {
+    /// On Joe's diagram, the picture is the pad at its size, so the strokes land where they were drawn.
+    @MainActor static func jpeg(_ strokes: [Stroke], base: BoardDiagram? = nil, size: CGSize? = nil) -> Data? {
         let points = strokes.flatMap(\.points)
-        let width = max(400, (points.map(\.x).max() ?? 400) + 20), height = max(260, (points.map(\.y).max() ?? 260) + 20)
-        let renderer = ImageRenderer(content: Canvas { context, size in draw(strokes, in: &context, size: size) }
-            .frame(width: width, height: height).background(Color.white))
+        var width = max(400, (points.map(\.x).max() ?? 400) + 20), height = max(260, (points.map(\.y).max() ?? 260) + 20)
+        if base != nil, let size { width = size.width; height = size.height }
+        let renderer = ImageRenderer(content: ZStack {
+            if let base { DiagramDrawing(diagram: base, animated: false) }
+            Canvas { context, size in draw(strokes, in: &context, size: size) }
+        }
+            .frame(width: width, height: height).background(Color.white).environment(\.colorScheme, .light))
         renderer.scale = 2
         guard let image = renderer.nsImage, let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
         return bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.8])
@@ -1323,9 +1530,10 @@ struct SketchPad: View {
 // MARK: - Preview
 
 extension StudyBoard {
-    /// `Joe --board-preview <file.png> [sketch|deck|review|feedback]`: the whiteboard with a sample
-    /// question and mark (or a flashcard, a mark review, draft feedback).
-    static func preview(to file: URL, sketch: Bool, deck: Bool = false, sample: String? = nil, done: @escaping () -> Void) {
+    /// `Joe --board-preview <file.png> [sketch|deck|diagram|review|feedback]`: the whiteboard with a sample
+    /// question and mark (or a flashcard, Joe explaining with a drawn diagram, a mark review, draft feedback).
+    static func preview(to file: URL, sketch: Bool, deck: Bool = false, diagram: Bool = false, sample: String? = nil, done: @escaping () -> Void) {
+        DiagramClock.instant = true
         let board = StudyBoard()
         board.model.preview(StudyBoardModel.parse("""
             Let's go. <question n="1" marks="4" topic="2.7 Indirect taxes" source="IB-style">**Draw** a diagram to show the effect of a specific tax on a market. [4]</question><ms>hidden</ms>
@@ -1333,12 +1541,45 @@ extension StudyBoard {
             <feedback n="1" score="3" total="4">✓ Supply shifts up by the tax
             ✓ Higher price, lower quantity
             ✗ missing: the price producers receive</feedback><model>S shifts vertically by the tax; consumers pay Pc, producers get Pp.</model>
+            <diagram title="Specific tax">
+            axes "Quantity" "Price"
+            line D 10,90 90,15
+            line S 10,15 90,80 blue
+            line "S + tax" 10,40 70,89 red dashed
+            arrow 64,61 64,80 red
+            point E1 53,50 x="Q1" y="P1"
+            point E2 38,63 x="Q2" y="Pc"
+            point "" 38,38 y="Pp"
+            area 0,63 38,63 38,38 0,38 orange "Tax revenue"
+            </diagram>
             <summary score="3" total="4">Good diagram; label the price producers receive.</summary>
             <cards>
             Specific tax :: a fixed amount of tax per unit of a good, shifting supply up by the tax
             **Tax incidence** :: how the burden of a tax is split between consumers and producers
             </cards>
             """), subject: "Economics HL", sketching: sketch)
+        // `diagram`: explain mode, with Joe's diagram at the top where the snapshot sees it (in the quiz
+        // sample it's below the window's height).
+        if diagram {
+            board.model.preview(StudyBoardModel.parse("""
+                Here's a specific tax: supply shifts up by the tax.
+                <diagram title="Specific tax">
+                axes "Quantity" "Price"
+                line D 10,90 90,15
+                line S 10,15 90,80 blue
+                line "S + tax" 10,40 70,89 red dashed
+                arrow 64,61 64,80 red
+                point E1 53,50 x="Q1" y="P1"
+                point E2 38,63 x="Q2" y="Pc"
+                point "" 38,38 y="Pp"
+                area 0,63 38,63 38,38 0,38 orange "Tax revenue"
+                area 38,63 53,50 38,38 gray
+                text 76,38 "Welfare loss"
+                arrow 68,40 43,50 gray
+                </diagram>
+                <lesson title="2.7 Indirect taxes">A **specific tax** is a fixed amount per unit. Supply shifts up by the tax: consumers pay Pc, producers keep Pp.</lesson>
+                """), subject: "Economics HL", sketching: false, mode: .explain)
+        }
         if deck {
             board.model.previewDeck([Flashcards.Card(term: "Specific tax", definition: "A fixed amount of tax per unit of a good, shifting supply up by the amount of the tax."),
                                      Flashcards.Card(term: "Tax incidence", definition: "How the burden of a tax is split between consumers and producers.")])
@@ -1400,7 +1641,8 @@ extension StudyBoard {
 }
 
 extension StudyBoardModel {
-    func preview(_ items: [Item], subject: String, sketching: Bool) {
+    func preview(_ items: [Item], subject: String, sketching: Bool, mode: Mode = .quiz) {
+        self.mode = mode
         self.subject = subject
         self.items = items
     }
@@ -1417,7 +1659,7 @@ extension StudyBoardModel {
         mode = .cards
         deck = cards
         deckSize = cards.count + 3
-        known = 3
+        reviewed = 3
         said = "a tax of a set amount on each unit"
         flipped = true
     }

@@ -308,7 +308,7 @@ enum CommandLineTool {
                 NSApplication.shared.setActivationPolicy(.accessory)
                 let options = args.dropFirst(2)
                 StudyBoard.preview(to: URL(fileURLWithPath: args[1]), sketch: options.contains("sketch"), deck: options.contains("deck"),
-                                   sample: options.first { $0 == "review" || $0 == "feedback" }) { exit(0) }
+                                   diagram: options.contains("diagram"), sample: options.first { $0 == "review" || $0 == "feedback" }) { exit(0) }
             }
             NSApplication.shared.run()
             exit(0)
@@ -503,7 +503,7 @@ enum CommandLineTool {
                 printed = board.items.count
                 guard turns.count > 0 else { check?.invalidate(); exit(0) }
                 let next = turns.removeFirst()
-                if printed == 0 { board.start(subject: subject, request: next, mode: next.lowercased().contains("exam") ? .exam : .quiz) }
+                if printed == 0 { board.start(subject: subject, request: next, mode: AppDelegate.studyMode(next) ?? .quiz) }
                 else if next.hasPrefix("@"), let image = FileManager.default.contents(atPath: String(next.dropFirst())) { board.submit("", image: image) }
                 else { board.submit(next) }
                 printed = board.items.count

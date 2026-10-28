@@ -153,8 +153,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Whether a request is for the whiteboard, and how: a quiz, an exam question, or their flashcards
     /// ("review my flashcards" is the deck; "make flashcards on…" is the tutor writing them), a mark
-    /// review ("I got a 4 in maths", "my econ test came back") or feedback on a draft ("check my IA
-    /// against the criteria"). Also `--route`.
+    /// review ("I got a 4 in maths", "my econ test came back"), feedback on a draft ("check my IA
+    /// against the criteria"), or Joe explaining and drawing ("draw me a diagram of…"). Also `--route`.
     static func studyMode(_ request: String) -> StudyBoardModel.Mode? {
         func matches(_ pattern: String) -> Bool { request.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil }
         let assessed = #"(math|maths|mathematics|econ|economics|business|bio|biology|chem|chemistry|physics|history|english|chinese|spanish|french|geog|geography|psych|psychology|ess|tok|cs|computer science|politics|test|exam|paper|mock|quiz|assessment|ia|essay|unit test|summative)"#
@@ -176,8 +176,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Not a draft email, message or slides.
         if feedback.contains(where: matches), !matches(#"\b(email|e-mail|message|text|reply|slides?|deck|code)\b"#) { return .feedback }
         if review.contains(where: matches) { return .review }
+        // "Draw me a supply and demand diagram", "explain externalities on the whiteboard": Joe draws while explaining.
+        let draw = #"\b(draw|sketch)\b[^.?!]{0,40}\b(diagram|graph|curves?|chart)\b|\b(explain|teach|show)\b[^.?!]{0,60}\b(on|at) (the|a|my) white ?board\b"#
         let quiz = #"\b(quiz|test) me\b|\blet'?s\b[^.?!]{0,10}\bquiz\b|\b(give|set|make)\b[^.?!]{0,10}\b(quiz|practice questions|exam(-style)? question)|\b(start|do|begin|run)\b[^.?!]{0,12}\b(quiz|study session|revision session|practice session)\b|\bwhite ?board\b|\bflash ?cards?\b"#
         func has(_ pattern: String) -> Bool { request.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil }
+        if has(draw), !has(#"\bscreen\b"#), !has(#"\b(quiz|test) me\b"#) { return .explain }
         guard has(quiz) else { return nil }
         if has(#"\bflash ?cards?\b"#), !has(#"\b(make|create|generate|write)\b[^.?!]{0,20}\bflash ?cards?\b"#), !has(#"\b(quiz|test) me\b"#) { return .cards }
         return has(#"\bexam\b"#) ? .exam : .quiz

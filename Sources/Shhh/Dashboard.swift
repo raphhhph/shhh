@@ -1867,13 +1867,17 @@ private struct ProjectsCard: View {
     var body: some View {
         Card(title: "Projects", symbol: "flag.checkered") {
             if projects.isEmpty {
-                Text("Your EE, IAs, TOK, IO and CAS, each with its IB milestones, supervisor meetings and next step. Start one and Joe puts its next milestone in your Daybook.")
+                Text("Your EE, IAs, TOK, IO, CAS and uni applications, each with its IB milestones, supervisor meetings and next step. Start one and Joe puts its next milestone in your Daybook.")
                     .font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             ForEach(projects) { project in row(project) }
             Menu {
-                ForEach(IBProjects.Kind.allCases.filter { $0 != .ia }) { kind in
+                ForEach(IBProjects.Kind.allCases.filter { $0 != .ia && $0 != .uni }) { kind in
                     Button(kind.title) { start(kind) }
+                }
+                Divider()
+                ForEach(["UCAS", "Common App", "UCAS and Common App"], id: \.self) { system in
+                    Button("Applications: \(system)") { start(.uni, subject: system) }
                 }
                 Divider()
                 ForEach(subjects, id: \.self) { subject in

@@ -42,6 +42,8 @@ enum WeekPlan {
         let known = Daybook.patterns.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
         let questions = clashes(events.filter { $0.start < weekEnd }, known: known)
         let range = "\(short(start)) to \(short(days.last ?? start))"
+        // After a hard week (the last wellbeing check-in): one block at most on weekday evenings, none after 21:00 on school nights.
+        let lighter = Wellbeing.lighter(now)
         var lines: [String] = [
             "---",
             "summary: \"Their study plan for \(range): blocks around classes and events, done by 23:00.\"",
@@ -50,6 +52,9 @@ enum WeekPlan {
             "---",
             "# Week — \(range)",
             "",
+        ]
+        if let lighter { lines += [lighter, ""] }
+        lines += [
             "Study blocks around classes and events, for what's due soonest (tests, IAs and project milestones get more). Tick a block when it's done; one left unticked moves to the next free slot.",
             "",
             "## Needs you",
@@ -71,7 +76,17 @@ enum WeekPlan {
             // or due by then (its date is the student's own).
             let horizon = calendar.date(byAdding: .day, value: 2, to: day) ?? day
             let soft = { (item: CalendarFeed.Item) in IBProjects.yields(item, before: horizon) }
-            for block in Daybook.freeBlocks(on: day, busy: busy) where block.end > now {
+            var evenings = 0
+            for free in Daybook.freeBlocks(on: day, busy: busy) where free.end > now {
+                var block = free
+                let evening = block.label == "after school" || block.label == "evening"
+                if lighter != nil {
+                    if isSchoolNight(day), let cap = calendar.date(bySettingHour: 21, minute: 0, second: 0, of: day), block.end > cap {
+                        block.end = cap
+                        guard block.end.timeIntervalSince(block.start) >= 30 * 60 else { continue }
+                    }
+                    if evening, isWeekday(day), evenings >= 1 { continue }
+                }
                 // At most two blocks a day for one thing, so a test gets spread over the days before it;
                 // a milestone due by tomorrow gets one a day at most, an overdue one on any day (it's already late).
                 let eligible = work.filter { item in
@@ -114,10 +129,21 @@ enum WeekPlan {
                 }
                 lines.append("- [ ] \(Daybook.hhmm(block.start))–\(Daybook.hhmm(block.end)) (\(block.label)): \(label)\(item.title)\(subject) — \(due)")
                 planned += 1
+                if evening { evenings += 1 }
             }
             if planned == 0 { lines.append("Nothing planned.") }
         }
         return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// Monday to Friday.
+    static func isWeekday(_ day: Date) -> Bool {
+        (2...6).contains(Calendar.current.component(.weekday, from: day))
+    }
+
+    /// Sunday to Thursday: school the next morning.
+    static func isSchoolNight(_ day: Date) -> Bool {
+        (1...5).contains(Calendar.current.component(.weekday, from: day))
     }
 
     /// Writes Week.md for the seven days from `first` (today by default).
@@ -237,10 +263,19 @@ enum WeekPlan {
         })
         // The slots left this week, in order.
         var slots: [(day: Date, label: String, start: Date, end: Date)] = []
+        let lighter = text.contains("\nLighter week: ")
+        func isEvening(_ label: String) -> Bool { label == "after school" || label == "evening" }
+        // In a lighter week, the weekdays that already have their one evening block.
+        var eveningDays = Set(lines.indices.compactMap { index -> String? in
+            guard let day = dayOf[index], blockTime(lines[index]) != nil,
+                  lines[index].contains("(after school): ") || lines[index].contains("(evening): ") else { return nil }
+            return day.formatted(.localDay)
+        })
         for day in days where day >= today {
             let busy = events.filter { calendar.isDate($0.start, inSameDayAs: day) }
                 .map { ($0.start, $0.end ?? $0.start.addingTimeInterval(3600)) }
             for block in Daybook.freeBlocks(on: day, busy: busy) where block.start > now {
+                if lighter, isSchoolNight(day), let cap = calendar.date(bySettingHour: 21, minute: 0, second: 0, of: day), block.end > cap { continue }
                 slots.append((day: day, label: block.label, start: block.start, end: block.end))
             }
         }
@@ -271,7 +306,9 @@ enum WeekPlan {
                 .flatMap { IBProjects.isOverdue($0) ? nil : $0.start }
             let was = "\(short(day)) \(time)"
             guard let slot = slots.first(where: { slot in
-                !taken.contains("\(slot.day.formatted(.localDay)) \(Daybook.hhmm(slot.start))") && (due.map { slot.end < $0 } ?? true)
+                let key = slot.day.formatted(.localDay)
+                if lighter, isEvening(slot.label), isWeekday(slot.day), eveningDays.contains(key) { return false }
+                return !taken.contains("\(key) \(Daybook.hhmm(slot.start))") && (due.map { slot.end < $0 } ?? true)
             }) else {
                 // Still open in a block from today on: say so instead of asking. Matched on the title
                 // alone (an overdue milestone's due date is made up, so dates can't be compared).
@@ -302,6 +339,7 @@ enum WeekPlan {
                 continue
             }
             taken.insert("\(slot.day.formatted(.localDay)) \(Daybook.hhmm(slot.start))")
+            if isEvening(slot.label) { eveningDays.insert(slot.day.formatted(.localDay)) }
             let to = "\(short(slot.day)) \(Daybook.hhmm(slot.start))"
             lines[index] = "- ~~\(body)~~ moved to \(to)"
             additions.append((heading: slot.day.formatted(.localDay),

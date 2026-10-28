@@ -30,6 +30,8 @@ enum IBProjects {
         case tokExhibition = "tok-exhibition"
         case io
         case cas
+        /// University applications (UCAS, Common App or both): not an IB component, but tracked the same way.
+        case uni
 
         var id: String { rawValue }
 
@@ -41,6 +43,7 @@ enum IBProjects {
             case .tokExhibition: "TOK Exhibition"
             case .io: "Individual Oral"
             case .cas: "CAS"
+            case .uni: "Applications"
             }
         }
 
@@ -53,6 +56,7 @@ enum IBProjects {
             case .tokExhibition: "TOK exhibition"
             case .io: "IO"
             case .cas: "CAS"
+            case .uni: "Applications"
             }
         }
 
@@ -114,7 +118,52 @@ enum IBProjects {
                 ("Reflections up to date", 30),
                 ("Final CAS interview and portfolio", 0),
             ]
+            case .uni: Kind.uniSteps(ucas: true, commonApp: true)
             }
+        }
+
+        /// The steps for `subject`: an application's system ("UCAS", "Common App", or both), else `milestones`.
+        func steps(subject: String) -> [(title: String, daysBefore: Int)] {
+            guard self == .uni else { return milestones }
+            let systems = Kind.uniSystems(subject)
+            return Kind.uniSteps(ucas: systems.ucas, commonApp: systems.commonApp)
+        }
+
+        /// Which systems an application's subject names; neither named means both.
+        static func uniSystems(_ subject: String) -> (ucas: Bool, commonApp: Bool) {
+            let lower = subject.lowercased()
+            let ucas = lower.contains("ucas"), common = lower.contains("common")
+            return ucas || common ? (ucas, common) : (true, true)
+        }
+
+        /// UCAS steps counted back from its main deadline (29 Jan: Oxbridge and medicine 15 Oct is 106
+        /// days before); Common App's from its Regular deadline (1 Jan: Early 1 Nov is 61 days before).
+        /// With both, the final date is UCAS's and Common App's sit 28 days earlier (1 Jan).
+        static func uniSteps(ucas: Bool, commonApp: Bool) -> [(title: String, daysBefore: Int)] {
+            let ucasSteps: [(title: String, daysBefore: Int)] = [
+                ("Shortlist UCAS courses and universities", 240),
+                ("UCAS personal statement first draft", 150),
+                ("Ask for the UCAS teacher reference", 140),
+                ("UCAS personal statement final", 115),
+                ("UCAS Oxbridge and medicine deadline (15 Oct, only if applying)", 106),
+                ("UCAS reference in and application checked by the school", 21),
+                ("UCAS main deadline (29 Jan)", 0),
+            ]
+            let commonSteps: [(title: String, daysBefore: Int)] = [
+                ("Common App college list and account", 180),
+                ("Common App essay first draft", 120),
+                ("Ask two teachers and the counsellor for Common App recommendations", 100),
+                ("Common App essay final", 70),
+                ("Common App Early deadline (1 Nov, ED/EA)", 61),
+                ("Common App supplemental essays done", 21),
+                ("Common App Regular deadline (1 Jan)", 0),
+            ]
+            let shift = ucas ? 28 : 0
+            var steps: [(title: String, daysBefore: Int)] = ucas ? ucasSteps : []
+            if commonApp {
+                steps += commonSteps.map { (title: $0.title, daysBefore: $0.daysBefore + shift) }
+            }
+            return steps.sorted { $0.daysBefore > $1.daysBefore }
         }
 
         /// What a ManageBac deadline for it is called.
@@ -126,6 +175,7 @@ enum IBProjects {
             case .tokExhibition: #"exhibition"#
             case .io: #"\b(io|individual oral)\b"#
             case .cas: nil
+            case .uni: #"\b(ucas|common app)\b"#
             }
         }
 
@@ -137,6 +187,7 @@ enum IBProjects {
                 (.tokExhibition, #"exhibition"#), (.tokEssay, #"tok.*essay|essay.*tok|theory of knowledge"#),
                 (.ee, #"\bee\b|extended essay"#), (.io, #"\bio\b|individual oral"#),
                 (.ia, #"\bia\b|internal assessment"#), (.cas, #"\bcas\b"#),
+                (.uni, #"\buni\b|\buniversit(y|ies)\b|\bucas\b|common app|\b(college|university|uni)\s+app(lication)?s?\b|\bmy applications?\b|^applications?$"#),
             ]
             guard let match = found.first(where: { words.range(of: $0.1, options: .regularExpression) != nil }) else { return nil }
             self = match.0
@@ -373,17 +424,25 @@ enum IBProjects {
     static func template(_ kind: Kind, name: String, subject: String, finalDate: Date?, supervisor: String, now: Date = Date()) -> String {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
-        let steps = kind.milestones
+        let steps = kind.steps(subject: subject)
         let span = steps.map { $0.daysBefore }.max() ?? 0
         let known = finalDate ?? matchingDeadline(kind, subject: subject, now: now)
-        let finalDay = calendar.startOfDay(for: known ?? calendar.date(byAdding: .day, value: span, to: today) ?? today)
+        let guess = kind == .uni ? uniDeadline(subject: subject, now: now) : calendar.date(byAdding: .day, value: span, to: today)
+        let finalDay = calendar.startOfDay(for: known ?? guess ?? today)
         let left = max(0, daysLeft(finalDay, today))
-        let scale = span > left && span > 0 ? Double(left) / Double(span) : 1
-        let milestones = steps.map { step -> String in
+        // Applications keep their real dates (a deadline doesn't squeeze): a step already past is
+        // due today, and a deadline already past is left out.
+        let scale = kind != .uni && span > left && span > 0 ? Double(left) / Double(span) : 1
+        let milestones = steps.compactMap { step -> String? in
             let back = Int((Double(step.daysBefore) * scale).rounded())
-            let date = calendar.date(byAdding: .day, value: -back, to: finalDay) ?? finalDay
+            var date = calendar.date(byAdding: .day, value: -back, to: finalDay) ?? finalDay
+            if kind == .uni, date < today {
+                guard !step.title.lowercased().contains("deadline") else { return nil }
+                date = today
+            }
             return "- [ ] \(date.formatted(.localDay)) · \(step.title)"
         }
+        let log: [String] = kind == .cas ? [""] + CASLog.logHeader : []
         let finalLine = "final: \(finalDay.formatted(.localDay))" + (known == nil ? " # a guess: change it to the real date" : "")
         return ([
             "---",
@@ -404,7 +463,21 @@ enum IBProjects {
             "",
             "## Next action",
             "\(steps.first?.title ?? "Plan the first step").",
-        ]).joined(separator: "\n") + "\n"
+        ] + log).joined(separator: "\n") + "\n"
+    }
+
+    /// The next main deadline for an application: UCAS's 29 Jan (Common App's 1 Jan when it's the
+    /// only one), a year later for a first-year student (DP1, grade 11), who applies next autumn.
+    static func uniDeadline(subject: String, now: Date = Date()) -> Date? {
+        let calendar = Calendar.current
+        let systems = Kind.uniSystems(subject)
+        let day = DateComponents(month: 1, day: systems.ucas ? 29 : 1)
+        guard var date = calendar.nextDate(after: now, matching: day, matchingPolicy: .nextTime) else { return nil }
+        let programme = Profile.programme.lowercased()
+        if programme.range(of: #"\bdp ?1\b|year 1\b|first year|grade 11|year 12"#, options: .regularExpression) != nil {
+            date = calendar.date(byAdding: .year, value: 1, to: date) ?? date
+        }
+        return date
     }
 
     /// The date of a ManageBac deadline that looks like this project's final one.
@@ -504,15 +577,18 @@ enum IBProjects {
         return """
 
 
-            IB projects (EE, IAs, TOK essay and exhibition, IO, CAS): one note each in \(Daybook.relative(folder))/ \
+            IB projects (EE, IAs, TOK essay and exhibition, IO, CAS, and uni applications): one note each in \(Daybook.relative(folder))/ \
             (now: \(names.isEmpty ? "none yet" : names.joined(separator: ", "))). Each has frontmatter (kind, subject, \
             supervisor, final, doc, words), ## Milestones as "- [ ] yyyy-mm-dd · step", ## Meetings and ## Next action. \
             Their next milestone shows up in the Daybook by itself.
-            - "Start my EE / Maths IA / TOK essay…": run "\(exe)" --project-new <ee|ia|tok-essay|tok-exhibition|io|cas> \
-            "<subject>" [yyyy-mm-dd final date] ["<supervisor>"]. It makes the note from the IB template with dated \
+            - "Start my EE / Maths IA / TOK essay / uni applications…": run "\(exe)" --project-new \
+            <ee|ia|tok-essay|tok-exhibition|io|cas|uni> "<subject>" [yyyy-mm-dd final date] ["<supervisor>"] (for uni the \
+            subject is "UCAS", "Common App" or "UCAS and Common App"). It makes the note from the IB template with dated \
             milestones and prints them. Say the first two in one line, and ask for the final date if it says it guessed.
             - "I met Ms X about my EE…": add "- yyyy-mm-dd · who · what was agreed" under ## Meetings, and rewrite \
             ## Next action as one line. "Done with my EE outline": tick that milestone ([x]) and the matching Daybook task.
+            - CAS: "log CAS: …" and "how's my CAS" are done by Joe himself (a row under ## Log in CAS.md: date, \
+            experience, strand, hours, learning outcomes LO1–LO7, evidence). To fix a row, edit the table.
             - "How's my EE going", "how many words": run "\(exe)" --projects and answer from it (milestones done, the next \
             one and days left, words against the limit). For a Google Doc in doc:, read it and count yourself.
             """

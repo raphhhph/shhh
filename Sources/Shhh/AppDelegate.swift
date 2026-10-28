@@ -1619,9 +1619,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     toast.show("Got it: \(kind.label.lowercased())", symbol: "note.text", tint: .orange)
                     return
                 }
-                // "Start my Econ IA", "plan my week", "done with Paper 2", "how's my EE going": done
-                // here, with a line on the card. A follow-up, or what Joe can't settle alone, goes to Claude.
-                if !followingUp, let intent = StudyIntent.parse(text), let reply = intent.run() {
+                // "Start my Econ IA", "plan my week", "done with Paper 2", "how's my EE going", "log CAS: …":
+                // done here, with a line on the card. A follow-up (except an answer to the wellbeing
+                // check-in), or what Joe can't settle alone, goes to Claude.
+                if let intent = StudyIntent.parse(text), !followingUp || intent.isAnswer, let reply = intent.run() {
                     showLocalAnswer(reply, question: text, in: task)
                     asked = true
                     return

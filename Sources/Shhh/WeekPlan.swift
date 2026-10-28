@@ -32,7 +32,7 @@ enum WeekPlan {
         // Every open project milestone due this week or soon after (an overdue one as due today).
         let milestonesEnd = calendar.date(byAdding: .day, value: 14, to: start) ?? start
         let milestones = IBProjects.openMilestoneItems(now, through: milestonesEnd)
-        let work = (deadlines + milestones).filter { $0.start > now || IBProjects.isOverdue($0) }.sorted { a, b in
+        let work = (deadlines.filter(Assessment.needsStudy) + milestones).filter { $0.start > now || IBProjects.isOverdue($0) }.sorted { a, b in
             let dayA = calendar.startOfDay(for: a.start), dayB = calendar.startOfDay(for: b.start)
             if dayA != dayB { return dayA < dayB }
             return Daybook.isWeighty(a) && !Daybook.isWeighty(b)
@@ -102,14 +102,16 @@ enum WeekPlan {
                 let subject = item.subject.map { $0 == "project" ? "" : " · \($0)" } ?? ""
                 // "Get ahead" only before the due day; on the day it's just due today.
                 let dueDay = calendar.isDate(item.start, inSameDayAs: day)
-                let label = ahead && !dueDay ? "get ahead on " : ""
+                // An exam is revised for, never "got ahead on".
+                let exam = Assessment.isInClass(item)
+                let label = exam ? Assessment.revise : ahead && !dueDay ? "get ahead on " : ""
                 let due: String
                 if IBProjects.isOverdue(item) {
                     due = "overdue"
                 } else if dueDay {
-                    due = "due today" + (item.allDay ? "" : " " + Daybook.hhmm(item.start))
+                    due = (exam ? "exam today" : "due today") + (item.allDay ? "" : " " + Daybook.hhmm(item.start))
                 } else {
-                    due = "due " + short(item.start)
+                    due = (exam ? "exam " : "due ") + short(item.start)
                 }
                 lines.append("- [ ] \(Daybook.hhmm(block.start))–\(Daybook.hhmm(block.end)) (\(block.label)): \(label)\(item.title)\(subject) — \(due)")
                 planned += 1
@@ -186,12 +188,12 @@ enum WeekPlan {
         return title(String(plain[colon.upperBound...]))
     }
 
-    /// A task title without what a block line adds around it: "get ahead on ", " · moved from …",
+    /// A task title without what a block line adds around it: "get ahead on ", "revise for ", " · moved from …",
     /// " — due …" and the " · Chinese B" subject. Used on both sides of a match.
     static func title(_ text: String) -> String {
         var rest = text.trimmingCharacters(in: .whitespaces)
         let ahead = "get ahead on "
-        if rest.hasPrefix(ahead) { rest = String(rest.dropFirst(ahead.count)) }
+        for prefix in [ahead, Assessment.revise] where rest.hasPrefix(prefix) { rest = String(rest.dropFirst(prefix.count)) }
         rest = rest.replacingOccurrences(of: #" · moved from .*$"#, with: "", options: .regularExpression)
         let first = rest.components(separatedBy: " — ").first ?? rest
         return (first.components(separatedBy: " · ").first ?? first).trimmingCharacters(in: .whitespaces)

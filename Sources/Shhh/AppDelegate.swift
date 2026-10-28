@@ -130,10 +130,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             studyBoard.show()
             return true
         }
-        // The subject: said now, or in the conversation on the card ("let's start a quiz on econ",
-        // then "open the whiteboard"), or the one studied last.
-        let context = [request, focused?.question ?? ""] + tasks.suffix(3).map(\.question)
-        let subject = context.lazy.compactMap { StudyBoard.subject(in: $0) }.first
+        // The subject: the one said now (even one not in their profile, "quiz me on chemistry"); only
+        // when none is said, the one in the conversation on the card ("let's start a quiz on econ",
+        // then "open the whiteboard"), then the one studied last.
+        let context = [focused?.question ?? ""] + tasks.suffix(3).reversed().map(\.question)
+        let subject = StudyBoard.subject(in: request)
+            ?? StudyBuddy.pack(for: request)
+            ?? context.lazy.compactMap { StudyBoard.subject(in: $0) }.first
             ?? UserDefaults.standard.string(forKey: "lastStudySubject")
             ?? Profile.subjects.components(separatedBy: ",").first?.trimmingCharacters(in: .whitespaces) ?? "Economics"
         // "Quiz me on that" on an answer card: on what the card was about.

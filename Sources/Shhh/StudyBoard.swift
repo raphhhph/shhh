@@ -59,39 +59,58 @@ final class StudyBoard: NSObject, NSWindowDelegate {
         model.end()
     }
 
-    /// "Quiz me on econ externalities" → ("Economics HL", the request), from their subjects.
+    /// "Quiz me on econ externalities" → "Economics HL": which of their subjects a request names.
+    /// The subject named first in the request wins ("review chinese, then econ" is Chinese B), and
+    /// every alias counts only as a whole word or the start of one, so "lesson" isn't ESS and
+    /// "business" isn't "bio" or "ess".
     static func subject(in request: String) -> String? {
         let subjects = Profile.subjects.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } + ["TOK"]
         let lower = request.lowercased()
         let keys: [String: [String]] = [
-            "Mathematics AI": ["math", "maths", "calculus", "statistic", "probability"],
-            "Economics": ["econ"],
-            "Business Management": ["business", "bm "],
-            "Environmental Systems and Societies": ["ess", "environmental"],
-            "English A Language and Literature": ["english", "lang and lit", "lang & lit"],
-            "Chinese B": ["chinese", "mandarin", "中文"],
-            "Theory of Knowledge": ["tok", "theory of knowledge"],
-            "Mathematics AA": ["math", "maths", "calculus", "statistic", "probability", "integra", "derivative", "vector"],
+            "Mathematics AI": ["math", "maths", "math ai", "maths ai", "ai hl", "ai sl", "calculus", "statistic", "probability", "integra", "differentia"],
+            "Economics": ["econ", "micro", "macro", "elasticit", "externalit", "market failure", "inflation", "gdp"],
+            "Business Management": ["business", "bm", "busman", "marketing"],
+            "Environmental Systems and Societies": ["ess", "environmental", "ecosystem"],
+            "English A Language and Literature": ["english", "eng", "lang and lit", "lang & lit", "language and literature"],
+            "Chinese B": ["chinese", "mandarin", "中文", "汉语", "華語"],
+            "Theory of Knowledge": ["tok", "theory of knowledge", "knowledge question"],
+            "Mathematics AA": ["math", "maths", "math aa", "maths aa", "calculus", "integra", "derivative", "vector"],
             "Physics": ["physic", "kinematic", "momentum", "circuit"],
             "Chemistry": ["chem", "organic", "titration", "enthalpy"],
-            "Biology": ["bio", "cell", "enzyme", "genetic"],
+            "Biology": ["bio", "enzyme", "genetic", "photosynthesis"],
             "History": ["histor", "cold war", "authoritarian"],
             "Psychology": ["psych"],
-            "English B": ["english"],
+            "English B": ["english", "eng"],
             "Spanish": ["spanish", "español", "espanol"],
-            "Geography": ["geog"],
-            "Computer Science": ["computer", "coding", "programming", "algorithm", "sql"],
-            "Global Politics": ["politic", "sovereignty", "human rights"],
+            "Geography": ["geog", "geo"],
+            "Computer Science": ["computer", "comp sci", "cs", "coding", "programming", "algorithm", "sql"],
+            "Global Politics": ["politic", "global pol", "gp", "sovereignty", "human rights"],
         ]
-        // Their own name for the subject ("quiz me on Geography") wins, with or without a map.
-        if let named = subjects.first(where: {
-            lower.range(of: #"\b"# + NSRegularExpression.escapedPattern(for: $0.lowercased()) + #"\b"#, options: .regularExpression) != nil
-        }) { return named }
-        for subject in subjects {
-            guard let pack = StudyBuddy.pack(for: subject), let words = keys[pack] else { continue }
-            if words.contains(where: { lower.contains($0) }) { return subject }
+        /// Where an alias first appears as a word (short ones, like "cs" or "bm") or the start of a
+        /// word (longer ones, like "econ" in "economics"); anywhere for Chinese characters.
+        func position(of alias: String) -> Int? {
+            let pattern: String
+            if alias.unicodeScalars.contains(where: { $0.value > 0x2E80 }) {
+                pattern = NSRegularExpression.escapedPattern(for: alias)
+            } else {
+                pattern = #"(?<![\p{L}\p{N}])"# + NSRegularExpression.escapedPattern(for: alias) + (alias.count <= 3 ? #"(?![\p{L}\p{N}])"# : "")
+            }
+            return lower.range(of: pattern, options: .regularExpression).map { lower.distance(from: lower.startIndex, to: $0.lowerBound) }
         }
-        return nil
+        var best: (subject: String, at: Int, length: Int)?
+        for subject in subjects {
+            let name = subject.lowercased()
+            // "Economics HL" is also "economics"; "Chinese B SL" also "chinese b".
+            let base = name.replacingOccurrences(of: #"\s+(hl|sl)$"#, with: "", options: .regularExpression)
+            let pack = StudyBuddy.pack(for: subject)
+            let aliases = [name, base] + (pack.map { [$0.lowercased()] + (keys[$0] ?? []) } ?? [])
+            for alias in Set(aliases) where !alias.isEmpty {
+                guard let at = position(of: alias) else { continue }
+                // The earliest mention wins; at the same place, the longer name ("math aa" over "math").
+                if best == nil || at < best!.at || (at == best!.at && alias.count > best!.length) { best = (subject, at, alias.count) }
+            }
+        }
+        return best?.subject
     }
 }
 

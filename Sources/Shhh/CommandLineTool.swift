@@ -293,10 +293,13 @@ enum CommandLineTool {
             for request in args.dropFirst() {
                 var route = MainActor.assumeIsolated { Assistant.needsStrongModel(request) } ? "Claude (Opus)" : "Claude (Haiku)"
                 if AlarmRequest.parse(request) != nil { route = "alarm" }
-                else if let mode = MainActor.assumeIsolated({ AppDelegate.studyMode(request) }) { route = "whiteboard (\(mode.rawValue))" }
+                else if let mode = MainActor.assumeIsolated({ AppDelegate.studyMode(request) }) {
+                    let subject = MainActor.assumeIsolated { StudyBoard.subject(in: request) } ?? StudyBuddy.pack(for: request) ?? "last subject"
+                    route = "whiteboard (\(mode.rawValue), \(subject))"
+                }
                 else if Spotify.command(in: request) != nil { route = "Spotify" }
                 else if PromptPolish.request(in: request) != nil { route = "prompt rewrite (dictation)" }
-                print("\(route.padding(toLength: 26, withPad: " ", startingAt: 0)) \(request)")
+                print("\(route.padding(toLength: 42, withPad: " ", startingAt: 0)) \(request)")
             }
             exit(0)
         case ("--board-preview", 2...):

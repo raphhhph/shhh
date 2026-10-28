@@ -218,14 +218,14 @@ private struct RestingView: View {
                 Color.clear.frame(width: notchWidth)
                 if let chip = model.chip {
                     // Past the camera, the title then the time: the title gives way, the time stays.
-                    HStack(spacing: 4) {
-                        Image(systemName: "book.closed.fill").font(.system(size: 8.5))
-                        Text(chip.title).font(.system(size: 10.5, weight: .medium)).lineLimit(1)
-                            .foregroundStyle(.white.opacity(0.6))
-                        Text(chip.time).font(.system(size: 10.5, weight: .semibold).monospacedDigit())
+                    // Quiet: no icon, muted text, the time a touch brighter (the calm style).
+                    HStack(spacing: 5) {
+                        Text(chip.title).font(.system(size: 10.5)).lineLimit(1)
+                            .foregroundStyle(.white.opacity(0.5))
+                        Text(chip.time).font(.system(size: 10.5, weight: .medium).monospacedDigit())
                             .lineLimit(1).fixedSize()
+                            .foregroundStyle(.white.opacity(0.8))
                     }
-                    .foregroundStyle(.white.opacity(0.9))
                     .padding(.leading, 6).padding(.trailing, 14)
                     .frame(width: right, alignment: .leading)
                 }

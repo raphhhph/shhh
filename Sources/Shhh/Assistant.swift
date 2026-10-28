@@ -110,7 +110,8 @@ final class Assistant {
         finding an assignment or grade on ManageBac, reading a school portal, checking a site behind a \
         login. Open the page with navigate_page (or new_page), read it with take_snapshot, never \
         screenshots unless the layout matters, and act on elements by their uid. If opening a page \
-        times out, take_snapshot anyway: it's usually loaded enough. If a page asks them to \
+        times out, take_snapshot anyway: it's usually loaded enough. If the page is \
+        already open in their browser, or Joe's browser fails, use --tab read/fill/click there instead. If a page asks them to \
         log in, stop and tell them to run "\(Bundle.main.executablePath ?? "Joe") --browser signin" once \
         (or run it for them): it opens that browser to sign in, then they quit it. Use their Chrome (the \
         Claude in Chrome tools) only when they want to see it happen or the task is in a tab they have open.
@@ -768,6 +769,10 @@ final class Session {
                 default: ""
                 }
                 if name?.hasPrefix("mcp__\(JoeBrowser.server)__") == true { JoeBrowser.remember(text) }
+                // `Joe --tab read`: its element lines (the page's own text is quoted with "| ").
+                if name == "Bash", text.contains("\nuid=t") {
+                    JoeBrowser.remember(text.split(separator: "\n").filter { $0.hasPrefix("uid=t") }.joined(separator: "\n"))
+                }
                 guard let tool = creating.removeValue(forKey: id) else { continue }
                 CreatedItems.shared.record(result: text, tool: tool)
             default:
@@ -1151,7 +1156,14 @@ final class Session {
         opens pages in their browser in the background (they keep working in the app in front), --tab find "<words>" \
         and --tab list read the open tabs' titles and addresses, --tab show "<words>" makes that tab the current one. \
         To "open my ManageBac", "pull up the Econ doc", or open several sites, use --tab open with the address (find \
-        it with --tab find, WebSearch or their notes), never clicks or the Chrome tools. Say it's open in one line.\(JoeBrowser.isReady ? Assistant.joeBrowserNotes : "")
+        it with --tab find, WebSearch or their notes), never clicks or the Chrome tools. Say it's open in one line.
+        - Doing things in a page open in their browser (Vivaldi, Chrome, Brave, Edge, Arc), out of sight and \
+        signed in as them: --tab read "<words>" (or "front" for the tab they're looking at) gives the page's text and \
+        its fields, buttons and links as uid lines; --tab fill "<words>" <uid> "<text>" types into a field or editor \
+        (use \\n for new paragraphs), and --tab click "<words>" <uid> clicks a button, link or checkbox. Read again after \
+        each click. This is the first choice for anything on a site they're signed in to, such as a ManageBac CAS \
+        reflection: open it with --tab open if it isn't open, read, fill, tick, then click the save button (Joe asks \
+        them before it submits). Don't give up and offer a note instead: if one route fails, use this one.\(JoeBrowser.isReady ? Assistant.joeBrowserNotes : "")
         When a connected account and the browser can both do something, use the account: it's much faster.\(ScreenControl.isEnabled ? Assistant.controlRules : "")\(music)\(alarms)\(messages)\(slides)\(Assistant.schoolWork)\(StudyBuddy.instructions)\(files)\(memory)\(habits)\(Assistant.personality)
 
         \(permissions) If they decline, don't retry it. Write emails as Gmail drafts unless they clearly \
@@ -1295,6 +1307,24 @@ struct ToolPolicy {
         return Action(key: "chrome:\(level)", verdict: .allow, title: title)
     }
 
+    /// `Joe --tab fill|click "<tab>" <uid>`: typing is free in Hands-off; a click is judged by the
+    /// element `--tab read` named, like a click in Joe's browser.
+    private func tabAction(_ words: [String]) -> Action {
+        let typing = words[2] == "fill"
+        let label = JoeBrowser.element(words.count > 4 ? words[4] : nil).trimmingCharacters(in: .whitespaces)
+        if label.range(of: Self.moneyPattern, options: [.regularExpression, .caseInsensitive]) != nil {
+            return Action(key: "tab:money", verdict: .block, title: "Spend money in the browser")
+        }
+        let title = (typing ? "Type in your browser" : "Click in your browser") + (label.isEmpty ? "" : ": \(label)")
+        guard autonomy == .handsOff else { return Action(key: "tab:\(words[2])", verdict: .ask, title: title) }
+        let pattern = typing ? Self.submitPattern : Self.outwardPattern
+        if (!typing && label.isEmpty) || label.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+            || (!typing && label.range(of: #"\b(add|save|post|create|done|finish|ok)\b"#, options: [.regularExpression, .caseInsensitive]) != nil && label.hasPrefix("button")) {
+            return Action(key: "tab:outward:\(label)", verdict: .ask, title: "\(title) (this may send or submit something)")
+        }
+        return Action(key: "tab:\(words[2])", verdict: .allow, title: title)
+    }
+
     /// Joe's hidden browser: reading, opening pages and waiting are free; a click or keystroke is
     /// judged by the element it hits, which the latest snapshot named ("button Submit assignment").
     private func joeBrowser(_ tool: String, _ input: [String: Any]) -> Action {
@@ -1418,6 +1448,9 @@ struct ToolPolicy {
             let words = Self.shellWords(input["command"] as? String ?? "") ?? []
             return ["draft", "open"].contains(words[2]) ? Action(key: "message:draft", verdict: .allow, title: "Open a chat or draft a message")
                 : Action(key: "message:send:\(input["command"] as? String ?? "")", verdict: .ask, title: "Send a message")
+        case "Bash" where Self.shellWords(input["command"] as? String ?? "").map({
+            $0.count >= 4 && $0[0] == Bundle.main.executablePath && $0[1] == "--tab" && ["fill", "click"].contains($0[2]) }) == true:
+            return tabAction(Self.shellWords(input["command"] as? String ?? "") ?? [])
         case "Bash" where Self.shellWords(input["command"] as? String ?? "").map({
             $0.count >= 2 && $0[0] == Bundle.main.executablePath && ["--pdf-find", "--pdf-text", "--prereading", "--tab", "--browser", "--workspace", "--workspace-reset", "--spotify", "--alarm", "--slides", "--recap", "--plan", "--math-pdf", "--whatsapp", "--calendar-link"].contains($0[1]) }) == true:
             return Action(key: "shhh-tools", verdict: .allow, title: "Use Joe's tools")

@@ -205,7 +205,7 @@ final class StudyBoardModel: ObservableObject {
 
     func start(subject: String, request: String?, mode: Mode) {
         end()
-        UserDefaults.standard.set(subject, forKey: "lastStudySubject")
+        if !subject.isEmpty { UserDefaults.standard.set(subject, forKey: "lastStudySubject") }
         self.subject = subject
         self.mode = mode
         items = []
@@ -295,6 +295,8 @@ final class StudyBoardModel: ObservableObject {
     /// Their answer (typed or said), or "hint", "skip", "end".
     func submit(_ text: String, spoken: Bool = false, image: Data? = nil, onYourDiagram: Bool = false) {
         if mode == .cards { said = text; flipped = true; return }
+        // A plain whiteboard takes the subject they ask about ("explain elasticity" makes it Economics).
+        if subject.isEmpty, let named = StudyBoard.subject(in: text) { subject = named; UserDefaults.standard.set(named, forKey: "lastStudySubject") }
         var text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // Said while Joe is still marking: kept in the box to send, not lost.
         if isBusy, spoken, !text.isEmpty { draft = draft.isEmpty ? text : draft + " " + text; return }
@@ -374,6 +376,13 @@ final class StudyBoardModel: ObservableObject {
         var topic = items.reversed().compactMap { if case let .question(_, _, topic, _, _) = $0 { return topic } else { return nil } }.first ?? ""
         var question = items.reversed().compactMap { if case let .question(_, _, _, _, text) = $0 { return text } else { return nil } }.first ?? ""
         var lost: [Mistakes.Entry] = []
+        // On a plain whiteboard, the subject of what was asked ("2.8 Externalities" is Economics).
+        if subject.isEmpty, let named = parsed.lazy.compactMap({ item -> String? in
+            if case let .question(_, _, topic, _, text) = item { return StudyBoard.subject(in: topic + " " + text) }
+            if case let .lesson(title, _) = item { return StudyBoard.subject(in: title) }
+            return nil
+        }).first { subject = named }
+        let logged = subject.isEmpty ? "General" : subject
         for item in parsed {
             if case let .question(_, _, next, _, text) = item { topic = next; question = text }
             if case let .feedback(score, total, text, model) = item, total > 0, score < total {
@@ -385,11 +394,11 @@ final class StudyBoardModel: ObservableObject {
                 var note = missing.replacingOccurrences(of: #"^[-•*✗\s]+"#, with: "", options: .regularExpression)
                 // Cut at a word, not mid-word ("the price producers rec").
                 if note.count > 90 { note = String(note.prefix(90)).replacingOccurrences(of: #"\s+\S*$"#, with: "", options: .regularExpression) + "…" }
-                lines.append("- \(date) · \(subject) · \(topic) · \(score)/\(total) · \(note)")
+                lines.append("- \(date) · \(logged) · \(topic) · \(score)/\(total) · \(note)")
             }
         }
-        Mistakes.record(lost, subject: subject)
-        for case let .cards(cards) in parsed { Flashcards.save(cards, subject: subject) }
+        Mistakes.record(lost, subject: logged)
+        for case let .cards(cards) in parsed { Flashcards.save(cards, subject: logged) }
         guard !lines.isEmpty else { return }
         let url = StudyBuddy.logURL
         var log = (try? String(contentsOf: url, encoding: .utf8)) ?? "# Quiz log\n"
@@ -546,7 +555,7 @@ final class StudyBoardModel: ObservableObject {
         let quizRules = "Quiz mode: five questions, easier to harder, IB command terms and marks in brackets, a mix of definitions, application to a short context, calculations where the subject has them, and one exam-style question. Cover the topic they ask for; otherwise the topics due for review below first (they're about to forget them), then their weakest topics from the results. After the fifth, the summary."
         return """
             You are Joe, an IB Diploma tutor running a practice session on a whiteboard for \(Profile.name.isEmpty ? "a student" : Profile.name). \
-            \(Profile.description) Subject: \(subject).
+            \(Profile.description) Subject: \(subject.isEmpty ? "not chosen yet: take it from what they ask (their subjects: \(Profile.subjects))" : subject).
 
             # How to write (the whiteboard reads these tags)
             - A question: <question n="1" marks="4" topic="2.8 Externalities" source="IB-style">the question in Markdown</question>. \
@@ -902,7 +911,7 @@ private struct StudyBoardView: View {
     private var header: some View {
         HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(model.subject.isEmpty ? "Study" : model.subject).font(.system(size: 16, weight: .semibold))
+                Text(model.subject.isEmpty ? "Study whiteboard" : model.subject).font(.system(size: 16, weight: .semibold))
                 Text(model.mode == .cards ? "Flashcards"
                      : model.mode == .exam ? "Exam question" : model.mode == .explain ? "Ask anything: Joe draws it"
                      : "Quiz" + (model.questionCount > 0 ? " · question \(model.questionCount)" : "")).font(.system(size: 11.5)).foregroundStyle(.secondary)

@@ -95,10 +95,6 @@ enum Notch {
 @MainActor
 final class RestingNotch {
     static var ear: CGFloat { RecordingPanel.ear }
-    /// The right ear while it carries a study block: room for "IA draft · 89m left" clear of the
-    /// band's rounded edge. The window is this wide on the right; the black shape only grows into it
-    /// while there's a chip.
-    static let chipEar: CGFloat = 150
     private let model = RestingModel()
     private var panel: NSPanel?
     private var hideWork: DispatchWorkItem?
@@ -112,7 +108,7 @@ final class RestingNotch {
         // A new window each time: a reused one can stay hidden behind a full-screen app.
         panel?.orderOut(nil)
         let panel = NotchPanel(contentRect: NSRect(x: notch.minX - Self.ear, y: notch.minY,
-                                                width: notch.width + Self.ear + Self.chipEar, height: notch.height),
+                                                width: notch.width + 2 * Self.ear, height: notch.height),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         panel.level = .statusBar
         panel.isOpaque = false
@@ -132,33 +128,6 @@ final class RestingNotch {
 
     func hide() {
         panel?.orderOut(nil)
-    }
-
-    /// The study plan at a glance in the right ear, read every 30 s: a running focus block or a
-    /// block on now ("IA draft · 89m left"), or one starting within the hour ("IA draft · at 16:10");
-    /// and a red dot on the ✦ when something is overdue.
-    private var studyRead = Date.distantPast
-
-    func updateStudy(_ now: Date = Date()) {
-        // A running focus block counts down in the ear every second instead.
-        let focus = FocusSession.shared
-        if focus.isRunning {
-            let chip = RestingModel.Chip(title: focus.title,
-                                         time: focus.isPaused ? "paused" : "\(max(1, Int((focus.remaining / 60).rounded(.up))))m left")
-            if model.chip != chip { model.chip = chip }
-            studyRead = .distantPast
-            return
-        }
-        guard now.timeIntervalSince(studyRead) > 30 else { return }
-        studyRead = now
-        let next = StudyToday.next(now).flatMap { $0.start.timeIntervalSince(now) < 3600 ? $0 : nil }
-        let chip = next.map { block in
-            RestingModel.Chip(title: block.exam ? "Exam · \(block.title)" : block.title, time: block.start <= now
-                ? "\(max(1, Int(block.end.timeIntervalSince(now) / 60)))m left" : "at \(Daybook.hhmm(block.start))")
-        }
-        if model.chip != chip { model.chip = chip }
-        let late = !StudyToday.overdue().isEmpty
-        if model.late != late { model.late = late }
     }
 
     /// Where it belongs: macOS has been seen moving it down the screen (while the assistant
@@ -182,16 +151,6 @@ final class RestingNotch {
 
 final class RestingModel: ObservableObject {
     @Published var open = false
-    struct Chip: Equatable {
-        /// The block's title, cut short before the time is.
-        var title: String
-        /// "89m left", "at 16:10", "paused".
-        var time: String
-    }
-    /// The study block on now or starting within the hour.
-    @Published var chip: Chip?
-    /// Something in Today's five is overdue.
-    @Published var late = false
 }
 
 private struct RestingView: View {
@@ -199,42 +158,21 @@ private struct RestingView: View {
     let notchWidth: CGFloat
 
     var body: some View {
-        let ear = RestingNotch.ear
-        let right = model.chip == nil ? ear : RestingNotch.chipEar
-        ZStack(alignment: .leading) {
+        // Just Joe's ✦: the study block, what's overdue and the rest are in the hover overview
+        // (Raph, 28 Oct 2026: anything more in the band clashed with the listening band).
+        ZStack {
             NotchShape(top: NotchShape.shoulder, bottom: model.open ? 13 : 10)
                 .fill(Color.black)
-                .frame(width: model.open ? ear + notchWidth + right : notchWidth)
-                .padding(.leading, model.open ? 0 : ear)
+                .frame(width: model.open ? notchWidth + 2 * RestingNotch.ear : notchWidth)
                 .padding(.bottom, model.open ? 0 : NotchShape.tuck)
             HStack(spacing: 0) {
-                JoeMark()
-                    .overlay(alignment: .topTrailing) {
-                        if model.late {
-                            Circle().fill(Color.red).frame(width: 5, height: 5).offset(x: 3, y: -2)
-                        }
-                    }
-                    .frame(width: ear)
-                Color.clear.frame(width: notchWidth)
-                if let chip = model.chip {
-                    // Past the camera, the title then the time: the title gives way, the time stays.
-                    // Quiet: no icon, muted text, the time a touch brighter (the calm style).
-                    HStack(spacing: 5) {
-                        Text(chip.title).font(.system(size: 10.5)).lineLimit(1)
-                            .foregroundStyle(.white.opacity(0.5))
-                        Text(chip.time).font(.system(size: 10.5, weight: .medium).monospacedDigit())
-                            .lineLimit(1).fixedSize()
-                            .foregroundStyle(.white.opacity(0.8))
-                    }
-                    .padding(.leading, 6).padding(.trailing, 14)
-                    .frame(width: right, alignment: .leading)
-                }
+                JoeMark().frame(width: RestingNotch.ear)
+                Spacer()
             }
             .opacity(model.open ? 1 : 0)
             .animation(model.open ? .easeOut(duration: 0.14).delay(0.03) : .easeIn(duration: 0.08), value: model.open)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .animation(.easeOut(duration: 0.2), value: model.chip == nil)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(model.open ? NotchShape.opening : NotchShape.closing, value: model.open)
     }
 }

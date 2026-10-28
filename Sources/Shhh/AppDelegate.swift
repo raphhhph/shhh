@@ -439,7 +439,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.wake.update()
                 self?.resumeMusicIfDone()
                 self?.resting.keepInPlace() // the notch band stays at the notch
-                self?.resting.updateStudy() // its study block chip and overdue dot
                 self?.unstickProcessing()
             }
         }

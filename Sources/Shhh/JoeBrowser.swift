@@ -139,15 +139,51 @@ enum JoeBrowser {
         }
         if chrome == nil {
             // No Chrome, Brave or Edge: Google's Chrome for Testing, kept inside Joe's folder.
+            // Google's servers are blocked in mainland China, so its mirror is tried as well.
             guard let cli = browsersCLI else { return "Couldn't install the Chrome downloader." }
-            let (ok, output) = shell(node, [cli, "install", "chrome@stable", "--path", ownChrome.path])
-            guard ok, chrome != nil else { return "Couldn't download Chrome for Joe's browser:\n\(output.suffix(600))" }
+            let versions = await chromeVersions()
+            guard !versions.isEmpty else { return "Couldn't find out which Chrome to download (no answer from Google or its China mirror)." }
+            var output = ""
+            for version in versions {
+                for base in chromeMirrors where chrome == nil {
+                    let result = shell(node, [cli, "install", "chrome@\(version)", "--base-url", base, "--path", ownChrome.path], timeout: 900)
+                    output += "\(version) from \(base): \(result.output.suffix(300))\n"
+                }
+            }
+            guard chrome != nil else { return "Couldn't download Chrome for Joe's browser:\n\(output.suffix(900))" }
         }
         // The first version's profile was Vivaldi's, which hangs when hidden: to the Trash.
         if FileManager.default.fileExists(atPath: oldProfile.appendingPathComponent("Default/AdBlockRules").path) {
             try? FileManager.default.trashItem(at: oldProfile, resultingItemURL: nil)
         }
         return "Joe's browser is set up." + (isEnabled ? "" : " It's off in Settings.")
+    }
+
+    /// Where Chrome for Testing downloads from: npmmirror's copy first (reachable in China, where
+    /// Raph is), then Google's own.
+    private static let chromeMirrors = ["https://cdn.npmmirror.com/binaries/chrome-for-testing",
+                                        "https://storage.googleapis.com/chrome-for-testing-public"]
+
+    /// Chrome for Testing versions to try: Google's current stable, then the newest on npmmirror
+    /// (which may lag Google's by a day). 15 s each.
+    private static func chromeVersions() async -> [String] {
+        var found: [String] = []
+        let session = URLSession(configuration: { let c = URLSessionConfiguration.ephemeral; c.timeoutIntervalForRequest = 15; return c }())
+        if let url = URL(string: "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json"),
+           let (data, _) = try? await session.data(from: url),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let stable = ((json["channels"] as? [String: Any])?["Stable"] as? [String: Any])?["version"] as? String {
+            found.append(stable)
+        }
+        guard let url = URL(string: "https://registry.npmmirror.com/-/binary/chrome-for-testing/"),
+              let (data, _) = try? await session.data(from: url),
+              let folders = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return found }
+        let versions = folders.compactMap { ($0["name"] as? String)?.trimmingCharacters(in: CharacterSet(charactersIn: "/")) }
+            .filter { $0.split(separator: ".").count == 4 && $0.split(separator: ".").allSatisfy { Int($0) != nil } }
+        // The newest but one: the newest may still be copying.
+        let sorted = versions.sorted { $0.compare($1, options: .numeric) == .orderedAscending }
+        if let mirrored = sorted.count >= 2 ? sorted[sorted.count - 2] : sorted.last, !found.contains(mirrored) { found.append(mirrored) }
+        return found
     }
 
     /// Puppeteer's browser downloader, with npm's .bin link resolved.
@@ -210,7 +246,7 @@ enum JoeBrowser {
             : "Joe's browser is open. Sign in to your school sites (Google, ManageBac, anything else), then quit that window (Cmd-Q). Joe stays signed in."
     }
 
-    private static func shell(_ path: String, _ arguments: [String]) -> (ok: Bool, output: String) {
+    private static func shell(_ path: String, _ arguments: [String], timeout: TimeInterval = 600) -> (ok: Bool, output: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = arguments
@@ -223,6 +259,10 @@ enum JoeBrowser {
         process.standardOutput = pipe
         process.standardError = pipe
         do { try process.run() } catch { return (false, error.localizedDescription) }
+        // A download that stalls (a blocked server) is stopped instead of hanging setup.
+        let stop = DispatchWorkItem { if process.isRunning { process.terminate() } }
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: stop)
+        defer { stop.cancel() }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         return (process.terminationStatus == 0, String(data: data, encoding: .utf8) ?? "")

@@ -322,6 +322,13 @@ enum IBProjects {
         item.subject == "project" && item.detail == overdueMark
     }
 
+    /// Whether a study-plan item is a project milestone due soon or overdue. Its date is the
+    /// student's own (or a template's), so a real deadline due by `horizon` comes before it, and
+    /// it gets one block a day at most.
+    static func yields(_ item: CalendarFeed.Item, before horizon: Date) -> Bool {
+        isOverdue(item) || (item.subject == "project" && item.start < horizon)
+    }
+
     /// Each project's next dated milestone (an overdue one as due today), as a deadline for the study plans.
     static func milestoneItems(_ now: Date = Date()) -> [CalendarFeed.Item] {
         all().compactMap { project -> CalendarFeed.Item? in

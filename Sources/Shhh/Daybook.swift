@@ -532,22 +532,23 @@ enum Daybook {
             if dayA != dayB { return dayA < dayB }
             return isWeighty(a) && !isWeighty(b)
         }
-        // What's really due by the end of tomorrow comes first, then an overdue project milestone
-        // (its "due today" is made up), then the rest.
+        // What's really due by the end of tomorrow comes first, then a project milestone that's
+        // overdue or due by then (its date is the student's own), then the rest.
         let horizon = calendar.date(byAdding: .day, value: 2, to: calendar.startOfDay(for: now)) ?? fortnight
-        let soon = sorted.filter { !IBProjects.isOverdue($0) && $0.start < horizon }
-        let late = sorted.filter { IBProjects.isOverdue($0) }
-        let later = sorted.filter { !IBProjects.isOverdue($0) && $0.start >= horizon }
+        let soft = { (item: CalendarFeed.Item) in IBProjects.yields(item, before: horizon) }
+        let soon = sorted.filter { !soft($0) && $0.start < horizon }
+        let late = sorted.filter { soft($0) }
+        let later = sorted.filter { !soft($0) && $0.start >= horizon }
         let work = soon + late + later
         guard !work.isEmpty else { return [] }
         // Two blocks for the most pressing one still due after the block, then one each; what's
-        // due before a block is skipped, not given it. An overdue milestone gets one at most.
+        // due before a block is skipped, not given it. A milestone from `late` gets one at most.
         var given: [String: Int] = [:]
         return freeBlocks(on: now, busy: busy).filter { $0.end > now }.compactMap { block -> String? in
             let upcoming = work.filter { $0.start > block.end }
-            guard let first = upcoming.first(where: { !IBProjects.isOverdue($0) }) ?? upcoming.first,
+            guard let first = upcoming.first(where: { !soft($0) }) ?? upcoming.first,
                   let item = upcoming.first(where: { candidate in
-                      let cap = IBProjects.isOverdue(candidate) ? 1 : (candidate.id == first.id ? 2 : 1)
+                      let cap = soft(candidate) ? 1 : (candidate.id == first.id ? 2 : 1)
                       return (given[candidate.id] ?? 0) < cap
                   }) else { return nil }
             given[item.id, default: 0] += 1

@@ -88,7 +88,7 @@ enum WeekPlan {
                 // day's blocks first, whether or not it already had its share earlier in the week
                 // (two for the most pressing one, then one each). Then an overdue milestone, then
                 // what's due later, in due order, until each has the blocks it wants.
-                let pressing = soon.first
+                let pressing = work.first { !IBProjects.isOverdue($0) && $0.start > block.end && $0.start < horizon }
                 var pick: CalendarFeed.Item? = soon.first { item in
                     (today[item.id] ?? 0) < (item.id == pressing?.id ? 2 : 1)
                 }

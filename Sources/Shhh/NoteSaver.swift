@@ -135,11 +135,14 @@ final class NoteSaver {
         titling = true
         Task {
             defer { titling = false }
-            if let found = await Self.describe(notes: notes, kind: self.kind, requests: session.requests),
+            if let found = await Self.describe(notes: notes, kind: self.kind, requests: session.requests, root: root),
                let file = session.file {
                 let current = root.appendingPathComponent(file)
                 let kind = self.kind ?? found.kind
-                let folder = root.appendingPathComponent(kind.folder, isDirectory: true)
+                // Grouped: lectures by subject, other notes by topic, recurring meetings by who.
+                var folder = root.appendingPathComponent(kind.folder, isDirectory: true)
+                let group = Self.fileName(found.group)
+                if !group.isEmpty, group.count <= 40 { folder.appendPathComponent(group, isDirectory: true) }
                 let renamed = Self.unique(folder, name: "\(Self.day(date)) \(Self.fileName(found.title))", except: current)
                 let body = (try? String(contentsOf: current, encoding: .utf8)).map(Self.body(of:)) ?? notes
                 try? manager.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -223,7 +226,7 @@ final class NoteSaver {
 
     /// A title, a one-line summary and what kind of notes these are, from Claude (Haiku, no tools,
     /// about five seconds), or nil if it couldn't.
-    private static func describe(notes: String, kind: Kind?, requests: [String]) async -> (kind: Kind, title: String, summary: String)? {
+    private static func describe(notes: String, kind: Kind?, requests: [String], root: URL) async -> (kind: Kind, title: String, summary: String, group: String)? {
         guard let executable = Assistant.executable else { return nil }
         let excerpt = notes.count > 7000 ? notes.prefix(5500) + "\n…\n" + notes.suffix(1500) : Substring(notes)
         let prompt = """
@@ -232,10 +235,13 @@ final class NoteSaver {
             What the user said while taking them: \(requests.isEmpty ? "(nothing)" : requests.map { "\"\($0)\"" }.joined(separator: "; "))
             Today is \(Date().formatted(date: .complete, time: .omitted)).
 
-            Reply with JSON only: {"kind": "lecture" | "meeting" | "notes", "title": "…", "summary": "…"}
+            Reply with JSON only: {"kind": "lecture" | "meeting" | "notes", "title": "…", "summary": "…", "group": "…"}
             - title: at most 8 words. For a lecture, the subject then the topic ("Economics — Price Elasticity of Demand"). \
             For a meeting, who or what then the topic ("WellPrepped — Creator Call with Ana"). No date, no quotes.
             - summary: one line, under 25 words, saying what's in the notes and when to open them.
+            - group: the folder it belongs in. For a lecture, its school subject\(Profile.subjects.isEmpty ? "" : " (theirs: \(Profile.subjects))"), \
+            short ("Economics", "Math AI"). For other notes, a 1–3 word topic. For a meeting, the person, team or project \
+            if they'll meet again, else "". Reuse an existing folder when it fits: \(groups(in: root)).
 
             <notes>
             \(excerpt)
@@ -269,6 +275,19 @@ final class NoteSaver {
               let json = try? JSONSerialization.jsonObject(with: Data(text[start...end].utf8)) as? [String: Any],
               let title = (json["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty
         else { return nil }
-        return (Kind(rawValue: json["kind"] as? String ?? "") ?? .notes, String(title.prefix(80)), json["summary"] as? String ?? "")
+        return (Kind(rawValue: json["kind"] as? String ?? "") ?? .notes, String(title.prefix(80)), json["summary"] as? String ?? "",
+                (json["group"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// The folders notes are already grouped in, per kind ("lectures: Economics, Biology; …").
+    private static func groups(in root: URL) -> String {
+        let list = Kind.allCases.map { kind -> String in
+            let folder = root.appendingPathComponent(kind.folder, isDirectory: true)
+            let names = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isDirectoryKey])) ?? [])
+                .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+                .map(\.lastPathComponent).sorted()
+            return "\(kind.label.lowercased()): \(names.isEmpty ? "none yet" : names.joined(separator: ", "))"
+        }
+        return list.joined(separator: "; ")
     }
 }

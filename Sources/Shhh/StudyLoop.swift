@@ -243,14 +243,28 @@ enum StudyLoop {
     /// The one open thing `query` names ("the taxes upload", "ee outline"); nil when nothing or
     /// several different things fit.
     static func resolve(_ query: String) -> String? {
+        let found = matching(query, in: openTitles())
+        return found.count == 1 ? found[0] : nil
+    }
+
+    /// The one finished thing `query` names when nothing open does ("the taxes upload" once Taxes
+    /// is ticked in the Daybook or in Done.md); nil otherwise.
+    static func resolveDone(_ query: String) -> String? {
+        guard matching(query, in: openTitles()).isEmpty else { return nil }
+        let found = matching(query, in: Daybook.doneTitles(daybookText))
+        return found.count == 1 ? found[0] : nil
+    }
+
+    /// The titles `query` names, one per task (just the exact one when several fit and one is exact).
+    private static func matching(_ query: String, in titles: [String]) -> [String] {
         let wanted = words(query)
-        guard !wanted.isEmpty else { return nil }
+        guard !wanted.isEmpty else { return [] }
         var found: [String] = []
-        for title in openTitles() where wanted.isSubset(of: words(title)) || Daybook.sameTask(title, query) {
+        for title in titles where wanted.isSubset(of: words(title)) || Daybook.sameTask(title, query) {
             if !found.contains(where: { $0.lowercased() == title.lowercased() || Daybook.sameTask($0, title) }) { found.append(title) }
         }
-        if found.count > 1, let exact = found.first(where: { words($0) == wanted }) { return exact }
-        return found.count == 1 ? found[0] : nil
+        if found.count > 1, let exact = found.first(where: { words($0) == wanted }) { return [exact] }
+        return found
     }
 
     /// Ticks a task everywhere it's open (the Daybook, Week.md, its project milestone) and adds it
@@ -462,7 +476,12 @@ enum StudyIntent {
             guard let url = WeekPlan.build(from: start, now: now), let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
             return StudyLoop.weekReply(text, sunday: false)
         case let .markDone(query):
-            guard let title = StudyLoop.resolve(query) else { return nil }
+            guard let title = StudyLoop.resolve(query) else {
+                // Already ticked: say so here rather than handing it to Claude.
+                guard let finished = StudyLoop.resolveDone(query) else { return nil }
+                return StudyLoop.Reply(subject: "Already done: \(finished)", card: "**\(finished)** is already done.",
+                                       spoken: "\(finished) is already done.")
+            }
             let places = StudyLoop.markDone(title, now: now)
             return StudyLoop.Reply(subject: "Done: \(title)", card: "Ticked **\(title)**: \(places.joined(separator: ", ")).",
                                    spoken: "Done: \(title), ticked off.")

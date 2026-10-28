@@ -278,9 +278,11 @@ enum CommandLineTool {
                 print("\(reply.subject)\n\(reply.card)\n\nSpoken: \(reply.spoken)")
             }
             exit(0)
-        case ("--local", 2):
-            // Joe --local "<request>": does a local study request ("start my EE", "plan my week", "done
-            // with Paper 2", "how's my EE going") as Joe would, and prints the card. It writes, like the real thing.
+        case ("--local", 2...3):
+            // Joe --local "<request>" [<vault>]: does a local study request ("start my EE", "plan my week", "done
+            // with Paper 2", "how's my EE going") as Joe would, and prints the card. It writes, like the real
+            // thing, so give a copy of the vault to test on.
+            if args.count > 2 { useFolder(args[2]) }
             guard let intent = StudyIntent.parse(args[1]) else { print("Not a local study request: it goes to Claude."); exit(0) }
             guard let reply = intent.run() else { print("\(intent.route): couldn't settle it here, so it goes to Claude."); exit(0) }
             print("\(intent.route)\n\(reply.subject)\n\(reply.card)\n\nSpoken: \(reply.spoken)")

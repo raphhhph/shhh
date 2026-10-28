@@ -161,7 +161,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let quiz = #"\b(quiz|test) me\b|\blet'?s\b[^.?!]{0,10}\bquiz\b|\b(give|set|make)\b[^.?!]{0,10}\b(quiz|practice questions|exam(-style)? question)|\b(start|do|begin|run)\b[^.?!]{0,12}\b(quiz|study session|revision session|practice session)\b|\bwhite ?board\b|\bflash ?cards?\b"#
         func has(_ pattern: String) -> Bool { request.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil }
         if has(draw), !has(#"\bscreen\b"#), !has(#"\b(quiz|test) me\b"#) { return .explain }
-        guard has(quiz) else { return nil }
+        // "Review chinese", "revise econ for tomorrow", "teach me a lesson on business": studying a
+        // subject they name, so not "review my essay" or "teach me to cook".
+        let studying = has(#"^\W*((hey |ok )?joe,?\s+)?((can you|could you|let'?s|i want to|help me)\s+)?(review|revise|study|practi[cs]e|go over)\b|\bteach me\b|\b(a |the )?lesson (on|about)\b"#)
+            && (StudyBoard.subject(in: request) != nil
+                || StudyBuddy.pack(for: request).map { request.range(of: $0, options: .caseInsensitive) != nil } == true)
+        guard has(quiz) || studying else { return nil }
         if has(#"\bflash ?cards?\b"#), !has(#"\b(make|create|generate|write)\b[^.?!]{0,20}\bflash ?cards?\b"#), !has(#"\b(quiz|test) me\b"#) { return .cards }
         return has(#"\bexam\b"#) ? .exam : .quiz
     }

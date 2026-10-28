@@ -15,23 +15,25 @@ enum Assessment {
     /// Words that only ever mean it's sat, whatever else the title says.
     private static let surelySat = #"\b(in[- ]class|during class|in lesson|exam conditions|closed[- ]book|under timed conditions|test day)\b"#
     /// Words that mean it's handed in.
-    private static let handedIn = #"\b(homework|hw|upload|submit|submission|hand in|turnitin|draft|bibliography|reflection|worksheet|portfolio|outline|proposal|write[- ]up|lab report|report|research|notes|prep|preparation|practice|revision)\b"#
+    private static let handedIn = #"\b(homework|hw|upload|submit|submission|hand in|turnitin|draft|bibliography|reflection|worksheet|portfolio|outline|proposal|write[- ]up|lab report|report|research|notes|prep|preparation|practice|revision|feedback|peer|check|examples?|analysis|arc|annotations?|journal|log|blog|slides|poster|video)\b"#
     /// Words that only ever mean it's handed in.
     private static let surelyHandedIn = #"\b(take[- ]home|upload to|submit (it )?(on|to|via)|dropbox|due by 23|online submission)\b"#
 
     static func kind(_ item: CalendarFeed.Item) -> Kind {
         guard item.kind == .deadline, item.subject != "project" else { return .takeHome }
-        let text = item.title + " " + item.detail
-        func has(_ pattern: String) -> Bool { text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil }
-        if has(surelySat) { return .inClass }
-        if has(surelyHandedIn) { return .takeHome }
-        var score = 0
-        if has(sat) { score += 2 }
-        if has(handedIn) { score -= 2 }
+        // The description can say anything ("this prepares you for the exam"), so only its explicit
+        // words count; the score is the title's.
+        let all = item.title + " " + item.detail
+        func says(_ pattern: String, in text: String) -> Bool { text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil }
+        if says(surelySat, in: all) { return .inClass }
+        if says(surelyHandedIn, in: all) { return .takeHome }
+        // An exam needs a word for one in its title; the time only settles a title with both kinds of word.
+        guard says(sat, in: item.title) else { return .takeHome }
+        var score = 2
+        if says(handedIn, in: item.title) { score -= 2 }
         // A timed deadline: during one of that day's classes it's sat there; late at night it's handed in.
         if !item.allDay {
-            let calendar = Calendar.current
-            let hour = calendar.component(.hour, from: item.start)
+            let hour = Calendar.current.component(.hour, from: item.start)
             if hour >= 22 || hour < 6 {
                 score -= 2
             } else if Daybook.timeline(item.start).contains(where: { slot in
@@ -52,7 +54,7 @@ enum Assessment {
     /// something both sat and an errand ("register for the oral"), which is the errand.
     static func needsStudy(_ item: CalendarFeed.Item) -> Bool {
         guard item.subject != "project" else { return true }
-        return (item.title + " " + item.detail).range(of: errand, options: [.regularExpression, .caseInsensitive]) == nil
+        return item.title.range(of: errand, options: [.regularExpression, .caseInsensitive]) == nil
     }
 
     /// What a study block for a sat assessment starts with: "revise for Chinese Paper 1".

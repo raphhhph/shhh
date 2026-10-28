@@ -355,6 +355,9 @@ final class StudyBoardModel: ObservableObject {
             approval?.decide(.deny)
         case .turnFinished:
             let parsed = Self.parse(reply)
+            // One summary a session: a later one (a second "end") replaces the earlier card, not a second card.
+            let repeatSummary = mode != .feedback && parsed.contains(where: Self.isSummary) && items.contains(where: Self.isSummary)
+            if repeatSummary { dropSummaries() }
             items += parsed
             // The exam clock: from the new question until it's marked.
             if parsed.contains(where: { if case .question = $0 { return true } else { return false } }) {
@@ -367,7 +370,7 @@ final class StudyBoardModel: ObservableObject {
             live = []
             isBusy = false
             status = nil
-            record(parsed)
+            record(parsed, repeatSummary: repeatSummary)
             if readAloud { speak(Self.spoken(parsed)) }
         case .failed(let message):
             items.append(.note("Something went wrong: \(message)"))
@@ -379,16 +382,38 @@ final class StudyBoardModel: ObservableObject {
         }
     }
 
-    /// Each marked answer goes to the quiz log, like the notch's quizzes.
-    private func record(_ parsed: [Item]) {
+    private nonisolated static func isSummary(_ item: Item) -> Bool {
+        if case .summary = item { return true } else { return false }
+    }
+
+    /// Takes the earlier summary cards off the board, keeping savedUpTo and nettedUpTo on the same items.
+    private func dropSummaries() {
+        for index in items.indices.reversed() where Self.isSummary(items[index]) {
+            items.remove(at: index)
+            if index < savedUpTo { savedUpTo -= 1 }
+            if index < nettedUpTo { nettedUpTo -= 1 }
+        }
+    }
+
+    /// Each marked answer goes to the quiz log, like the notch's quizzes. repeatSummary: this reply's
+    /// summary replaced an earlier one, so questions marked before it aren't logged again.
+    private func record(_ parsed: [Item], repeatSummary: Bool = false) {
+        // The items before this reply (items already holds it).
+        let earlier = items.dropLast(min(parsed.count, items.count))
+        // A returned mark is logged once a session, even when the tag comes again.
         for case let .returned(assessment, mark, boundary) in parsed {
-            Marks.log(subject: subject, assessment: assessment, mark: mark, boundary: boundary)
+            let logged = earlier.contains { item in
+                if case let .returned(a, m, _) = item { return a == assessment && m == mark } else { return false }
+            }
+            if !logged { Marks.log(subject: subject, assessment: assessment, mark: mark, boundary: boundary) }
         }
         if mode == .feedback { saveFeedback(); return }
         let date = Date().formatted(.iso8601.year().month().day())
         var lines: [String] = []
-        // The questions before this reply (items already holds it): the last one, and each by its n.
-        let earlier = items.dropLast(min(parsed.count, items.count))
+        // The questions marked before this reply, by their n.
+        var markedBefore = Set<Int>()
+        for case let .feedback(_, total, _, _, n, _) in earlier where total > 0 && n > 0 { markedBefore.insert(n) }
+        // The questions before this reply: the last one, and each by its n.
         var topic = earlier.reversed().compactMap { if case let .question(_, _, topic, _, _) = $0 { return topic } else { return nil } }.first ?? ""
         var question = earlier.reversed().compactMap { if case let .question(_, _, _, _, text) = $0 { return text } else { return nil } }.first ?? ""
         var byNumber: [Int: (topic: String, text: String)] = [:]
@@ -400,6 +425,8 @@ final class StudyBoardModel: ObservableObject {
                 if n > 0 { byNumber[n] = (topic: next, text: text) }
             }
             guard case let .feedback(score, total, text, model, n, ownTopic) = item, total > 0 else { continue }
+            // Repeated with a second summary: it's in the quiz log and the mistake book already.
+            if repeatSummary && n > 0 && markedBefore.contains(n) { continue }
             // Paired by its n, never with whichever question came last: a lost question that had no
             // <question> tag (the tutor waited for the paper) is logged as that, not as the one before.
             var markedTopic = topic, markedQuestion = question
@@ -657,7 +684,8 @@ final class StudyBoardModel: ObservableObject {
             asked to explain, no judgment on evaluate, too short for the marks); careless = a slip, misread, units, arithmetic, ran out of time. \
             When you can't tell, ask which it was before the feedback tag. Each feedback tag goes in their mistake book, and a fresh redo \
             question on it comes back tomorrow, in 3 days and in a week: say so once, and only about questions you gave a feedback tag for.
-            5. When the lost questions are done (or on "end"): first a <question> for any lost-marks question that doesn't have one yet, and a \
+            5. The summary comes once a session: when the lost questions are done, or on "end" / "that's all", whichever comes first. \
+            Never a second one: after it, "end" or "that's all" gets one short closing line and no tags. Before it: first a <question> for any lost-marks question that doesn't have one yet, and a \
             <feedback n=…> (and <model>) for every lost-marks question discussed that doesn't have one yet, then <summary score="<their total>" total="<marks available>">the mark; how the lost \
             marks split by cause (e.g. 9 didn't know, 4 command term, 3 careless); then **3 things to fix** as a numbered list, each concrete \
             (a topic to relearn with its syllabus number, a command-term habit, a checking habit)</summary>. No <cards> unless definitions were lost.
@@ -678,7 +706,7 @@ final class StudyBoardModel: ObservableObject {
             then <model>the answer a markscheme would credit, concise, using only methods on this subject's syllabus</model>, then the next <question>. \
             ✗ lines are only lost mark points; any caveat or note goes outside the tag.
             - Outside the tags, at most one short sentence, said aloud ("Nice, three out of four."). No other chatter.
-            - At the end: <summary score="x" total="y">strengths, the weakest topic, the one thing to revise next</summary>.
+            - At the end, once a session (never a second summary): <summary score="x" total="y">strengths, the weakest topic, the one thing to revise next</summary>.
             - Right after the summary, flashcards of what they must know word for word: <cards>one per line, term :: the definition as the \
             markscheme words it</cards>. One for every define question in the session, plus the key terms they got wrong or left out; at most 12, \
             none when there were none. They're saved to their deck for review. When they ask you to make flashcards on a topic, give the <cards> \
@@ -693,7 +721,7 @@ final class StudyBoardModel: ObservableObject {
             \(mode == .review ? reviewSession : mode == .exam
                 ? "Exam mode: one full question in the style of a real paper for this subject (with parts (a), (b)…, a stimulus or data where the paper has one, marks per part), with time=\"<minutes>\" in the question tag: the time the real paper allows for those marks. Mark it part by part; long parts with markbands. Then the summary, saying whether they'd have finished in time."
                 : "Quiz mode: five questions, easier to harder, IB command terms and marks in brackets, a mix of definitions, application to a short context, calculations where the subject has them, and one exam-style question. Cover the topic they ask for; otherwise the topics due for review below first (they're about to forget them), then their weakest topics from the results. After the fifth, the summary.")
-            - "hint": a hint, not the answer. "skip": the model answer and 0 marks (a feedback tag with score 0), then go on. "end": the summary now. \
+            - "hint": a hint, not the answer. "skip": the model answer and 0 marks (a feedback tag with score 0), then go on. "end": the summary now, unless it's been given (then one short closing line, no second summary). \
             Any other question from them: answer it briefly, then carry on.
             - Mark strictly but fairly, like an IB examiner: the command term sets the depth, partial marks are fine, follow-through for \
             a slip carried correctly. Diagrams: they describe them in words; mark the description.

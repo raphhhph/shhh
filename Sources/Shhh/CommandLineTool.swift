@@ -280,7 +280,8 @@ enum CommandLineTool {
             exit(0)
         case ("--local", 2...3):
             // Joe --local "<request>" [<vault>]: does a local study request ("start my EE", "plan my week", "done
-            // with Paper 2", "how's my EE going") as Joe would, and prints the card. It writes, like the real
+            // with Paper 2", "how's my EE going", "log CAS: …", "how's my CAS", "stress 4, slept 6 hours") as Joe
+            // would, and prints the card. It writes, like the real
             // thing, so give a copy of the vault to test on.
             if args.count > 2 { useFolder(args[2]) }
             guard let intent = StudyIntent.parse(args[1]) else { print("Not a local study request: it goes to Claude."); exit(0) }
@@ -416,9 +417,9 @@ enum CommandLineTool {
             print(IBProjects.report())
             exit(0)
         case ("--project-new", 2...5):
-            // Joe --project-new <ee|ia|tok-essay|tok-exhibition|io|cas> ["<subject>"] [yyyy-mm-dd] ["<supervisor>"]:
+            // Joe --project-new <ee|ia|tok-essay|tok-exhibition|io|cas|uni> ["<subject>"] [yyyy-mm-dd] ["<supervisor>"]:
             // makes the project's note from its template (or finds the one already there).
-            guard let kind = IBProjects.Kind(loose: args[1]) else { fail("Kinds: ee, ia, tok-essay, tok-exhibition, io, cas") }
+            guard let kind = IBProjects.Kind(loose: args[1]) else { fail("Kinds: ee, ia, tok-essay, tok-exhibition, io, cas, uni (subject: UCAS, Common App or both)") }
             var subject = "", supervisor = ""
             var finalDate: Date?
             for arg in args.dropFirst(2) {

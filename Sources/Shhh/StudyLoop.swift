@@ -175,6 +175,8 @@ enum StudyLoop {
         var first: String?
         var questions: [String] = []
         var blocks = 0
+        /// "Lighter week: …" after a hard wellbeing check-in.
+        var lighter: String?
     }
 
     /// Week.md in brief: the days' blocks by title, the first block and the Needs you questions.
@@ -183,6 +185,7 @@ enum StudyLoop {
         var section = ""
         for line in text.components(separatedBy: "\n") {
             if line.hasPrefix("# Week — ") { week.range = String(line.dropFirst("# Week — ".count)); continue }
+            if line.hasPrefix("Lighter week: ") { week.lighter = line; continue }
             if line.hasPrefix("## ") {
                 section = String(line.dropFirst(3))
                 if section.contains(" · ") { week.days.append((day: section.components(separatedBy: " · ")[0], titles: [])) }
@@ -206,12 +209,17 @@ enum StudyLoop {
         let header = "**Week.md**" + (week.range.isEmpty ? "" : ", \(week.range)")
             + ": \(week.blocks) study block\(week.blocks == 1 ? "" : "s"), done by 23:00."
         let days = week.days.map { "- \($0.day): " + ($0.titles.isEmpty ? "nothing planned" : $0.titles.joined(separator: ", ")) }
-        var parts = [header, days.joined(separator: "\n")]
+        var parts = [header]
+        if let lighter = week.lighter { parts.append(lighter) }
+        parts.append(days.joined(separator: "\n"))
         if let first = week.first { parts.append("First block: \(first).") }
         if !week.questions.isEmpty { parts.append("To settle: " + week.questions.joined(separator: " ")) }
+        // Sunday's card also asks the weekly wellbeing check-in (answered "stress 3, slept 7 hours").
+        if sunday { parts.append(Wellbeing.question) }
         var spoken = (sunday ? "Next week's plan is ready" : "Your week is planned") + ": \(week.blocks) study blocks"
             + (week.first.map { ", the first \($0)" } ?? "") + "."
         if let question = week.questions.first { spoken += " " + question }
+        if sunday { spoken += " And how did you sleep last week, and your stress from 1 to 5?" }
         return Reply(subject: sunday ? "Next week planned" : "Week planned", card: parts.joined(separator: "\n\n"), spoken: spoken)
     }
 
@@ -306,6 +314,10 @@ enum StudyIntent {
     case weekPlan(nextWeek: Bool)
     case markDone(String)
     case projectStatus(String)
+    case casLog(CASLog.Entry)
+    case casStatus
+    case wellbeing(Wellbeing.Entry)
+    case wellbeingCheck
 
     /// What `--route` prints.
     var route: String {
@@ -314,18 +326,53 @@ enum StudyIntent {
         case .weekPlan: "local (week plan)"
         case .markDone: "local (mark done)"
         case .projectStatus: "local (project status)"
+        case .casLog: "local (cas log)"
+        case .casStatus: "local (cas status)"
+        case .wellbeing, .wellbeingCheck: "local (wellbeing)"
         }
+    }
+
+    /// An answer to a question Joe asked (the wellbeing check-in): taken here even as a follow-up.
+    var isAnswer: Bool {
+        if case .wellbeing = self { return true }
+        return false
     }
 
     // MARK: - Understanding
 
     static func parse(_ said: String) -> StudyIntent? {
-        let text = said.replacingOccurrences(of: "’", with: "'").lowercased()
-            .replacingOccurrences(of: #"^\W*((hey|ok|okay|yo),?\s+)?(joe,?\s+)?((can|could|would) you\s+|please\s+)?"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"(,?\s*(please|for me|thanks|thank you))+\W*$"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"[\s.!?]+$"#, with: "", options: .regularExpression)
-        guard !text.isEmpty, text.count <= 120 else { return nil }
-        return parseWeekPlan(text) ?? parseMarkDone(text) ?? parseProjectStatus(text) ?? parseProjectNew(text)
+        // Cleaned with its case kept, for a CAS log's evidence link; matched on in lower case.
+        let options: String.CompareOptions = [.regularExpression, .caseInsensitive]
+        let original = said.replacingOccurrences(of: "’", with: "'")
+            .replacingOccurrences(of: #"^\W*((hey|ok|okay|yo),?\s+)?(joe,?\s+)?((can|could|would) you\s+|please\s+)?"#, with: "", options: options)
+            .replacingOccurrences(of: #"(,?\s*(please|for me|thanks|thank you))+\W*$"#, with: "", options: options)
+            .replacingOccurrences(of: #"[\s.!?]+$"#, with: "", options: options)
+        let text = original.lowercased()
+        guard !text.isEmpty, text.count <= 300 else { return nil }
+        if let entry = CASLog.parse(original) { return .casLog(entry) }
+        guard text.count <= 120 else { return nil }
+        return parseWellbeing(text) ?? parseCASStatus(text) ?? parseWeekPlan(text) ?? parseMarkDone(text)
+            ?? parseProjectStatus(text) ?? parseProjectNew(text)
+    }
+
+    /// "stress 4, slept 6 hours", "wellbeing: 3, 7h"; "how am I doing", "wellbeing check".
+    private static func parseWellbeing(_ text: String) -> StudyIntent? {
+        if let entry = Wellbeing.parse(text) { return .wellbeing(entry) }
+        let check = #"^(how am i doing|how have i been doing|how('s| is) my wellbeing|(do\s+(a|my)\s+|weekly\s+)?(wellbeing|well-being)(\s+(check|check-in|check in))?|check in on me)$"#
+        return text.range(of: check, options: .regularExpression) != nil ? StudyIntent.wellbeingCheck : nil
+    }
+
+    /// "how's my CAS", "CAS status", "how many CAS hours do I have".
+    private static func parseCASStatus(_ text: String) -> StudyIntent? {
+        let patterns = [
+            #"^(how's|hows|how is)\s+(my\s+)?cas(\s+(going|coming along|looking|doing))?$"#,
+            #"^(my\s+)?cas\s+(status|progress|summary|hours|log)$"#,
+            #"^how many cas hours( do i have| have i (got|done|logged))?$"#,
+            #"^(where am i|how far am i|how far along am i)\s+(with|on|in)\s+(my\s+)?cas$"#,
+            #"^(show|check|open)\s+(me\s+)?my\s+cas( log)?$"#,
+        ]
+        let found = patterns.contains { text.range(of: $0, options: .regularExpression) != nil }
+        return found ? StudyIntent.casStatus : nil
     }
 
     /// The `item` group of a pattern's match in `text`.
@@ -428,6 +475,8 @@ enum StudyIntent {
         "ee", "extended", "essay", "ia", "internal", "assessment", "tok", "theory", "of", "knowledge", "exhibition", "io",
         "individual", "oral", "cas", "project", "note", "tracker", "for", "in", "on", "with", "due", "by", "final", "deadline",
         "date", "is", "the", "my", "a", "an", "and", "new", "s",
+        "uni", "university", "universities", "college", "applications", "application", "apps", "app", "ucas", "common",
+        "both", "us", "uk",
     ]
 
     private static func parseProjectNew(_ text: String) -> StudyIntent? {
@@ -437,7 +486,15 @@ enum StudyIntent {
         var due: Date?
         if let dated = date(in: rest) { due = dated.date; rest = dated.rest }
         var subject = ""
-        if let named = self.subject(in: rest) { subject = named.name; rest = named.rest }
+        if kind == .uni {
+            // Which systems: UCAS, Common App, or both (also when neither is named).
+            let ucas = rest.range(of: #"\bucas\b|\buk\b"#, options: .regularExpression) != nil
+            let common = rest.range(of: #"common app|\bus\b"#, options: .regularExpression) != nil
+            subject = ucas == common ? "UCAS and Common App" : ucas ? "UCAS" : "Common App"
+        } else if let named = self.subject(in: rest) {
+            subject = named.name
+            rest = named.rest
+        }
         // Anything else said ("start writing my TOK essay intro") is more than making the note: Claude's.
         let left = rest.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty && !projectWords.contains($0) }
         guard left.isEmpty else { return nil }
@@ -500,6 +557,18 @@ enum StudyIntent {
             let lines = matching.map { Self.status($0, now) }
             let subject = matching.count == 1 ? "\(matching[0].label): \(matching[0].done)/\(matching[0].milestones.count) milestones" : "Projects"
             return StudyLoop.Reply(subject: subject, card: lines.joined(separator: "\n\n"), spoken: Self.firstSentences(lines[0], 2))
+        case let .casLog(entry):
+            guard let url = CASLog.append(entry, now: now) else { return nil }
+            return CASLog.logged(entry, in: url, now: now)
+        case .casStatus:
+            guard CASLog.url != nil else { return nil }
+            return CASLog.summary(now: now)
+        case let .wellbeing(entry):
+            guard Wellbeing.record(entry) != nil else { return nil }
+            return Wellbeing.recorded(entry, now: now)
+        case .wellbeingCheck:
+            guard Wellbeing.url != nil else { return nil }
+            return Wellbeing.checkIn(now: now)
         }
     }
 

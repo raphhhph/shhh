@@ -110,6 +110,24 @@ enum AlarmStore {
         }.joined(separator: " · ") + (alarms.count > 4 ? " · +\(alarms.count - 4) more" : "")
     }
 
+    /// Claims one ring of an alarm for this process (a file made only if it doesn't exist yet).
+    /// False when another running copy of Joe already rang it.
+    static func claim(_ alarm: Alarm) -> Bool {
+        let folder = url.deletingLastPathComponent().appendingPathComponent("Ringing", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        // Old claims go after a day.
+        let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        for file in files {
+            let made = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            if made < Date().addingTimeInterval(-86_400) { try? FileManager.default.removeItem(at: file) }
+        }
+        let path = folder.appendingPathComponent("\(alarm.id.uuidString)-\(Int(alarm.fireAt.timeIntervalSince1970))").path
+        let handle = open(path, O_CREAT | O_EXCL | O_WRONLY, 0o644)
+        guard handle >= 0 else { return false }
+        close(handle)
+        return true
+    }
+
     static func remaining(_ date: Date) -> String {
         let seconds = max(0, Int(date.timeIntervalSinceNow.rounded()))
         if seconds < 60 { return "\(seconds)s" }
@@ -328,6 +346,14 @@ final class AlarmClock {
     private var volumeBefore: Int?
 
     init() {
+        // The output changing (headphones, a headset's microphone turning on) reconfigures the engine:
+        // once nothing is ringing it must stay silent.
+        NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.ringing == nil else { return }
+                self.silence()
+            }
+        }
         model.onStop = { [weak self] in self?.stop() }
         model.onSnooze = { [weak self] in self?.snooze(minutes: 5) }
     }
@@ -346,7 +372,13 @@ final class AlarmClock {
     /// Beeping paused while they hold a key to answer (so the microphone hears them, not the alarm).
     func quiet(_ on: Bool) {
         guard ringing != nil else { return }
-        if on { player.pause() } else if !player.isPlaying { player.play() }
+        if on {
+            player.pause()
+        } else if !player.isPlaying {
+            // The microphone starting can stop the engine (a headset switching modes): start it again.
+            if !engine.isRunning { try? engine.start() }
+            if engine.isRunning { player.play() }
+        }
     }
 
     /// What they said for the challenge. Passing stops the alarm; missing sets it beeping again.
@@ -366,6 +398,7 @@ final class AlarmClock {
                 return false
             }
             model.challenge = nil
+            skipOtherWakeUps()
             let streak = Self.countWakeUp(snoozed: snoozedThisMorning)
             stop()
             if streak > 1 { onNotice("Up on the first ring \(streak) mornings in a row") }
@@ -382,6 +415,27 @@ final class AlarmClock {
     }
 
     private var misses = 0
+
+    /// Up already: the other "wake" alarms of the next hour (a duplicate "Wake up" set by voice, a
+    /// second alarm) don't ring straight after, which looked like the alarm never stopped.
+    private func skipOtherWakeUps() {
+        let now = Date()
+        var changed = false
+        let alarms = AlarmStore.load().compactMap { alarm -> Alarm? in
+            guard alarm.kind == .alarm, alarm.title.range(of: #"\bwake\b"#, options: [.regularExpression, .caseInsensitive]) != nil,
+                  alarm.fireAt < now.addingTimeInterval(3600) else { return alarm } // "Leave for the bus" still rings
+            changed = true
+            guard let next = alarm.next(after: alarm.fireAt.addingTimeInterval(60)) else { return nil }
+            var again = alarm
+            again.fireAt = next
+            return again
+        }
+        guard changed else { return }
+        AlarmStore.save(alarms)
+        known = AlarmStore.load()
+        modified = (try? AlarmStore.url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+    }
+
     /// Right answers still needed before the ringing challenge stops it.
     private var questionsLeft = 0
 
@@ -444,6 +498,9 @@ final class AlarmClock {
         AlarmStore.save(known)
         modified = (try? AlarmStore.url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
         stayAwake(!known.isEmpty)
+        // Two copies of Joe running (an old build left open beside the new one) both read the file:
+        // only the one that claims the alarm rings it, or the other kept beeping after it stopped.
+        guard AlarmStore.claim(due) else { return }
         // The Mac was asleep through it (lid closed overnight): a 7:30 wake-up ringing at 14:00 with
         // a challenge helps nobody, so one that's long past only says it was missed.
         if Date().timeIntervalSince(due.fireAt) > Self.tooLate {
@@ -497,7 +554,7 @@ final class AlarmClock {
             let seed = WakeChallenge.nextRing()
             var next = WakeChallenge.today(seed: seed)
             // Back from a snooze, or a "questions" alarm: a question to answer, not something to read half asleep.
-            let questions = Self.wantsQuestions(alarm)
+            let questions = Self.wantsQuestions(alarm) || WakeChallenge.questionsOnly
             for extra in 1...2 where (snoozedThisMorning || questions) && next.kind != .question { next = WakeChallenge.today(seed: seed + extra) }
             model.challenge = next
             questionsLeft = questions ? 2 : 1
@@ -535,8 +592,7 @@ final class AlarmClock {
         if missed, model.challenge != nil { UserDefaults.standard.set(0, forKey: "wakeStreak") }
         ringing = nil
         stopWork?.cancel()
-        player.stop()
-        engine.stop()
+        silence()
         panel?.orderOut(nil)
         panel = nil
         if let volumeBefore { _ = script("set volume output volume \(volumeBefore)") }
@@ -582,6 +638,13 @@ final class AlarmClock {
     }
 
     // MARK: Sound: beep-beep-beep-beep, pause, again
+
+    /// No sound at all: the player and the engine stopped, nothing left scheduled.
+    private func silence() {
+        player.stop()
+        engine.stop()
+        engine.reset()
+    }
 
     private func startBeeping(gentle: Bool) {
         let rate = 44_100.0

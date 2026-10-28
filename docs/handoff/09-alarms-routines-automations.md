@@ -28,7 +28,10 @@ Alarms, timers and reminders, the wake-up challenge, routines (spoken phrases th
 - Reading check: Chinese characters count one by one, and only when the recogniser wrote Chinese; otherwise only the English words of a fact are checked.
 - Night shutdown's default routine checks there's a wake-up alarm for tomorrow and offers one about an hour before the first class.
 
+- 28 Oct: wake-up alarms ask two school questions by default (`wakeQuestionsOnly`, default true; false brings back verse/fact/question days). Answers must be short (12 words max), at most two numbers, and whole-word matches. Passing also skips other "wake" alarms of the next hour. Each ring is claimed with a file in `Shhh/Ringing/` so a second running copy of Joe can't ring the same alarm. Stopping silences the engine (stop + reset), and an engine reconfiguration (headset mic) can't restart sound once stopped.
+
 ## Known issues / to-do
+- 28 Oct: Raph reported the sound kept going after answering until Joe quit, and wrong answers seemed accepted. Root cause not confirmed on the Mac (it was asleep); the fixes above cover a second Joe process, back-to-back duplicate wake alarms and an engine restart. Check `pgrep -fl Joe` for two copies.
 - Raph's daily 7:30 "Wake up" alarm was deleted on 21 Oct; he may need to set it again.
 - Fixed 21 Oct (branch `claude/project-thread-odumu1`, needs a Mac build): snoozing a repeating alarm left a new repeating alarm behind each time; cancelling a repeating alarm after it had rung kept it ringing on the iPhone (completing a recurring reminder only moves it on); stale alarms rang hours late after sleep; Chinese B facts were nearly impossible to pass; new students had no routines, so the 19:30 and 21:30 automations had nothing to run.
 - Ideas: photo/QR challenge (scan something in the bathroom).

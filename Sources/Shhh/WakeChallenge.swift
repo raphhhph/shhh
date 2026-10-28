@@ -19,6 +19,13 @@ struct WakeChallenge: Equatable {
         set { UserDefaults.standard.set(newValue, forKey: "wakeChallenge") }
     }
 
+    /// Wake-up alarms ask school questions (two right answers) rather than a verse or fact to read:
+    /// reading half asleep was too easy to fake. "Settings" key `wakeQuestionsOnly`; on by default.
+    static var questionsOnly: Bool {
+        get { UserDefaults.standard.object(forKey: "wakeQuestionsOnly") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "wakeQuestionsOnly") }
+    }
+
     /// How many challenges have rung today (0 for the first), counted as each one rings.
     static func nextRing() -> Int {
         let today = Date().formatted(.localDay)
@@ -66,7 +73,10 @@ struct WakeChallenge: Equatable {
     func another() -> WakeChallenge {
         guard kind == .question else { return self }
         let pool = Self.questions(for: Self.subjects)
-        let next = pool[((pool.firstIndex { $0.text == prompt } ?? 0) + 1) % pool.count]
+        let index = pool.firstIndex { $0.text == prompt } ?? 0
+        // Another subject when there is one, so the second question isn't the same topic again.
+        let others = pool.indices.filter { pool[$0].subject != source }
+        let next = others.isEmpty ? pool[(index + 1) % pool.count] : pool[others.first { $0 > index } ?? others[0]]
         return WakeChallenge(kind: .question, prompt: next.text, source: next.subject, answers: next.answers)
     }
 
@@ -102,15 +112,21 @@ struct WakeChallenge: Equatable {
         return Double(found) / Double(target.count) >= 0.6
     }
 
+    /// A real answer, not a guess sprayed out: at most a short sentence, at most two numbers, and
+    /// the accepted answer as whole words ("watt" doesn't pass in "what").
     static func answers(_ heard: String, accepts accepted: [String]) -> Bool {
         let text = " " + AlarmRequest.numbers(in: " " + heard.lowercased() + " ") + " "
+        guard heard.split(whereSeparator: { $0.isWhitespace }).count <= 12 else { return false }
+        let numbers = text.components(separatedBy: CharacterSet(charactersIn: "0123456789.").inverted).compactMap(Double.init)
         for answer in accepted {
             if let value = Double(answer) {
-                // Any number said that equals it ("two", "2", "2.0").
-                let numbers = text.components(separatedBy: CharacterSet(charactersIn: "0123456789.").inverted).compactMap(Double.init)
-                if numbers.contains(where: { abs($0 - value) < 0.001 }) { return true }
-            } else if text.contains(answer.lowercased()) || heard.contains(answer) {
-                return true
+                // A number said that equals it ("two", "2", "2.0"), and not a list of guesses.
+                if Set(numbers).count <= 2, numbers.contains(where: { abs($0 - value) < 0.001 }) { return true }
+            } else if heard.contains(where: { $0.unicodeScalars.contains(where: isHan) }), heard.contains(answer) {
+                return true // Chinese, written by the recogniser
+            } else {
+                let escaped = NSRegularExpression.escapedPattern(for: answer.lowercased())
+                if text.range(of: #"(?<![a-z0-9])"# + escaped + #"(?![a-z0-9])"#, options: .regularExpression) != nil { return true }
             }
         }
         return false

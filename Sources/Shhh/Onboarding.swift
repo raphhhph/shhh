@@ -522,7 +522,7 @@ private struct ChecklistDemo: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     ProgressView().controlSize(.small).tint(Tint.accent)
-                    Text("\(min(current, steps.count))/\(steps.count) · \(steps[min(current, steps.count - 1)])")
+                    Text("\(min(current + 1, steps.count))/\(steps.count) · \(steps[min(current, steps.count - 1)])")
                         .font(.system(size: 13, weight: .semibold))
                 }
                 .padding(.horizontal, 14).frame(height: 34)

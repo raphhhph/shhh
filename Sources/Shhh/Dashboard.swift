@@ -1581,6 +1581,13 @@ private struct UsagePage: View {
     @Environment(\.narrow) private var narrow
     @State private var entries: [UsageLog.Entry] = []
     @AppStorage("usageCurrency") private var currency = "USD"
+    /// The slider's stop: how far back the page looks.
+    @AppStorage("usageRange") private var rangeIndex = 0.0
+
+    private static let ranges = [7, 14, 30, 90]
+    private var range: Int { Self.ranges[min(max(Int(rangeIndex.rounded()), 0), Self.ranges.count - 1)] }
+    /// "last 7 days", "last 30 days".
+    private var span: String { "last \(range) days" }
 
     /// Yuan per US dollar, for the RMB view: a reference, not a live rate.
     static let yuanPerDollar = 7.1
@@ -1595,35 +1602,46 @@ private struct UsagePage: View {
         }
         let calendar = Calendar.current
         let today = entries.filter { calendar.isDateInToday($0.date) }
-        let weekAgo = Date().addingTimeInterval(-7 * 86_400)
-        let week = entries.filter { $0.date > weekAgo }
+        // Whole days, today and the ones before: a cut at this time a week ago put an eighth day's
+        // bar outside the chart.
+        let first = calendar.date(byAdding: .day, value: 1 - range, to: calendar.startOfDay(for: Date()))!
+        let week = entries.filter { $0.date >= first }
         let days = Set(week.map { calendar.startOfDay(for: $0.date) }).count
+        rangeSlider
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: narrow ? 2 : 4), spacing: 12) {
             stat(Self.dollars(today.reduce(0) { $0 + $1.cost }), "today", "sun.max")
-            stat(Self.dollars(week.reduce(0) { $0 + $1.cost }), "last 7 days", "calendar")
-            stat("\(week.count)", "requests, last 7 days", "sparkle")
+            stat(Self.dollars(week.reduce(0) { $0 + $1.cost }), span, "calendar")
+            stat("\(week.count)", "requests, \(span)", "sparkle")
             stat(Self.dollars(days == 0 ? 0 : week.reduce(0) { $0 + $1.cost } / Double(days) * 30), "a month at this rate", "chart.line.uptrend.xyaxis")
         }
         let layout = narrow ? AnyLayout(VStackLayout(spacing: 16)) : AnyLayout(HStackLayout(alignment: .top, spacing: 16))
         layout {
-            Card(title: "Each day, last 7 days", symbol: "chart.bar", stretch: true) {
+            Card(title: "Each day, \(span)", symbol: "chart.bar", stretch: true) {
                 Chart(Self.daily(week)) { bar in
                     BarMark(x: .value("Day", bar.day, unit: .day), y: .value("Cost", bar.cost))
                         .foregroundStyle(by: .value("Model", bar.model))
                         .cornerRadius(4)
                 }
                 .chartForegroundStyleScale(["Haiku": Color.green, "Sonnet": Color.blue, "Opus": Look.accent])
-                // Always the whole week, so one busy day is a bar, not the whole chart.
-                .chartXScale(domain: Calendar.current.date(byAdding: .day, value: -6, to: Calendar.current.startOfDay(for: Date()))!
-                             ... Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: Date()))!)
+                // Always the whole range, so one busy day is a bar, not the whole chart.
+                .chartXScale(domain: first ... calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: Date()))!)
                 .chartYAxis { AxisMarks { value in
                     AxisGridLine()
                     AxisValueLabel { if let cost = value.as(Double.self) { Text(cost == 0 ? "$0" : Self.dollars(cost)) } }
                 } }
-                .chartXAxis { AxisMarks(values: .stride(by: .day)) { _ in AxisValueLabel(format: .dateTime.weekday(.abbreviated)) } }
+                .chartXAxis {
+                    if range <= 7 {
+                        AxisMarks(values: .stride(by: .day)) { _ in AxisValueLabel(format: .dateTime.weekday(.abbreviated)) }
+                    } else {
+                        AxisMarks(values: .stride(by: .day, count: range <= 14 ? 2 : range <= 30 ? 5 : 14)) { _ in
+                            AxisValueLabel(format: .dateTime.day().month(.abbreviated))
+                        }
+                    }
+                }
+                .chartPlotStyle { $0.clipped() } // nothing drawn outside the plot
                 .frame(height: 170)
             }
-            Card(title: "By model, last 7 days", symbol: "cpu", stretch: true) {
+            Card(title: "By model, \(span)", symbol: "cpu", stretch: true) {
                 ForEach(Self.byModel(week), id: \.model) { group in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
@@ -1642,7 +1660,7 @@ private struct UsagePage: View {
             .frame(width: narrow ? nil : 300)
         }
         .fixedSize(horizontal: false, vertical: true)
-        Card(title: "By kind, last 7 days", symbol: "square.grid.2x2") {
+        Card(title: "By kind, \(span)", symbol: "square.grid.2x2") {
             if week.isEmpty { Text("Nothing logged yet: costs appear after Joe's next request.").font(.system(size: 13)).foregroundStyle(.secondary) }
             ForEach(Self.byKind(week), id: \.kind) { group in
                 HStack {
@@ -1653,7 +1671,7 @@ private struct UsagePage: View {
                 }
             }
         }
-        Card(title: "Most expensive, last 7 days", symbol: "arrow.up.circle") {
+        Card(title: "Most expensive, \(span)", symbol: "arrow.up.circle") {
             ForEach(week.sorted { $0.cost > $1.cost }.prefix(8)) { entry in
                 HStack(spacing: 10) {
                     Text(Self.dollars(entry.cost)).font(.system(size: 13, weight: .semibold).monospacedDigit()).frame(width: 64, alignment: .leading)
@@ -1664,6 +1682,30 @@ private struct UsagePage: View {
             }
         }
         .onAppear { entries = UsageLog.load() }
+    }
+
+    /// How far back: a slider that snaps to 7, 14, 30 and 90 days, its stops named underneath.
+    private var rangeSlider: some View {
+        HStack(spacing: 16) {
+            Text("Show").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
+            VStack(spacing: 2) {
+                Slider(value: Binding(get: { rangeIndex }, set: { rangeIndex = $0.rounded() }),
+                       in: 0...Double(Self.ranges.count - 1), step: 1)
+                    .tint(Look.accent)
+                HStack {
+                    ForEach(Self.ranges.indices, id: \.self) { index in
+                        Button { withAnimation(.snappy) { rangeIndex = Double(index) } } label: {
+                            Text("\(Self.ranges[index]) days").font(.system(size: 11, weight: index == Int(rangeIndex) ? .semibold : .regular))
+                                .foregroundStyle(index == Int(rangeIndex) ? Look.accent : .secondary)
+                        }
+                        .buttonStyle(.plain)
+                        if index < Self.ranges.count - 1 { Spacer() }
+                    }
+                }
+            }
+            .frame(maxWidth: 360)
+            Spacer()
+        }
     }
 
     /// "claude-haiku-5-5" → "Haiku".

@@ -15,6 +15,7 @@ The dashboard window: pages Home, Calendar, Study, History, Routines, Alarms, No
 - Cards: 16 pt continuous corners, 1 pt line, 18 pt padding; side-by-side cards use `stretch: true` + `.fixedSize(horizontal: false, vertical: true)` to end level.
 - IB subject colours (`SubjectGroup`): language blue, acquisition teal, societies gold, sciences green, maths violet, arts pink, core slate; personal events orange; deadlines red.
 - Calendar: tinted blocks with a coloured edge, weekends hidden when empty, alarms as a small line, right rail (details, Due soon, subject key) when wide.
+- Usage: a slider under the title picks 7, 14, 30 or 90 days (`usageRange`); charts cover whole days from midnight and are clipped, so no bar sits outside the plot.
 - Verify with `Joe --snapshot <page> file.png 1280 820 [dark]` and look at the image; a tiling script (Swift, AppKit) makes contact sheets.
 
 ## Known issues / to-do

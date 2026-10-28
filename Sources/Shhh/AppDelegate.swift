@@ -176,6 +176,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         answerPanel.holdOpen(for: 10)
     }
 
+    /// A focus block ran out (the chime has played): "Block done" out loud, and a 3-question check
+    /// on it offered on the card ("yes" starts it on the whiteboard), or in a toast when Joe's busy.
+    private func focusBlockDone(_ block: FocusSession.Ended) {
+        quizOffer = (title: block.title, subject: block.subject, at: Date())
+        let card = "**\(block.title)**: \(block.minutes) minutes done" + (block.ticked ? ", ticked in Week.md." : ".")
+            + "\n\nWant a quick 3-question check on it? Say \"yes\" (or \"not now\")."
+        let spoken = "Block done. Want a quick 3-question check on \(block.title)?"
+        let question = "Block done: \(block.title)"
+        guard state == .idle, !answerPanel.isVisible, !alarms.isRinging, !studyBoard.isTakingAnswers else {
+            toast.show("Block done: \(block.title). Say \"yes\" for a 3-question check", symbol: "checkmark.circle.fill", tint: .orange)
+            if state == .idle, !alarms.isRinging, !speech.isSpeaking {
+                if SpeechOutput.engine == .off { speech.useForThisReply(.lifelike) }
+                speech.update("Block done.")
+                speech.finish()
+            }
+            return
+        }
+        let task = newTask()
+        focused = task
+        answerPanel.reset()
+        if SpeechOutput.engine == .off {
+            // The voice is off: only "Block done", as the end-of-block signal.
+            showLocalAnswer(StudyLoop.Reply(subject: question, card: card, spoken: ""), question: question, in: task)
+            speech.useForThisReply(.lifelike)
+            speech.update("Block done.")
+            speech.finish()
+        } else {
+            showLocalAnswer(StudyLoop.Reply(subject: question, card: card, spoken: spoken), question: question, in: task)
+        }
+        answerPanel.holdOpen(for: 15)
+    }
+
+    /// The answer to a focus block's quiz offer, within 15 minutes: "yes" (or "quiz me") opens the
+    /// whiteboard on a 3-question check of the block; "not now" drops it. Anything else: false.
+    private func answerQuizOffer(_ text: String) -> Bool {
+        guard let offer = quizOffer else { return false }
+        guard Date().timeIntervalSince(offer.at) < 900 else { quizOffer = nil; return false }
+        let said = text.lowercased().replacingOccurrences(of: "’", with: "'")
+            .replacingOccurrences(of: #"[^a-z' ]"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\b(joe|please|thanks|thank you)\b"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        if said.range(of: #"^(no|nope|nah|not now|later|maybe later|skip|skip it|no thanks|no thank you)$"#, options: .regularExpression) != nil {
+            quizOffer = nil
+            toast.show("No quiz this time", symbol: "checkmark.circle", tint: .green)
+            return true
+        }
+        guard said.range(of: #"^((ok|okay|yes|yeah|yep|yup|sure|alright)( sure| go| let's go| let's do it| do it)?|go|go on|go ahead|let's go|let's do it|do it|quiz me|test me|start the quiz|start quiz|let's do the quiz)$"#,
+                         options: .regularExpression) != nil else { return false }
+        quizOffer = nil
+        let subject = StudyBoard.subject(in: offer.title + " " + (offer.subject ?? ""))
+            ?? offer.subject
+            ?? UserDefaults.standard.string(forKey: "lastStudySubject")
+            ?? Profile.subjects.components(separatedBy: ",").first?.trimmingCharacters(in: .whitespaces) ?? "Economics"
+        studyBoard.show(subject: subject, request: "Quick 3-question check on \(offer.title)", mode: .quiz)
+        return true
+    }
+
     /// Joe at the notch, saying a line out loud: for the tour, with no conversation behind it.
     private func greetAtNotch(_ subject: String, _ line: String) {
         guard state == .idle else { return }
@@ -219,6 +277,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var focused: AssistantTask?
     /// The morning briefing's conversation, held open for a moment when it's ready.
     private var briefing: AssistantTask?
+    /// The 3-question check offered when a focus block ran out: "yes" within 15 minutes starts it.
+    private var quizOffer: (title: String, subject: String?, at: Date)?
 
     private var statusItem: NSStatusItem!
     private var state: State = .idle {
@@ -339,6 +399,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard alarm.title.hasPrefix("Focus"), Assistant.vaultURL != nil else { return }
             self?.startInBackground("[Focus session over: \(alarm.title).] In one or two short lines: well done, and ask me what I finished so you can tick it in my Daybook.")
         }
+        // Focus mode ("start my block"): its countdown in the side notch, and the end of the block.
+        FocusSession.shared.onChange = { [weak self] in self?.refreshShelf() }
+        FocusSession.shared.onNotice = { [weak self] text in self?.toast.show(text, symbol: "timer", tint: .orange) }
+        FocusSession.shared.onFinished = { [weak self] block in self?.focusBlockDone(block) }
+        Task.detached(priority: .background) { _ = FocusShortcuts.available() } // read once, so the card can say
         // Memory: the voices go after ten quiet minutes; compiled models from old builds after a week.
         let trim = Timer(timeInterval: 60, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.speech.trimMemory() } }
         RunLoop.main.add(trim, forMode: .common)
@@ -415,6 +480,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         shelf.onStop = { [weak self] id in
             guard let self else { return }
+            if id == FocusSession.shared.id { FocusSession.stop(); return }
             if self.alarms.pending.contains(where: { $0.id == id }) { self.alarms.cancel(id: id); return }
             guard let task = self.tasks.first(where: { $0.id == id }) else { return }
             self.end(task)
@@ -519,6 +585,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// anything else to Joe, with its card at the notch).
     private func askTyped(_ text: String, screenshot: Data? = nil) {
         if let request = AlarmRequest.parse(text) { alarms.handle(request); return }
+        if answerQuizOffer(text) { return }
+        if screenshot == nil, let request = FocusRequest.parse(text) {
+            if let current = focused { sendToBackground(current) }
+            let task = newTask()
+            focused = task
+            answerPanel.reset()
+            showLocalAnswer(FocusSession.handle(request), question: text, in: task)
+            return
+        }
         if openStudy(text) { return }
         if screenshot == nil, openPen(text) { return }
         if screenshot == nil, let intent = StudyIntent.parse(text), let reply = intent.run() {
@@ -1216,11 +1291,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let shown = alarms.pending.filter { alarm in
             style == "off" ? false : style == "soon" ? alarm.kind == .timer || alarm.fireAt.timeIntervalSinceNow < 3600 : true
         }
-        let alarmItems = shown.map { alarm in
+        // A focus block first: its countdown is what the capsule shows.
+        let focus = FocusSession.shared
+        var alarmItems: [TaskShelf.Item] = shown.map { alarm in
             let seconds = Int(alarm.fireAt.timeIntervalSinceNow.rounded())
             let label = alarm.kind == .alarm || seconds >= 3600 ? alarm.when
                 : String(format: "%d:%02d", max(0, seconds) / 60, max(0, seconds) % 60)
             return TaskShelf.Item(id: alarm.id, question: "\(label) · \(alarm.title)", state: .alarm)
+        }
+        if focus.isRunning {
+            let label = "\(focus.clock) · \(focus.isPaused ? "Paused" : "Focus"): \(focus.title)"
+            alarmItems.insert(TaskShelf.Item(id: focus.id, question: label, state: .alarm), at: 0)
         }
         guard tasks.contains(where: { $0 !== focused }) else {
             shelf.update(alarmItems)
@@ -1535,6 +1616,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // The whiteboard in front: this is their answer to its question.
                 if studyBoard.isTakingAnswers {
                     studyBoard.answer(byVoice: text)
+                    return
+                }
+                // "Yes" to the 3-question check offered when a focus block ran out.
+                if answerQuizOffer(text) {
+                    if task.question.isEmpty || task.question.hasPrefix("Block done") { end(task) }
+                    return
+                }
+                // "Start my block", "focus on Paper 2 for 50 min", "stop focus": focus mode, done here.
+                if let request = FocusRequest.parse(text) {
+                    let reply = FocusSession.handle(request)
+                    if followingUp {
+                        toast.show(reply.subject, symbol: "timer", tint: .orange) // the card's conversation stays as it was
+                    } else {
+                        showLocalAnswer(reply, question: text, in: task)
+                        asked = true
+                    }
                     return
                 }
                 if openStudy(text) { return }

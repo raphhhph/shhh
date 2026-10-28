@@ -287,6 +287,12 @@ enum CommandLineTool {
             guard let reply = intent.run() else { print("\(intent.route): couldn't settle it here, so it goes to Claude."); exit(0) }
             print("\(intent.route)\n\(reply.subject)\n\(reply.card)\n\nSpoken: \(reply.spoken)")
             exit(0)
+        case ("--focus-preview", 2...3):
+            // Joe --focus-preview "<request>" [<vault>]: what a focus request would start (title, minutes, the Plan
+            // block, whether the "Joe Focus On" shortcut exists, the music), without starting anything.
+            if args.count > 2 { useFolder(args[2]) }
+            print(FocusPlan.preview(args[1]))
+            exit(0)
         case ("--mark-done", 2...3):
             // Joe --mark-done "<title>" [<vault>]: ticks it in the Daybook, Week.md and its project milestone, and adds it to Done.md.
             if args.count > 2 { useFolder(args[2]) }
@@ -315,6 +321,7 @@ enum CommandLineTool {
             for request in args.dropFirst() {
                 var route = MainActor.assumeIsolated { Assistant.needsStrongModel(request) } ? "Claude (Opus)" : "Claude (Haiku)"
                 if AlarmRequest.parse(request) != nil { route = "alarm" }
+                else if let focus = FocusRequest.parse(request) { route = focus.route }
                 else if Spotify.command(in: request) != nil { route = "Spotify" }
                 else if PromptPolish.request(in: request) != nil { route = "prompt rewrite (dictation)" }
                 else if let intent = StudyIntent.parse(request) { route = intent.route }

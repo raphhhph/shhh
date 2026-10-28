@@ -28,6 +28,49 @@ enum Daybook {
         }
     }
 
+    /// The routines Joe runs by itself (Evening check at 19:30, Night shutdown at 21:30) and a study
+    /// one, written into Routines.md when it lacks them, so they work on a new student's Mac with no
+    /// setup. A routine already there under that name is never touched, and each is added once: one
+    /// they deleted stays deleted.
+    static func addDefaultRoutines() {
+        guard let url = routinesURL else { return }
+        let added = Set(UserDefaults.standard.stringArray(forKey: "defaultRoutinesAdded") ?? [])
+        let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        let headings = existing.components(separatedBy: "\n").filter { $0.hasPrefix("## ") }.map { $0.dropFirst(3).lowercased() }
+        let missing = defaultRoutines.filter { routine in
+            !added.contains(routine.name) && !headings.contains { $0.contains(routine.name.lowercased()) }
+        }
+        UserDefaults.standard.set(Array(added.union(defaultRoutines.map { $0.name })), forKey: "defaultRoutinesAdded")
+        guard !missing.isEmpty else { return }
+        var text = existing.isEmpty ? "# Routines\n\nSay a routine's phrase and Joe runs it. Ask Joe to change one any time.\n" : existing
+        for routine in missing { text += (text.hasSuffix("\n") ? "\n" : "\n\n") + "## \(routine.name)\n" + routine.body + "\n" }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? text.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private static let defaultRoutines: [(name: String, body: String)] = [
+        ("Evening check", """
+            Say “evening check” or “what's due”. Joe also runs it by himself at 19:30.
+            1. Look at the school calendar (ManageBac) and school email for anything due in the next three days, and anything new since yesterday.
+            2. Put each deadline under Deadlines in tomorrow's Daybook, with one concrete next step under Backlog for anything that needs work tonight or tomorrow.
+            3. Flag anything due tomorrow that isn't started.
+            4. Say in two or three lines what's due and what to do tonight, most urgent first.
+            """),
+        ("Night shutdown", """
+            Say “night shutdown” or “I'm going to bed”. Joe also runs it by himself at 21:30 before a school day.
+            1. Say what's left of today's five, and move it to tomorrow's Daybook.
+            2. Tomorrow: the first class and its time, anything due, and anything to bring (PE kit, calculator for a test, a signed form).
+            3. Check there's a wake-up alarm for tomorrow morning. If there isn't, suggest one about an hour before the first class and set it when I say yes.
+            4. Say goodnight in one line.
+            """),
+        ("Study session", """
+            Say “let's study”, “focus time” or “study session”.
+            1. Pick the most urgent task in the Daybook (the nearest deadline first) and say which one in one line.
+            2. Set a 25-minute timer titled “Focus: <the task>”.
+            3. Open what it needs: the note, the document or the ManageBac task.
+            """),
+    ]
+
     /// "Remember conversations": each request and the gist of its answer go in a monthly log.
     static var remembers: Bool {
         get { UserDefaults.standard.object(forKey: "rememberConversations") as? Bool ?? true }

@@ -75,14 +75,14 @@ enum AlarmStore {
         save(load() + [alarm])
     }
 
-    /// Cancels the ones whose title contains `words` (all of them for nil). Returns how many.
-    @discardableResult
     /// A wake-up challenge alarm in its last hour: it can't be cancelled, only solved. Otherwise,
     /// half asleep, "cancel my alarm" at 7:27 beat the 7:30 challenge (it happened).
     static func isLocked(_ alarm: Alarm) -> Bool {
         WakeChallenge.applies(to: alarm) && alarm.fireAt.timeIntervalSinceNow < 3600 && alarm.fireAt > Date()
     }
 
+    /// Cancels the ones whose title contains `words` (all of them for nil). Returns how many.
+    @discardableResult
     static func cancel(matching words: String?, kind: Alarm.Kind? = nil) -> Int {
         let all = load()
         let keep = all.filter { alarm in
@@ -217,7 +217,9 @@ enum AlarmRequest {
                 var date = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day) ?? now
                 if date <= now {
                     // "at 7" at 3 pm means 7 pm; otherwise the same time tomorrow.
-                    if meridiem == nil, hour < 12, let evening = calendar.date(byAdding: .hour, value: 12, to: date), evening > now {
+                    // Not for a wake-up or a repeating alarm: "an alarm for 7 every school day" is 7 am.
+                    let morning = kind == .alarm && text.range(of: #"\bwake\b|\bevery\b|\bdaily\b|weekdays?\b|school day|\bmornings?\b"#, options: .regularExpression) != nil
+                    if meridiem == nil, hour < 12, !morning, let evening = calendar.date(byAdding: .hour, value: 12, to: date), evening > now {
                         date = evening
                     } else {
                         date = calendar.date(byAdding: .day, value: 1, to: date) ?? date
@@ -258,7 +260,8 @@ enum AlarmRequest {
         rest = rest.replacingOccurrences(of: #"^(i need to|i have to|i've got to|i gotta|that i need to|that i have to)\s+"#, with: "", options: .regularExpression)
             .trimmingCharacters(in: CharacterSet.whitespaces.union(.punctuationCharacters))
         rest = rest.replacingOccurrences(of: #"^(i need to|i have to|i've got to|i gotta|that i need to|that i have to)\s+"#, with: "", options: .regularExpression)
-        let fallback = ["alarm": "Alarm", "timer": "Timer", "reminder": "Reminder"][kind.rawValue]!
+        // "Wake me up at 2" is a wake-up, so it gets the challenge at any hour (it needs "wake" in the title).
+        let fallback = trimmed.hasPrefix("wake me") ? "Wake up" : ["alarm": "Alarm", "timer": "Timer", "reminder": "Reminder"][kind.rawValue]!
         // In their own capitals ("Call Ammiel", "the EE form"), when it's word for word in what they said.
         if let original = request.range(of: rest, options: .caseInsensitive) { rest = String(request[original]) }
         let title = rest.isEmpty ? fallback : rest.prefix(1).uppercased() + rest.dropFirst()
@@ -352,8 +355,20 @@ final class AlarmClock {
         guard let challenge = model.challenge else { return false }
         model.heard = heard
         if challenge.check(heard) {
+            // A "questions" alarm wants two right answers before it stops.
+            if questionsLeft > 1 {
+                questionsLeft -= 1
+                model.challenge = challenge.another()
+                model.feedback = "Right. One more."
+                model.heard = nil
+                DispatchQueue.main.async { [weak self] in self?.fitPanel() }
+                quiet(false)
+                return false
+            }
             model.challenge = nil
+            let streak = Self.countWakeUp(snoozed: snoozedThisMorning)
             stop()
+            if streak > 1 { onNotice("Up on the first ring \(streak) mornings in a row") }
             onWokeUp()
             return true
         }
@@ -367,6 +382,27 @@ final class AlarmClock {
     }
 
     private var misses = 0
+    /// Right answers still needed before the ringing challenge stops it.
+    private var questionsLeft = 0
+
+    /// An alarm titled with "questions" ("Wake up: school questions") is stopped only by answering
+    /// questions from their subjects, two of them, never by reading a verse or a fact.
+    static func wantsQuestions(_ alarm: Alarm) -> Bool {
+        alarm.title.range(of: #"\bquestions?\b|\bquiz\b"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// Mornings in a row the challenge was passed without a snooze (a snooze starts it again).
+    /// Counted once a morning; a day with no wake-up alarm doesn't break it (weekends).
+    static func countWakeUp(snoozed: Bool, now: Date = Date()) -> Int {
+        let defaults = UserDefaults.standard
+        let today = now.formatted(.localDay)
+        var streak = defaults.integer(forKey: "wakeStreak")
+        guard defaults.string(forKey: "wakeStreakDay") != today else { return streak }
+        streak = snoozed ? 0 : streak + 1
+        defaults.set(today, forKey: "wakeStreakDay")
+        defaults.set(streak, forKey: "wakeStreak")
+        return streak
+    }
 
     /// An alarm stopped by the user (not snoozed, not missed): for a focus timer's wrap-up.
     var onStopped: (Alarm) -> Void = { _ in }
@@ -408,8 +444,18 @@ final class AlarmClock {
         AlarmStore.save(known)
         modified = (try? AlarmStore.url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
         stayAwake(!known.isEmpty)
+        // The Mac was asleep through it (lid closed overnight): a 7:30 wake-up ringing at 14:00 with
+        // a challenge helps nobody, so one that's long past only says it was missed.
+        if Date().timeIntervalSince(due.fireAt) > Self.tooLate {
+            onNotice("Missed while the Mac was asleep: \(due.title) (\(due.fireAt.formatted(date: .omitted, time: .shortened)))")
+            tick() // the next one, if it's due too
+            return
+        }
         ring(due)
     }
+
+    /// How late an alarm may still ring (seconds).
+    static let tooLate: TimeInterval = 30 * 60
 
     /// A pending alarm keeps the Mac from idling to sleep and Shhh out of App Nap, so it rings on time.
     private func stayAwake(_ yes: Bool) {
@@ -447,7 +493,18 @@ final class AlarmClock {
         // A morning alarm only stops once they've read the verse or fact, or answered the question.
         let challenge = WakeChallenge.applies(to: alarm)
         // The second alarm of a morning gets a different challenge from the first.
-        model.challenge = challenge ? WakeChallenge.today(seed: WakeChallenge.nextRing()) : nil
+        if challenge {
+            let seed = WakeChallenge.nextRing()
+            var next = WakeChallenge.today(seed: seed)
+            // Back from a snooze, or a "questions" alarm: a question to answer, not something to read half asleep.
+            let questions = Self.wantsQuestions(alarm)
+            for extra in 1...2 where (snoozedThisMorning || questions) && next.kind != .question { next = WakeChallenge.today(seed: seed + extra) }
+            model.challenge = next
+            questionsLeft = questions ? 2 : 1
+        } else {
+            model.challenge = nil
+            questionsLeft = 0
+        }
         model.feedback = nil
         model.heard = nil
         model.canSnooze = !challenge || !snoozedThisMorning
@@ -474,6 +531,8 @@ final class AlarmClock {
 
     func stop(missed: Bool = false) {
         guard let alarm = ringing else { return }
+        // A challenge left to ring out ends the wake-up streak.
+        if missed, model.challenge != nil { UserDefaults.standard.set(0, forKey: "wakeStreak") }
         ringing = nil
         stopWork?.cancel()
         player.stop()
@@ -486,7 +545,15 @@ final class AlarmClock {
         resumeSpotify = false
         // A reminder that rang out stays on screen as a toast; an alarm nobody stopped says so.
         if missed { onNotice(alarm.kind == .reminder ? "\(alarm.title)" : "Missed: \(alarm.title) (\(alarm.when))") }
-        else if !snoozing { onStopped(alarm) }
+        else if !snoozing {
+            onStopped(alarm)
+            // A focus session (the Study session routine's 25 minutes) earns a 5-minute break, with a
+            // gentle nudge back at the end of it.
+            if alarm.kind == .timer, alarm.title.hasPrefix("Focus") {
+                AlarmStore.add(Alarm(fireAt: Date().addingTimeInterval(300), title: "Break over: back to it", kind: .reminder))
+                onNotice("Five-minute break. I'll nudge you when it's over")
+            }
+        }
         tick() // the next one, if it's due too
     }
 
@@ -506,6 +573,9 @@ final class AlarmClock {
         snoozing = false
         alarm.id = UUID()
         alarm.fireAt = Date().addingTimeInterval(Double(minutes) * 60)
+        // A one-off: the repeating alarm is already back in for tomorrow. Kept repeating, each snooze
+        // of a daily 7:30 left another daily alarm behind (7:35, then 7:40…).
+        alarm.repeats = nil
         AlarmStore.add(alarm)
         tick()
         onNotice("Snoozed \(minutes) min: \(alarm.title)")
@@ -638,9 +708,10 @@ private struct AlarmView: View {
                     }
                     HStack {
                         Text("Hold right ⌥, say it, let go").font(.system(size: 12)).foregroundStyle(Color.white.opacity(0.45))
-                        Spacer()
+                            .lineLimit(1).minimumScaleFactor(0.8)
+                        Spacer(minLength: 8)
                         if model.canSnooze {
-                            Button("Snooze 5 min (once)", action: model.onSnooze).buttonStyle(AlarmButton(prominent: false))
+                            Button("Snooze 5 min (once)", action: model.onSnooze).buttonStyle(AlarmButton(prominent: false)).focusEffectDisabled()
                         }
                     }
                 }
@@ -648,9 +719,10 @@ private struct AlarmView: View {
             } else {
                 HStack(spacing: 10) {
                     Text("Say “stop” or “snooze”").font(.system(size: 12)).foregroundStyle(Color.white.opacity(0.45))
-                    Spacer()
-                    Button("Snooze 5 min", action: model.onSnooze).buttonStyle(AlarmButton(prominent: false))
-                    Button("Stop", action: model.onStop).buttonStyle(AlarmButton(prominent: true))
+                        .lineLimit(1).minimumScaleFactor(0.8)
+                    Spacer(minLength: 8)
+                    Button("Snooze 5 min", action: model.onSnooze).buttonStyle(AlarmButton(prominent: false)).focusEffectDisabled()
+                    Button("Stop", action: model.onStop).buttonStyle(AlarmButton(prominent: true)).focusEffectDisabled()
                 }
                 .padding(.horizontal, 16).padding(.vertical, 14)
             }
@@ -670,11 +742,15 @@ private struct AlarmButton: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 14, weight: .semibold))
+            .lineLimit(1)
+            .fixedSize() // never squeezed by the hint beside it, which cut off the capsule's right edge
             .foregroundStyle(prominent ? Color.white : Color.white.opacity(0.7))
             .padding(.horizontal, 18)
             .frame(height: 34)
             .background {
-                if prominent { Capsule().fill(Color.orange) } else { Capsule().strokeBorder(Color.white.opacity(0.2), lineWidth: 1) }
+                // A soft fill rather than an outline: the outlined capsule drew stray vertical ticks at
+                // both ends where its straight sides meet the arcs.
+                Capsule().fill(prominent ? Color.orange : Color.white.opacity(0.12))
             }
             .opacity(configuration.isPressed ? 0.75 : 1)
             .contentShape(Capsule())

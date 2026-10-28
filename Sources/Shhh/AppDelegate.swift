@@ -243,6 +243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ModelDownloads.apply() // Hugging Face or the China mirror, before any model loads
+        Daybook.addDefaultRoutines() // the routines Joe runs by himself, on a new Mac too
         // Stopped while a model was downloading or loading last time: an unfinished download carries
         // on, a broken one starts over (ModelGuard decides).
         if let broken = ModelGuard.recoverFromCrash() {
@@ -1008,6 +1009,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         task.beginTurn("Night shutdown")
         answerPanel.beginTurn(question: "Night shutdown")
         if SpeechOutput.speakBriefing, SpeechOutput.engine == .off { speech.useForThisReply(.lifelike) }
+        Daybook.addDefaultRoutines()
         task.assistant.ask("[Night shutdown: it's \(now.formatted(date: .omitted, time: .shortened)).] Run my Night shutdown routine.")
     }
 
@@ -1093,6 +1095,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
               CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!) < 300
         else { return }
         UserDefaults.standard.set(today, forKey: "lastEveningCheck")
+        Daybook.addDefaultRoutines()
         startInBackground("[Evening check, \(now.formatted(date: .omitted, time: .shortened)).] Run my Evening check routine.")
     }
 
@@ -1928,6 +1931,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate()
         if panel.runModal() == .OK, let url = panel.url {
             Assistant.vaultURL = url
+            Daybook.addDefaultRoutines()
         }
     }
 

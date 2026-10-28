@@ -1163,7 +1163,8 @@ final class Session {
         (use \\n for new paragraphs), and --tab click "<words>" <uid> clicks a button, link or checkbox. Read again after \
         each click. This is the first choice for anything on a site they're signed in to, such as a ManageBac CAS \
         reflection: open it with --tab open if it isn't open, read, fill, tick, then click the save button (Joe asks \
-        them before it submits). Don't give up and offer a note instead: if one route fails, use this one.\(JoeBrowser.isReady ? Assistant.joeBrowserNotes : "")
+        them before it submits). If it says the browser doesn't let Joe work in pages yet, run --tab allow-js with that \
+        browser (Joe asks them first) and carry on. Don't give up and offer a note instead: if one route fails, use this one.\(JoeBrowser.isReady ? Assistant.joeBrowserNotes : "")
         When a connected account and the browser can both do something, use the account: it's much faster.\(ScreenControl.isEnabled ? Assistant.controlRules : "")\(music)\(alarms)\(messages)\(slides)\(Assistant.schoolWork)\(StudyBuddy.instructions)\(files)\(memory)\(habits)\(Assistant.personality)
 
         \(permissions) If they decline, don't retry it. Write emails as Gmail drafts unless they clearly \
@@ -1451,6 +1452,10 @@ struct ToolPolicy {
         case "Bash" where Self.shellWords(input["command"] as? String ?? "").map({
             $0.count >= 4 && $0[0] == Bundle.main.executablePath && $0[1] == "--tab" && ["fill", "click"].contains($0[2]) }) == true:
             return tabAction(Self.shellWords(input["command"] as? String ?? "") ?? [])
+        case "Bash" where Self.shellWords(input["command"] as? String ?? "").map({
+            $0.count >= 3 && $0[0] == Bundle.main.executablePath && $0[1] == "--tab" && $0[2] == "allow-js" }) == true:
+            // Quits and reopens their browser: always asks.
+            return Action(key: "tab:allow-js", verdict: .ask, title: "Restart your browser once so Joe can fill in pages (your tabs come back)")
         case "Bash" where Self.shellWords(input["command"] as? String ?? "").map({
             $0.count >= 2 && $0[0] == Bundle.main.executablePath && ["--pdf-find", "--pdf-text", "--prereading", "--tab", "--browser", "--workspace", "--workspace-reset", "--spotify", "--alarm", "--slides", "--recap", "--plan", "--math-pdf", "--whatsapp", "--calendar-link"].contains($0[1]) }) == true:
             return Action(key: "shhh-tools", verdict: .allow, title: "Use Joe's tools")

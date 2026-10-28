@@ -20,6 +20,7 @@ enum BrowserTabs {
         case "read" where arguments.count >= 2: return read(arguments[1])
         case "fill" where arguments.count >= 4: return fill(arguments[1], arguments[2], arguments[3...].joined(separator: " "))
         case "click" where arguments.count >= 3: return click(arguments[1], arguments[2])
+        case "allow-js": return allowJavaScriptByRestart(arguments.count >= 2 ? arguments[1...].joined(separator: " ") : "Vivaldi")
         default: return "Use: --tab open <url>… | list | find \"<words>\" | show \"<words>\" | read \"<words>\" | fill \"<words>\" <uid> \"<text>\" | click \"<words>\" <uid>"
         }
     }
@@ -150,7 +151,7 @@ enum BrowserTabs {
         let result = evaluate(source)
         if case .failure(let error) = result, error.message.lowercased().contains("javascript through applescript is turned off") {
             guard allowJavaScript(in: tab.browser) else {
-                return .failure(ScriptError(code: 0, message: "\(tab.browser) doesn't let apps run JavaScript yet. Turn on \(tab.browser == "Vivaldi" ? "Tools > Allow JavaScript from Apple Events" : "View > Developer > Allow JavaScript from Apple Events") once, then try again."))
+                return .failure(ScriptError(code: 0, message: "\(tab.browser) doesn't let Joe work in pages yet (it has no menu item for it). Ask the user once, then run --tab allow-js \(tab.browser): it quits \(tab.browser), turns the setting on and reopens it with their tabs."))
             }
             return evaluate(source)
         }
@@ -171,6 +172,59 @@ enum BrowserTabs {
             if script(source) != nil { return true }
         }
         return false
+    }
+
+    /// Where each browser keeps its profile's Preferences (under Application Support).
+    private static let preferences = ["Vivaldi": "Vivaldi/Default", "Google Chrome": "Google/Chrome/Default",
+                                      "Brave Browser": "BraveSoftware/Brave-Browser/Default", "Microsoft Edge": "Microsoft Edge/Default",
+                                      "Arc": "Arc/User Data/Default"]
+
+    /// `--tab allow-js <browser>`: for browsers with no menu item for it (Vivaldi), quits the
+    /// browser, sets Chromium's allow_javascript_apple_events in its Preferences (with a backup
+    /// beside it), and reopens it. Tabs that don't come back by themselves are reopened.
+    private static func allowJavaScriptByRestart(_ name: String) -> String {
+        guard let browser = chromium.first(where: { $0.name.lowercased().hasPrefix(name.lowercased()) }),
+              let folder = preferences[browser.name] else { return "Use: --tab allow-js Vivaldi | Google Chrome | Brave Browser | Microsoft Edge | Arc" }
+        let file = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(folder).appendingPathComponent("Preferences")
+        guard FileManager.default.fileExists(atPath: file.path) else { return "Couldn't find \(browser.name)'s settings." }
+        let before = tabs().tabs.filter { $0.browser == browser.name }.map(\.url)
+        // Quit the way the user would, so it saves its session; never forced.
+        if !NSRunningApplication.runningApplications(withBundleIdentifier: browser.id).isEmpty {
+            _ = script("tell application \"\(browser.name)\" to quit")
+            let deadline = Date().addingTimeInterval(20)
+            while !NSRunningApplication.runningApplications(withBundleIdentifier: browser.id).isEmpty, Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.5)
+            }
+            guard NSRunningApplication.runningApplications(withBundleIdentifier: browser.id).isEmpty else {
+                return "\(browser.name) didn't quit (a dialog may be asking something). Nothing was changed."
+            }
+        }
+        var failure: String?
+        do {
+            let data = try Data(contentsOf: file)
+            guard var json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw CocoaError(.fileReadCorruptFile) }
+            var settings = json["browser"] as? [String: Any] ?? [:]
+            settings["allow_javascript_apple_events"] = true
+            json["browser"] = settings
+            let backup = file.deletingLastPathComponent().appendingPathComponent("Preferences.joe-backup")
+            try? FileManager.default.removeItem(at: backup)
+            try FileManager.default.copyItem(at: file, to: backup)
+            try JSONSerialization.data(withJSONObject: json).write(to: file, options: .atomic)
+        } catch {
+            failure = "Couldn't change \(browser.name)'s settings: \(error.localizedDescription)"
+        }
+        // Back as it was, with its tabs.
+        if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: browser.id) {
+            let done = DispatchSemaphore(value: 0)
+            NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration()) { _, _ in done.signal() }
+            _ = done.wait(timeout: .now() + 10)
+            Thread.sleep(forTimeInterval: 5)
+            let now = Set(tabs().tabs.filter { $0.browser == browser.name }.map(\.url))
+            let missing = before.filter { !now.contains($0) && $0.hasPrefix("http") }
+            if !missing.isEmpty { _ = open(missing) }
+        }
+        return failure ?? "\(browser.name) restarted with JavaScript from Apple Events on: Joe can now read and fill its pages."
     }
 
     /// The page's text and every visible field, button and link, each tagged with a uid for fill

@@ -530,11 +530,8 @@ enum Daybook {
     private static func studyPlan(_ deadlines: [CalendarFeed.Item], _ now: Date, busy: [(Date, Date)] = []) -> [String] {
         let calendar = Calendar.current
         guard let fortnight = calendar.date(byAdding: .day, value: 14, to: now) else { return [] }
-        let sorted = deadlines.filter { $0.start > now && $0.start < fortnight && Assessment.needsStudy($0) }.sorted { a, b in
-            let dayA = calendar.startOfDay(for: a.start), dayB = calendar.startOfDay(for: b.start)
-            if dayA != dayB { return dayA < dayB }
-            return isWeighty(a) && !isWeighty(b)
-        }
+        let sorted = deadlines.filter { $0.start > now && $0.start < fortnight && Assessment.needsStudy($0) }
+            .sorted(by: Assessment.plannedBefore)
         // What's really due by the end of tomorrow comes first, then a project milestone that's
         // overdue or due by then (its date is the student's own), then the rest.
         let horizon = calendar.date(byAdding: .day, value: 2, to: calendar.startOfDay(for: now)) ?? fortnight
@@ -544,14 +541,16 @@ enum Daybook {
         let later = sorted.filter { !soft($0) && $0.start >= horizon }
         let work = soon + late + later
         guard !work.isEmpty else { return [] }
-        // Two blocks for the most pressing one still due after the block, then one each; what's
+        // Two blocks for the most pressing one still due after the block when it's the only thing due by
+        // tomorrow, else one each (an exam first); what's
         // due before a block is skipped, not given it. A milestone from `late` gets one at most.
         var given: [String: Int] = [:]
         return freeBlocks(on: now, busy: busy).filter { $0.end > now }.compactMap { block -> String? in
             let upcoming = work.filter { $0.start > block.end }
             guard let first = upcoming.first(where: { !soft($0) }) ?? upcoming.first,
                   let item = upcoming.first(where: { candidate in
-                      let cap = soft(candidate) ? 1 : (candidate.id == first.id ? 2 : 1)
+                      let alone = upcoming.filter { !soft($0) && $0.start < horizon }.count <= 1
+                      let cap = soft(candidate) ? 1 : (candidate.id == first.id && alone ? 2 : 1)
                       return (given[candidate.id] ?? 0) < cap
                   }) else { return nil }
             given[item.id, default: 0] += 1

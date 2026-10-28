@@ -23,10 +23,18 @@ final class AnswerPanel {
     private var leftAt: Date?
     var onClose: () -> Void = {}
     var onStopSpeaking: () -> Void = {}
+    /// A typed follow-up from the card's chips (Simpler, Example, Quiz me), in the same conversation.
+    var onFollowUp: (String) -> Void = { _ in }
 
     /// Whether Joe is reading the answer aloud (checked every second): the stop button.
     func setSpeaking(_ speaking: Bool) {
         if model.speaking != speaking { model.speaking = speaking }
+    }
+
+    /// Other tasks still running: shown on the card's band while it has the notch (the task band
+    /// steps aside for it).
+    func setBackground(_ count: Int) {
+        if model.background != count { model.background = count }
     }
 
     static let width: CGFloat = 480
@@ -37,7 +45,13 @@ final class AnswerPanel {
 
     var isVisible: Bool { panel.isVisible }
     /// Showing, as far as the app goes: false as soon as it starts tucking away.
-    private(set) var isShowing = false
+    private(set) var isShowing = false {
+        didSet { if isShowing != oldValue { onShowingChange(isShowing) } }
+    }
+    /// Whether the card hangs from the notch (rather than sitting at the bottom of the screen).
+    var isAtNotch: Bool { notch != nil }
+    /// The card coming up or going: the task band steps aside for it, as they share the notch.
+    var onShowingChange: (Bool) -> Void = { _ in }
     /// Whether the pointer is over the card (or the island), and when it last was: the card clears
     /// itself a while after the answer, unless it's being read.
     var isHovering: Bool { model.hovering }
@@ -161,7 +175,7 @@ final class AnswerPanel {
             model.islandOpen = false // back into the notch, then gone
             let work = DispatchWorkItem { panel?.orderOut(nil) }
             closeWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: work)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
             return
         }
         NSAnimationContext.runAnimationGroup({ $0.duration = 0.12; panel?.animator().alphaValue = 0 }) {
@@ -174,7 +188,7 @@ final class AnswerPanel {
     private func watchHover() {
         hoverTimer?.invalidate()
         let notch = self.notch
-        let timer = Timer(timeInterval: 0.08, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 0.04, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, self.panel.isVisible else { return }
                 let mouse = NSEvent.mouseLocation
@@ -226,6 +240,7 @@ final class AnswerPanel {
         panel = makePanel()
         model.onClose = { [weak self] in self?.onClose() }
         model.onStopSpeaking = { [weak self] in self?.onStopSpeaking() }
+        model.onFollowUp = { [weak self] in self?.onFollowUp($0) }
         // objectWillChange fires before the change lands: measure on the next turn.
         changes = model.objectWillChange.sink { [weak self] in
             DispatchQueue.main.async {
@@ -310,6 +325,8 @@ final class AnswerModel: ObservableObject {
 
     /// Joe is reading the answer out loud: the card shows a stop button.
     @Published var speaking = false
+    /// Other tasks still working, while the card covers the task band.
+    @Published var background = 0
     var onStopSpeaking: () -> Void = {}
 
     /// Whether there's something to show: the reply, an error, an action waiting for an OK, or just
@@ -330,6 +347,7 @@ final class AnswerModel: ObservableObject {
     var peek: Bool { !expanded && !listening && !seen && isDone && error == nil && !(subject ?? "").isEmpty }
 
     var onClose: () -> Void = {}
+    var onFollowUp: (String) -> Void = { _ in }
 }
 
 private struct AnswerView: View {
@@ -340,6 +358,7 @@ private struct AnswerView: View {
     /// At the notch, its size: the card is an island that comes out of it (see `Island`).
     let notch: CGSize?
     @State private var copied = false
+    @State private var saved = false
 
     var body: some View {
         if let notch, scrolls {
@@ -377,10 +396,13 @@ private struct AnswerView: View {
             // Outside the scrolling area, so it's never scrolled out of sight.
             if let approval = model.approval {
                 ApprovalView(approval: approval)
-            } else if notch == nil, model.isDone, model.canFollowUp {
-                Text("Hold right ⌥ to follow up")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+            } else if model.isDone, model.canFollowUp, !model.answer.isEmpty {
+                followUpChips
+                if notch == nil {
+                    Text("Or hold right ⌥ to follow up")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
             }
         }
         .padding(.horizontal, notch == nil ? 16 : 20)
@@ -390,6 +412,29 @@ private struct AnswerView: View {
         .frame(maxHeight: scrolls ? .infinity : nil, alignment: .top)
     }
 
+    /// What a student asks next most, one tap each, in the same conversation.
+    private static let followUps: [(label: String, symbol: String, request: String)] = [
+        ("Simpler", "wand.and.stars", "Explain that more simply, as if I'm new to it. Keep it short."),
+        ("Example", "lightbulb", "Give me one worked example of that, step by step."),
+        ("Quiz me", "checkmark.bubble", "Quiz me on that: three short questions, one at a time. Wait for my answer and mark it before the next."),
+    ]
+
+    private var followUpChips: some View {
+        HStack(spacing: 6) {
+            ForEach(Self.followUps, id: \.label) { item in
+                Button { model.onFollowUp(item.request) } label: {
+                    Label(item.label, systemImage: item.symbol)
+                        .font(.caption.weight(.medium))
+                        .padding(.horizontal, 10)
+                        .frame(height: 24)
+                        .background(Color.primary.opacity(0.08), in: Capsule())
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
     private var background: some View {
         RoundedRectangle(cornerRadius: 14).fill(.regularMaterial)
             .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
@@ -397,8 +442,7 @@ private struct AnswerView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: "sparkle")
-                .foregroundStyle(.orange)
+            JoeMark(size: 13)
             if let subject = model.subject, !subject.isEmpty {
                 Text(subject).font(.callout.weight(.semibold)).lineLimit(1)
             }
@@ -408,7 +452,7 @@ private struct AnswerView: View {
         .buttonStyle(.borderless)
     }
 
-    /// Stop Joe talking (while he is), copy (once the reply is done) and close.
+    /// Stop Joe talking (while he is), copy and save to notes (once the reply is done) and close.
     @ViewBuilder
     private var buttons: some View {
         if model.speaking {
@@ -424,7 +468,16 @@ private struct AnswerView: View {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
             }
             .help("Copy answer")
-            .onChange(of: model.answer) { copied = false }
+            .onChange(of: model.answer) { copied = false; saved = false }
+            if NoteSaver.root != nil {
+                Button {
+                    saved = NoteSaver.saveAnswer(model.answer, question: model.question, subject: model.subject) != nil
+                } label: {
+                    Image(systemName: saved ? "checkmark" : "square.and.arrow.down")
+                }
+                .help(saved ? "Saved to your notes" : "Save to notes")
+                .disabled(saved)
+            }
         }
         Button { model.onClose() } label: { Image(systemName: "xmark") }
             .help("Close")
@@ -435,15 +488,23 @@ private struct AnswerView: View {
     /// and close while it's open.
     private func band(notch: CGSize) -> some View {
         HStack(spacing: 0) {
-            Image(systemName: "sparkle")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.orange)
+            JoeMark()
                 .frame(width: model.expanded ? nil : RecordingPanel.ear) // where it sits at rest
                 .opacity(model.listening ? 0 : 1) // the listening band's ✦ is the one showing
                 .animation(nil, value: model.listening)
             Spacer(minLength: notch.width) // behind the notch
             if model.expanded {
-                buttons.font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.8))
+                // Spaced like the header's, not packed against the edge.
+                HStack(spacing: 14) {
+                    if model.background > 0 {
+                        Text("\(model.background) more working")
+                            .font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.55))
+                            .lineLimit(1)
+                            .help("Close this card to see them at the notch")
+                    }
+                    buttons
+                }
+                .font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.8))
             } else if model.error != nil {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 13, weight: .semibold))
@@ -844,10 +905,10 @@ private struct Island<Band: View, PeekLine: View, Content: View>: View {
     @ViewBuilder let content: Content
     @State private var shown: CGFloat = 0
 
-    static var opening: Animation { .timingCurve(0.16, 1, 0.3, 1, duration: 0.46) }
-    static var closing: Animation { .timingCurve(0.5, 0, 0.75, 0, duration: 0.22) }
-    /// Following the reply as it streams: the same curve, quicker.
-    static var growing: Animation { .timingCurve(0.16, 1, 0.3, 1, duration: 0.32) }
+    static var opening: Animation { NotchShape.opening }
+    static var closing: Animation { NotchShape.closing }
+    /// Following the reply as it streams: the same spring, settling sooner.
+    static var growing: Animation { NotchShape.growing }
 
     var body: some View {
         GeometryReader { space in
@@ -858,15 +919,19 @@ private struct Island<Band: View, PeekLine: View, Content: View>: View {
                 : notch.width + 2 * RecordingPanel.ear
             let peeking = open && peek && !expanded
             let radius: CGFloat = !open ? min(10, notch.height / 3) : expanded ? 30 : peek ? 18 : 13
-            let shape = UnevenRoundedRectangle(bottomLeadingRadius: radius, bottomTrailingRadius: radius, style: .continuous)
-            let shapeHeight = max(shown, notch.height)
+            // Shoulders curving into the screen's top edge, like the iPhone's notch.
+            let shape = NotchShape(top: NotchShape.shoulder, bottom: radius)
+            // Closing: straight to tucked in, in the same pass as the width, so the middle doesn't trail
+            // the edges (`shown` only catches up a pass later).
+            let shapeHeight = open ? max(shown, notch.height) : notch.height - NotchShape.tuck
             let solid = min(1, (notch.height + 2) / max(shapeHeight, 1)) // where the notch ends
             content
                 .frame(width: AnswerPanel.width, height: space.size.height, alignment: .top)
                 .frame(width: space.size.width, height: space.size.height, alignment: .top)
                 .opacity(dropped ? 1 : 0)
-                .scaleEffect(dropped ? 1 : 0.97, anchor: .top)
-                .animation(listening ? nil : dropped ? .easeOut(duration: 0.2).delay(0.08) : .easeIn(duration: 0.1), value: dropped)
+                .scaleEffect(dropped ? 1 : 0.94, anchor: .top)
+                .blur(radius: dropped ? 0 : 6)
+                .animation(listening ? nil : dropped ? .easeOut(duration: 0.16).delay(0.04) : .easeIn(duration: 0.08), value: dropped)
                 .background(alignment: .top) {
                     ZStack {
                         Rectangle().fill(.ultraThinMaterial)
@@ -894,14 +959,14 @@ private struct Island<Band: View, PeekLine: View, Content: View>: View {
                     band
                         .frame(width: width, height: notch.height)
                         .opacity(open ? 1 : 0)
-                        .animation(open ? .easeOut(duration: 0.2).delay(0.08) : .easeIn(duration: 0.15), value: open)
+                        .animation(open ? .easeOut(duration: 0.14).delay(0.03) : .easeIn(duration: 0.08), value: open)
                 }
                 .overlay(alignment: .top) {
                     peekLine
                         .frame(width: width, height: AnswerPanel.peekHeight)
                         .offset(y: notch.height)
                         .opacity(peeking ? 1 : 0)
-                        .animation(listening ? nil : peeking ? .easeOut(duration: 0.2).delay(0.08) : .easeIn(duration: 0.1), value: peeking)
+                        .animation(listening ? nil : peeking ? .easeOut(duration: 0.14).delay(0.03) : .easeIn(duration: 0.08), value: peeking)
                 }
                 .mask(alignment: .top) { shape.frame(width: width, height: shapeHeight) }
                 .animation(listening ? nil : peek ? Self.opening : Self.closing, value: peek)
@@ -909,7 +974,7 @@ private struct Island<Band: View, PeekLine: View, Content: View>: View {
                 .animation(listening ? nil : expanded ? Self.opening : Self.closing, value: expanded)
                 .frame(width: space.size.width, height: space.size.height, alignment: .top)
         }
-        .onChange(of: open && (expanded || peek) ? height : notch.height, initial: true) { _, target in
+        .onChange(of: !open ? notch.height - NotchShape.tuck : expanded || peek ? height : notch.height, initial: true) { _, target in
             let dropping = shown <= notch.height + 1
             let tucking = target <= notch.height + 1
             if listening { shown = target; return } // folding for a follow-up: at once

@@ -158,24 +158,22 @@ private struct RestingView: View {
     let notchWidth: CGFloat
 
     var body: some View {
+        // Just Joe's ✦: the study block, what's overdue and the rest are in the hover overview
+        // (Raph, 28 Oct 2026: anything more in the band clashed with the listening band).
         ZStack {
-            UnevenRoundedRectangle(bottomLeadingRadius: model.open ? 13 : 10, bottomTrailingRadius: model.open ? 13 : 10,
-                                   style: .continuous)
+            NotchShape(top: NotchShape.shoulder, bottom: model.open ? 13 : 10)
                 .fill(Color.black)
                 .frame(width: model.open ? notchWidth + 2 * RestingNotch.ear : notchWidth)
+                .padding(.bottom, model.open ? 0 : NotchShape.tuck)
             HStack(spacing: 0) {
-                Image(systemName: "sparkle")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.orange)
-                    .frame(width: RestingNotch.ear)
+                JoeMark().frame(width: RestingNotch.ear)
                 Spacer()
             }
             .opacity(model.open ? 1 : 0)
-            .animation(model.open ? .easeOut(duration: 0.2).delay(0.08) : .easeIn(duration: 0.12), value: model.open)
+            .animation(model.open ? .easeOut(duration: 0.14).delay(0.03) : .easeIn(duration: 0.08), value: model.open)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .animation(model.open ? .timingCurve(0.16, 1, 0.3, 1, duration: 0.46) : .timingCurve(0.5, 0, 0.75, 0, duration: 0.22),
-                   value: model.open)
+        .animation(model.open ? NotchShape.opening : NotchShape.closing, value: model.open)
     }
 }
 
@@ -221,7 +219,7 @@ final class NotchGreeting {
 
     func hide() {
         model.open = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             MainActor.assumeIsolated { if self?.model.open == false { self?.panel?.orderOut(nil) } }
         }
     }
@@ -242,17 +240,91 @@ private struct GreetingView: View {
             VStack(spacing: 0) {
                 Color.clear.frame(height: notchHeight)
                 HStack(spacing: 9) {
-                    Image(systemName: "sparkle").font(.system(size: 13, weight: .semibold)).foregroundStyle(.orange)
+                    JoeMark()
                     Text(model.line).font(.system(size: 13.5, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .opacity(model.open ? 1 : 0)
-                .animation(model.open ? .easeOut(duration: 0.25).delay(0.15) : .easeIn(duration: 0.12), value: model.open)
+                .animation(model.open ? .easeOut(duration: 0.16).delay(0.05) : .easeIn(duration: 0.08), value: model.open)
             }
-            .frame(width: model.open ? geometry.size.width : band, height: model.open ? geometry.size.height : notchHeight)
-            .background(Color.black, in: UnevenRoundedRectangle(bottomLeadingRadius: 18, bottomTrailingRadius: 18, style: .continuous))
+            .frame(width: model.open ? geometry.size.width : band, height: model.open ? geometry.size.height : notchHeight - NotchShape.tuck)
+            .background(Color.black, in: NotchShape(top: NotchShape.shoulder, bottom: model.open ? 20 : 10))
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .animation(model.open ? .spring(response: 0.45, dampingFraction: 0.78) : .easeIn(duration: 0.25), value: model.open)
+            .animation(model.open ? NotchShape.opening : NotchShape.closing, value: model.open)
         }
+    }
+}
+
+/// The notch's own outline, like the iPhone's: a body with rounded bottom corners, and at the top
+/// two small inward curves ("shoulders") where it meets the edge of the screen, so it reads as
+/// part of the bezel rather than a box hung under it. Both radii animate.
+struct NotchShape: Shape {
+    var top: CGFloat
+    var bottom: CGFloat
+
+    /// The shoulders' size, the same on every band so they line up as one swaps for another.
+    static let shoulder: CGFloat = 10
+    /// How far a closed band sits inside the notch's bottom edge, so it finishes out of sight
+    /// behind the camera instead of leaving a notch-sized black piece until its window goes.
+    static let tuck: CGFloat = 5
+    /// One motion for everything that comes out of the notch, like the Dynamic Island: a spring
+    /// with a little give opening, a firmer, quicker one going back in.
+    static let opening = Animation.spring(response: 0.28, dampingFraction: 0.8)
+    static let closing = Animation.spring(response: 0.2, dampingFraction: 0.95)
+    /// Following content as it grows (an answer streaming in): the same spring, settling sooner.
+    static let growing = Animation.spring(response: 0.24, dampingFraction: 0.85)
+
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(top, bottom) }
+        set { top = newValue.first; bottom = newValue.second }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let top = min(top, rect.width / 4, rect.height / 2)
+        let bottom = min(bottom, (rect.width - 2 * top) / 2, max(0, rect.height - top))
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        // Left shoulder: from the screen edge, curving down into the body.
+        path.addQuadCurve(to: CGPoint(x: rect.minX + top, y: rect.minY + top), control: CGPoint(x: rect.minX + top, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX + top, y: rect.maxY - bottom))
+        path.addQuadCurve(to: CGPoint(x: rect.minX + top + bottom, y: rect.maxY), control: CGPoint(x: rect.minX + top, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.maxX - top - bottom, y: rect.maxY))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX - top, y: rect.maxY - bottom), control: CGPoint(x: rect.maxX - top, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.maxX - top, y: rect.minY + top))
+        // Right shoulder, back up to the screen edge.
+        path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY), control: CGPoint(x: rect.maxX - top, y: rect.minY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+/// Joe's logo, the four-pointed orange star from the app icon, drawn so it stays crisp at any
+/// size: points with softly pinched sides, a warm gradient and a faint glow. Used at the notch in
+/// place of the system ✦.
+struct JoeMark: View {
+    var size: CGFloat = 14
+
+    var body: some View {
+        JoeStar()
+            .fill(LinearGradient(colors: [Color(red: 1, green: 0.72, blue: 0.28), Color(red: 1, green: 0.52, blue: 0.06)],
+                                 startPoint: .top, endPoint: .bottom))
+            .frame(width: size, height: size)
+            .shadow(color: Color.orange.opacity(0.55), radius: size * 0.22)
+    }
+}
+
+/// The star's outline: four points joined by curves pulled in toward the middle.
+struct JoeStar: Shape {
+    func path(in rect: CGRect) -> Path {
+        let c = CGPoint(x: rect.midX, y: rect.midY)
+        let pinch = min(rect.width, rect.height) * 0.1 // how far the sides are pulled in
+        var path = Path()
+        path.move(to: CGPoint(x: c.x, y: rect.minY))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX, y: c.y), control: CGPoint(x: c.x + pinch, y: c.y - pinch))
+        path.addQuadCurve(to: CGPoint(x: c.x, y: rect.maxY), control: CGPoint(x: c.x + pinch, y: c.y + pinch))
+        path.addQuadCurve(to: CGPoint(x: rect.minX, y: c.y), control: CGPoint(x: c.x - pinch, y: c.y + pinch))
+        path.addQuadCurve(to: CGPoint(x: c.x, y: rect.minY), control: CGPoint(x: c.x - pinch, y: c.y - pinch))
+        path.closeSubpath()
+        return path
     }
 }

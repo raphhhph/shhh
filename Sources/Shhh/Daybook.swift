@@ -7,8 +7,10 @@ import Foundation
 /// conversation log there is the assistant's memory of past days. Classes come from the saved
 /// timetable, worked out here rather than by Claude, so they're never misread.
 enum Daybook {
-    /// The folder the Daybook lives in: the vault's `Brain` (see `NoteSaver.root`).
-    static var root: URL? { NoteSaver.root }
+    /// The folder the Daybook lives in: the vault's `Brain` (see `NoteSaver.root`), or another one
+    /// given on the command line (`--daybook-preview <vault>`), for testing against a copy.
+    static var root: URL? { rootOverride ?? NoteSaver.root }
+    static var rootOverride: URL?
     static var url: URL? { root?.appendingPathComponent("Daybook.md") }
     static var history: URL? { root?.appendingPathComponent("Daybook/History", isDirectory: true) }
     static var patterns: URL? { root?.appendingPathComponent("Daybook/Patterns.md") }
@@ -16,6 +18,8 @@ enum Daybook {
     /// The Google calendar ManageBac's feed is in (from the timetable's config).
     static var managebacCalendarID: String? { timetable?.config?.managebacCalendarId }
     static var routinesURL: URL? { root?.appendingPathComponent("Daybook/Routines.md") }
+    /// What they've said is done ("- 2026-10-27 · Taxes upload"), so a past deadline doesn't come back as overdue.
+    static var doneURL: URL? { root?.appendingPathComponent("Daybook/Done.md") }
 
     /// The routines in Routines.md: each `##` heading with the line under it (when to say it).
     static var routines: [String] {
@@ -251,9 +255,18 @@ enum Daybook {
     @discardableResult
     static func buildLocally(_ now: Date = Date()) -> Bool {
         guard let url, !isCurrent, !isLateNight, let text = localText(now) else { return false }
+        recordDone(from: lastNote(now))
         archiveIfOld()
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        return (try? text.write(to: url, atomically: true, encoding: .utf8)) != nil
+        let written = (try? text.write(to: url, atomically: true, encoding: .utf8)) != nil
+        if written { WeekPlan.replan(now) } // yesterday's unticked study blocks move on
+        return written
+    }
+
+    /// The last day's note: still today's file if it hasn't been archived yet.
+    private static func lastNote(_ now: Date) -> String {
+        let lastURL = (date.map { $0 < day(now) } ?? false) ? url : lastArchived
+        return lastURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
     }
 
     /// Today's Daybook from what Joe already has: classes from the timetable; today's events and
@@ -266,30 +279,91 @@ enum Daybook {
         guard root != nil else { return nil }
         let calendar = Calendar.current
         let start = calendar.startOfDay(for: now)
+        let today = day(now)
         let tomorrowEnd = calendar.date(byAdding: .day, value: 2, to: start) ?? now
         let ownCalendar = CalendarFeed.readsCalendarItself
-        let items = CalendarFeed.items(from: start, days: 21)
+        // From two weeks back, for what's overdue.
+        let pastStart = calendar.date(byAdding: .day, value: -14, to: start) ?? start
+        let all = CalendarFeed.items(from: pastStart, days: 35)
+        let items = all.filter { $0.start >= start }
         let deadlines = items.filter { $0.kind == .deadline }
         let events = items.filter { $0.kind == .event && calendar.isDate($0.start, inSameDayAs: now) }
 
-        // The last day's note: still today's if it hasn't been archived yet.
-        let lastURL = (date.map { $0 < day(now) } ?? false) ? url : lastArchived
-        let last = lastURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
-        let carried = section("Today's five", of: last).filter { $0.hasPrefix("- [ ]") }.map(carriedAgain)
-        let backlog = section("Backlog", of: last).filter { $0.hasPrefix("- ") && !$0.lowercased().hasPrefix("- [x]") }
+        let last = lastNote(now)
+        let done = doneTitles(last)
+        func isDone(_ title: String) -> Bool { done.contains { sameTask($0, title) } }
+
+        // A past deadline that isn't done: one task, with the one thing to do about it.
+        let manageBac = CalendarFeed.manageBacHome
+        let overdue = all.filter { $0.kind == .deadline && $0.start < start && !isDone($0.title) }.map { item -> (title: String, line: String) in
+            let since = item.start.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
+            let link = (item.url ?? manageBac).map { " ([Open ManageBac](\($0)))" } ?? ""
+            return (item.title, "- [ ] \(item.title) — overdue since \(since) · upload it\(link) / email the teacher / mark done"
+                + (item.subject.map { " · \($0)" } ?? ""))
+        }
+        func isOverdue(_ line: String) -> Bool { overdue.contains { sameTask($0.title, taskTitle(line)) } }
+
+        // Yesterday's unticked tasks; a project task goes once its milestone is ticked in the project note.
+        let openMilestones = IBProjects.openLabels()
+        let carried = section("Today's five", of: last).filter { $0.hasPrefix("- [ ]") && !isOverdue($0) }
+            .filter { line in !line.contains("· project") || openMilestones.contains { sameTask($0, taskTitle(line)) } }
+            .map(carriedAgain)
+            .map { line -> String in
+                // "due tomorrow" from yesterday is "due today" now: re-read it from the calendar.
+                guard let item = all.first(where: { $0.kind == .deadline && sameTask($0.title, taskTitle(line)) }),
+                      let range = line.range(of: #"— due [^·—]+"#, options: .regularExpression) else { return line }
+                return line.replacingCharacters(in: range, with: "— due \(when(item, now)) ")
+            }
         let inbox = section("Inbox", of: last).filter { $0.hasPrefix("- ") }
 
+        // Backlog, aged: stamped the first day it's seen, raised at a week with a decision to make,
+        // moved to Dropped (not deleted) at three weeks.
+        var backlog: [String] = []
+        var stale: [String] = []
+        var dropped = section("Dropped", of: last).filter { $0.hasPrefix("- ") }
+        for line in section("Backlog", of: last) where line.hasPrefix("- ") && !line.lowercased().hasPrefix("- [x]") && !isOverdue(line) {
+            let entry = stamped(line, today)
+            let age = daysOld(entry, now)
+            if age >= 21 {
+                dropped.append(entry + " · dropped \(today)")
+            } else if age >= 7, !entry.contains("decide:"), stale.count < 2 {
+                stale.append(checkbox(entry) + " — decide: do, schedule or drop")
+            } else {
+                backlog.append(entry)
+            }
+        }
+
+        // Each project's next milestone when it's this week or overdue (see IBProjects).
+        let projectTasks = IBProjects.dailyTasks(now).filter { task in !carried.contains { sameTask(taskTitle($0), taskTitle(task)) } }
+        backlog.removeAll { line in projectTasks.contains { sameTask(taskTitle($0), taskTitle(line)) } }
+
         // Due today or tomorrow, unless it's already a task: those come first.
-        let urgent = deadlines.filter { $0.start < tomorrowEnd }
+        let urgent = deadlines.filter { $0.start < tomorrowEnd && !isDone($0.title) }
             .filter { item in !carried.contains { CalendarFeed.sameThing($0, item.title) } }
             .map { "- [ ] \($0.title) — due \(when($0, now))" + ($0.subject.map { " · \($0)" } ?? "") }
-        let tasks = urgent + carried
-        let five = Array(tasks.prefix(5)), overflow = Array(tasks.dropFirst(5))
+        var tasks = urgent + overdue.prefix(3).map { $0.line } + projectTasks + carried + stale
+        let lateRest = overdue.dropFirst(3).map { $0.line }
+        // Never an empty list while the backlog has things in it: at least three, project lines and the oldest first.
+        if tasks.count < 3, !backlog.isEmpty {
+            let order = backlog.indices.sorted { a, b in
+                let projectA = backlog[a].contains("· project"), projectB = backlog[b].contains("· project")
+                if projectA != projectB { return projectA }
+                let ageA = daysOld(backlog[a], now), ageB = daysOld(backlog[b], now)
+                return ageA != ageB ? ageA > ageB : a < b
+            }
+            let picked = Array(order.prefix(3 - tasks.count))
+            tasks += picked.map { checkbox(backlog[$0]) }
+            backlog = backlog.indices.filter { !picked.contains($0) }.map { backlog[$0] }
+        }
+        let five = Array(tasks.prefix(5)), overflow = tasks.dropFirst(5).map { stamped($0, today) }
+        // A week-old backlog item that didn't make the five is asked about, not buried in Backlog.
+        let staleAsks = stale.filter { !five.contains($0) }.map { line in
+            "- \(taskTitle(line)) has waited \(daysOld(line, now)) days: do, schedule or drop?"
+        }
 
         let focus: String
         if let first = five.first {
-            let task = first.dropFirst(6).components(separatedBy: " — ")[0].components(separatedBy: " · carried")[0]
-            focus = "Get \(task) done."
+            focus = "Get \(taskTitle(first)) done."
         } else if let next = deadlines.first {
             focus = "Nothing urgent: get ahead on \(next.title), due \(when(next, now))."
         } else {
@@ -313,8 +387,8 @@ enum Daybook {
             "---",
             "summary: \"Their day on \(title): focus, five tasks, classes, deadlines, what needs a reply.\"",
             owns,
-            "date: \(day(now))",
-            "updated: \(day(now)) \(hhmm(now))",
+            "date: \(today)",
+            "updated: \(today) \(hhmm(now))",
             "---",
             "# Daybook — \(title)",
             "",
@@ -324,14 +398,99 @@ enum Daybook {
         ]
         lines += five.isEmpty ? ["Nothing carried over and nothing due today or tomorrow."] : five
         let busy = events.filter { !$0.allDay }.map { ($0.start, $0.end ?? $0.start.addingTimeInterval(3600)) }
-        let plan = studyPlan(deadlines, now, busy: busy)
+        // The project with the nearest milestone gets a block too.
+        let work = deadlines.filter { !isDone($0.title) } + (IBProjects.nearestMilestone(now).map { [$0] } ?? [])
+        let plan = studyPlan(work, now, busy: busy)
         if !plan.isEmpty { lines += ["", "## Plan"] + plan }
         lines += ["", "## Classes", classTable(on: now), "", "## Rest of today"] + rest
         lines += ["", "## Deadlines"] + due
-        lines += ["", "## Needs you", pendingMark]
-        lines += ["", "## Backlog"] + (overflow + backlog).prefix(30)
+        // Two things at once today (MUN and Volleyball): one question, unless Patterns has the answer.
+        let known = patterns.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+        lines += ["", "## Needs you"] + WeekPlan.clashes(events, known: known) + staleAsks + [pendingMark]
+        lines += ["", "## Backlog"] + (overflow + lateRest + backlog).prefix(30)
         lines += ["", "## Inbox"] + inbox
+        if !dropped.isEmpty {
+            lines += ["", "## Dropped", "_Three weeks untouched. Not deleted: move a line back to Backlog to bring it back._"] + dropped.suffix(30)
+        }
         return lines.joined(separator: "\n") + "\n"
+    }
+
+    // MARK: - Closing loops
+
+    /// A task line's title: "- [ ] Taxes upload — due today · Economics" → "Taxes upload".
+    static func taskTitle(_ line: String) -> String {
+        let text = line.replacingOccurrences(of: #"^\s*- (\[[ xX]\] )?"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: "~~", with: "")
+        return text.components(separatedBy: " — ")[0].components(separatedBy: " · ")[0].trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Whether two titles name the same task: (nearly) the same words, numbers included, so
+    /// "Quiz: Markets 2" isn't "Quiz: Markets 1".
+    static func sameTask(_ a: String, _ b: String) -> Bool {
+        func words(_ text: String) -> Set<String> {
+            Set(text.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty })
+        }
+        let x = words(a), y = words(b)
+        guard !x.isEmpty, !y.isEmpty else { return false }
+        return Double(x.intersection(y).count) / Double(x.union(y).count) >= 0.8
+    }
+
+    /// A backlog line as a task: "- foo" → "- [ ] foo".
+    private static func checkbox(_ line: String) -> String {
+        line.hasPrefix("- [") ? line : "- [ ] " + String(line.dropFirst(2))
+    }
+
+    private static let addedPattern = #"added \d{4}-\d{2}-\d{2}"#
+
+    /// A backlog line with the day it was first seen ("· added 2026-10-27"), for ageing it.
+    private static func stamped(_ line: String, _ today: String) -> String {
+        line.range(of: addedPattern, options: .regularExpression) != nil ? line : line + " · added \(today)"
+    }
+
+    /// Days since a line's "added" stamp (0 without one).
+    private static func daysOld(_ line: String, _ now: Date) -> Int {
+        guard let range = line.range(of: addedPattern, options: .regularExpression),
+              let added = IBProjects.isoDate(String(line[range].dropFirst(6))) else { return 0 }
+        let calendar = Calendar.current
+        return calendar.dateComponents([.day], from: calendar.startOfDay(for: added), to: calendar.startOfDay(for: now)).day ?? 0
+    }
+
+    /// What's been done: Done.md's titles, and the last day's ticked lines.
+    static func doneTitles(_ last: String) -> [String] {
+        let log = doneURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+        let logged = log.components(separatedBy: "\n").filter { $0.hasPrefix("- ") }.map { line -> String in
+            let parts = line.dropFirst(2).components(separatedBy: " · ")
+            return (parts.count > 1 ? parts[1] : parts[0]).trimmingCharacters(in: .whitespaces)
+        }
+        let ticked = last.components(separatedBy: "\n").filter { $0.lowercased().hasPrefix("- [x]") }.map(taskTitle)
+        return (logged + ticked).filter { !$0.isEmpty }
+    }
+
+    /// The last day's ticked tasks go in Done.md, which outlasts the day, so a deadline that was
+    /// handed in isn't raised as overdue tomorrow.
+    private static func recordDone(from last: String) {
+        let ticked = last.components(separatedBy: "\n").filter { $0.lowercased().hasPrefix("- [x]") }.map(taskTitle).filter { !$0.isEmpty }
+        guard !ticked.isEmpty else { return }
+        let date = last.components(separatedBy: "\n").prefix(12).first { $0.hasPrefix("date:") }
+            .map { $0.dropFirst(5).trimmingCharacters(in: .whitespaces) } ?? day(Date())
+        addDone(ticked, date: date)
+    }
+
+    /// Adds "- yyyy-mm-dd · <title>" to Done.md for each title not there yet.
+    static func addDone(_ titles: [String], date: String) {
+        guard let doneURL else { return }
+        var log = (try? String(contentsOf: doneURL, encoding: .utf8))
+            ?? "---\nsummary: \"What they've finished, one line each, so it isn't raised as overdue again.\"\n---\n# Done\n\n"
+        let known = log.components(separatedBy: "\n")
+        var changed = false
+        for title in Set(titles) where !known.contains(where: { $0.hasSuffix(" · " + title) }) {
+            if !log.hasSuffix("\n") { log += "\n" }
+            log += "- \(date) · \(title)\n"
+            changed = true
+        }
+        guard changed else { return }
+        try? FileManager.default.createDirectory(at: doneURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? log.write(to: doneURL, atomically: true, encoding: .utf8)
     }
 
     /// Deadlines that just appeared on the calendar, into today's Daybook: under Deadlines, and as
@@ -354,7 +513,7 @@ enum Daybook {
     }
 
     /// Adds a line at the end of a `## ` section, replacing a "Nothing …" line there.
-    private static func insert(_ line: String, under heading: String, in lines: inout [String]) {
+    static func insert(_ line: String, under heading: String, in lines: inout [String]) {
         guard let start = lines.firstIndex(where: { $0.hasPrefix("## ") && $0.lowercased().contains(heading.lowercased()) }) else { return }
         var end = lines[(start + 1)...].firstIndex { $0.hasPrefix("## ") } ?? lines.endIndex
         if let filler = lines[(start + 1)..<end].firstIndex(where: { $0.hasPrefix("Nothing") }) {
@@ -373,48 +532,81 @@ enum Daybook {
     private static func studyPlan(_ deadlines: [CalendarFeed.Item], _ now: Date, busy: [(Date, Date)] = []) -> [String] {
         let calendar = Calendar.current
         guard let fortnight = calendar.date(byAdding: .day, value: 14, to: now) else { return [] }
-        let weighty = #"\b(test|exam|summative|paper|ia|assessment|essay|quiz)\b"#
-        let work = deadlines.filter { $0.start > now && $0.start < fortnight }.sorted { a, b in
+        let sorted = deadlines.filter { $0.start > now && $0.start < fortnight }.sorted { a, b in
             let dayA = calendar.startOfDay(for: a.start), dayB = calendar.startOfDay(for: b.start)
             if dayA != dayB { return dayA < dayB }
-            return (a.title.range(of: weighty, options: [.regularExpression, .caseInsensitive]) != nil)
-                && (b.title.range(of: weighty, options: [.regularExpression, .caseInsensitive]) == nil)
+            return isWeighty(a) && !isWeighty(b)
         }
+        // What's really due by the end of tomorrow comes first, then an overdue project milestone
+        // (its "due today" is made up), then the rest.
+        let horizon = calendar.date(byAdding: .day, value: 2, to: calendar.startOfDay(for: now)) ?? fortnight
+        let soon = sorted.filter { !IBProjects.isOverdue($0) && $0.start < horizon }
+        let late = sorted.filter { IBProjects.isOverdue($0) }
+        let later = sorted.filter { !IBProjects.isOverdue($0) && $0.start >= horizon }
+        let work = soon + late + later
         guard !work.isEmpty else { return [] }
-        func at(_ hour: Int, _ minute: Int = 0) -> Date? { calendar.date(bySettingHour: hour, minute: minute, second: 0, of: now) }
+        // Two blocks for the most pressing one still due after the block, then one each; what's
+        // due before a block is skipped, not given it. An overdue milestone gets one at most.
+        var given: [String: Int] = [:]
+        return freeBlocks(on: now, busy: busy).filter { $0.end > now }.compactMap { block -> String? in
+            let upcoming = work.filter { $0.start > block.end }
+            guard let first = upcoming.first(where: { !IBProjects.isOverdue($0) }) ?? upcoming.first,
+                  let item = upcoming.first(where: { candidate in
+                      let cap = IBProjects.isOverdue(candidate) ? 1 : (candidate.id == first.id ? 2 : 1)
+                      return (given[candidate.id] ?? 0) < cap
+                  }) else { return nil }
+            given[item.id, default: 0] += 1
+            let due: String = IBProjects.isOverdue(item) ? "overdue" : "due \(when(item, now))"
+            return "- \(hhmm(block.start))–\(hhmm(block.end)) (\(block.label)): \(item.title)"
+                + (item.subject.map { " · \($0)" } ?? "") + " — \(due)"
+        }
+    }
+
+    /// A test, summative, IA, essay or project milestone: worth more study time.
+    static func isWeighty(_ item: CalendarFeed.Item) -> Bool {
+        item.subject == "project"
+            || item.title.range(of: #"\b(test|exam|summative|paper|ia|assessment|essay|quiz)\b"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// The study blocks on a day: its free periods (a "—" in the grid), 90 minutes from 30 minutes
+    /// after the last class, and 19:30–21:00 (10:00–12:00 instead on a day off). They work around
+    /// timed events (gym 15:45–16:45 moves after-school work to 16:45, or cuts a block short), end
+    /// by 23:00 (the done-by goal), and any left under 30 minutes is dropped.
+    static func freeBlocks(on day: Date, busy: [(Date, Date)] = []) -> [(label: String, start: Date, end: Date)] {
+        let calendar = Calendar.current
+        func at(_ hour: Int, _ minute: Int = 0) -> Date? { calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day) }
         var blocks: [(label: String, start: Date, end: Date)] = []
-        let lessons = timeline(now).filter { $0.kind == .lesson }
-        if let timetable, let entry = schoolDay(on: now, in: timetable) {
+        let lessons = timeline(day).filter { $0.kind == .lesson }
+        if let timetable, let entry = schoolDay(on: day, in: timetable) {
             let grid = timetable.grids[entry[1].text + entry[2].text] ?? []
             for row in timetable.rows where row.kind == "class" {
                 guard let index = row.idx, index < grid.count, grid[index] == "—",
-                      let start = time(row.start, on: now), let end = time(row.end, on: now) else { continue }
+                      let start = time(row.start, on: day), let end = time(row.end, on: day) else { continue }
                 blocks.append(("free P\(row.p ?? "?")", start, end))
             }
             if let last = lessons.map({ $0.end ?? $0.start }).max() {
                 let start = last.addingTimeInterval(30 * 60)
-                blocks.append(("after school", start, start.addingTimeInterval(90 * 60)))
+                blocks.append(("after school", start, start.addingTimeInterval(Double(StudyToday.Settings.blockMinutes) * 60)))
             }
         } else if let start = at(10), let end = at(12) {
             blocks.append(("morning", start, end))
         }
         if let start = at(19, 30), let end = at(21) { blocks.append(("evening", start, end)) }
-        // Two blocks for the most pressing one, then one each.
-        let order = [work[0]] + work
-        // Around what's already on: a block that meets an event starts when it ends (gym 15:45–16:45
-        // moves after-school work to 16:45), and goes if less than half an hour is left.
-        blocks = blocks.compactMap { block in
+        let doneBy = StudyToday.Settings.doneByHour // Settings → School → Week plan
+        let edge = doneBy >= 24 ? calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: day)) : at(doneBy)
+        // In time order, and never overlapping: a free last period and "after school" can meet
+        // (free P5 14:25–15:25, after school from 14:55), so a later block starts when the one before ends.
+        var previousEnd = Date.distantPast
+        return blocks.sorted { $0.start < $1.start }.compactMap { block in
             var block = block
             for (start, end) in busy.sorted(by: { $0.0 < $1.0 }) where start < block.end && end > block.start {
                 if start > block.start, start.timeIntervalSince(block.start) >= 30 * 60 { block.end = start } else { block.start = end }
             }
-            return block.end.timeIntervalSince(block.start) >= 30 * 60 ? block : nil
-        }
-        return blocks.filter { $0.end > now }.enumerated().compactMap { index, block in
-            guard index < order.count, order[index].start > block.end else { return nil }
-            let item = order[index]
-            return "- \(hhmm(block.start))–\(hhmm(block.end)) (\(block.label)): \(item.title)"
-                + (item.subject.map { " · \($0)" } ?? "") + " — due \(when(item, now))"
+            if block.start < previousEnd { block.start = previousEnd }
+            if let edge, block.end > edge { block.end = edge }
+            guard block.end.timeIntervalSince(block.start) >= 30 * 60 else { return nil }
+            previousEnd = block.end
+            return block
         }
     }
 
@@ -440,8 +632,8 @@ enum Daybook {
         return """
             Today's Daybook (\(relative(url))) was built from their timetable and calendar. Fill in only the parts \
             that say "\(pendingMark)", before you answer anything about their day, and leave the rest as it is:
-              - Needs you: at most three emails or invites from the last day that really need their reply (Gmail \
-            inbox, not promotions or social; \(config?.swisLabelId.map { "school mail has label \($0)" } ?? "school mail first")), each with who, \
+              - Needs you: keep the lines already there (a clash to settle), then at most three emails or invites from the \
+            last day that really need their reply (Gmail inbox, not promotions or social; \(config?.swisLabelId.map { "school mail has label \($0)" } ?? "school mail first")), each with who, \
             what to do and an [Open](link); then "_N others, all noise._". If you can't reach their mail, write "Mail isn't connected."
             \(calendarRules)
               - Inbox: act on its items, then leave it empty. Patterns: read \(relative(patterns)) and add this \
@@ -451,7 +643,7 @@ enum Daybook {
     }
 
     /// The lines under a `## ` heading (matched loosely), up to the next one.
-    private static func section(_ name: String, of text: String) -> [String] {
+    static func section(_ name: String, of text: String) -> [String] {
         var inside = false
         var found: [String] = []
         for line in text.components(separatedBy: "\n") {
@@ -476,7 +668,7 @@ enum Daybook {
     }
 
     /// "today 15:00", "tomorrow", "Fri 24 Oct 23:59", for a deadline.
-    private static func when(_ item: CalendarFeed.Item, _ now: Date) -> String {
+    static func when(_ item: CalendarFeed.Item, _ now: Date) -> String {
         let calendar = Calendar.current
         let time = item.allDay ? "" : " " + hhmm(item.start)
         if calendar.isDate(item.start, inSameDayAs: now) { return "today" + time }
@@ -485,7 +677,7 @@ enum Daybook {
     }
 
     /// "07:05", whatever the Mac's clock style, as the timeline reads it.
-    private static func hhmm(_ date: Date) -> String {
+    static func hhmm(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "HH:mm"
@@ -576,6 +768,7 @@ enum Daybook {
                 --workspace "<name>" (its workspaces: \(Workspace.names.joined(separator: ", "))).
                 """
         }
+        text += loopRules
         if !isCurrent { buildLocally() }
         if !isCurrent, !isLateNight {
             text += "\nThere's no Daybook for today yet: build it before you answer anything about their day.\n" + buildRules
@@ -584,6 +777,30 @@ enum Daybook {
         }
         return text
     }
+
+    /// Closing loops and the week: what overdue, ageing and week lines mean, and what to do with them.
+    static var loopRules: String {
+        let exe = Bundle.main.executablePath ?? "Joe"
+        return """
+
+            Loose ends in the Daybook:
+            - "overdue since …" lines have one action each. "Email the teacher": find the class's teacher (their notes, \
+            past school mail), write a short, polite email in their voice saying it's late and when they'll hand it in, \
+            and save it as a draft (Gmail draft, or a Mail draft): never send it. "Upload it": open the line's ManageBac link.
+            - "Mark it done" / "I handed in X": run "\(exe)" --mark-done "<title as written in the Daybook>": it ticks it ([x]) \
+            everywhere (Today's five, Backlog, \(relative(weekURL)), a project's milestone) and adds it to \(relative(doneURL)), so \
+            it isn't raised as overdue again. Several things: one run each.
+            - "decide: do, schedule or drop": do → keep it in Today's five; schedule → give it a day (a date in the line, or a \
+            block in \(relative(weekURL))); drop → move the line under ## Dropped (never delete it).
+            Week: for "plan my week", run "\(exe)" --week-plan (it writes \(relative(weekURL)): study blocks around classes and \
+            events, done by 23:00), then read it and say the plan in two or three lines, and ask its Needs you question if \
+            there is one. When they settle a clash ("volleyball, not MUN"), add "- Clash: <one> vs <other> → <choice>" to \
+            \(relative(patterns)) and take the question out of the Week note's and Daybook's Needs you.
+            """
+    }
+
+    /// The week's study plan (see `WeekPlan`).
+    static var weekURL: URL? { root?.appendingPathComponent("Daybook/Week.md") }
 
     /// What they asked lately (newest last), sent with the first request of a conversation.
     static var recentRequests: String {

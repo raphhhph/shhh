@@ -261,6 +261,50 @@ enum CommandLineTool {
             }
             if args[1] == "list" { print(CalendarFeed.links.joined(separator: "\n")); exit(0) }
             run { print(await CalendarFeed.refreshLinks()) }
+        case ("--prompt", 2...3) where ["brief", "shutdown", "sunday"].contains(args[1]):
+            // Joe --prompt brief|shutdown|sunday [<vault>]: the study lines Joe adds to the morning brief,
+            // the night shutdown's study steps, or the Sunday week-plan card (nothing is written).
+            if args.count > 2 { useFolder(args[2]) }
+            switch args[1] {
+            case "brief":
+                let facts = StudyLoop.briefFacts()
+                print(facts.isEmpty ? "(no study lines today: nothing overdue, no Plan, no milestone this week)" : facts)
+            case "shutdown":
+                print(StudyLoop.shutdownSteps())
+            default:
+                let calendar = Calendar.current
+                let monday = calendar.nextDate(after: Date(), matching: DateComponents(weekday: 2), matchingPolicy: .nextTime) ?? Date()
+                let reply = StudyLoop.weekReply(WeekPlan.text(from: monday), sunday: true)
+                print("\(reply.subject)\n\(reply.card)\n\nSpoken: \(reply.spoken)")
+            }
+            exit(0)
+        case ("--local", 2...3):
+            // Joe --local "<request>" [<vault>]: does a local study request ("start my EE", "plan my week", "done
+            // with Paper 2", "how's my EE going") as Joe would, and prints the card. It writes, like the real
+            // thing, so give a copy of the vault to test on.
+            if args.count > 2 { useFolder(args[2]) }
+            guard let intent = StudyIntent.parse(args[1]) else { print("Not a local study request: it goes to Claude."); exit(0) }
+            guard let reply = intent.run() else { print("\(intent.route): couldn't settle it here, so it goes to Claude."); exit(0) }
+            print("\(intent.route)\n\(reply.subject)\n\(reply.card)\n\nSpoken: \(reply.spoken)")
+            exit(0)
+        case ("--focus-preview", 2...3):
+            // Joe --focus-preview "<request>" [<vault>]: what a focus request would start (title, minutes, the Plan
+            // block, whether the "Joe Focus On" shortcut exists, the music), without starting anything.
+            if args.count > 2 { useFolder(args[2]) }
+            print(FocusPlan.preview(args[1]))
+            exit(0)
+        case ("--mark-done", 2...3):
+            // Joe --mark-done "<title>" [<vault>]: ticks it in the Daybook, Week.md and its project milestone, and adds it to Done.md.
+            if args.count > 2 { useFolder(args[2]) }
+            let title = StudyLoop.resolve(args[1]) ?? args[1]
+            print("Ticked \(title): " + StudyLoop.markDone(title).joined(separator: ", "))
+            exit(0)
+        case ("--week-replan", 1...2):
+            // Joe --week-replan [<vault>]: the night shutdown's re-plan: today's unticked blocks that are over (and
+            // earlier days') move to free slots later this week. Prints what moved and tomorrow's first block.
+            if args.count > 1 { useFolder(args[1]) }
+            print(StudyLoop.replanTonight())
+            exit(0)
         case ("--prompt", 2):
             // Joe --prompt "<dictation ending in make it a prompt>": what would be typed.
             guard let said = PromptPolish.request(in: args[1]) else { print("(no \"make it a prompt\" at the end)"); exit(0) }
@@ -277,8 +321,10 @@ enum CommandLineTool {
             for request in args.dropFirst() {
                 var route = MainActor.assumeIsolated { Assistant.needsStrongModel(request) } ? "Claude (Opus)" : "Claude (Haiku)"
                 if AlarmRequest.parse(request) != nil { route = "alarm" }
+                else if let focus = FocusRequest.parse(request) { route = focus.route }
                 else if Spotify.command(in: request) != nil { route = "Spotify" }
                 else if PromptPolish.request(in: request) != nil { route = "prompt rewrite (dictation)" }
+                else if let intent = StudyIntent.parse(request) { route = intent.route }
                 print("\(route.padding(toLength: 26, withPad: " ", startingAt: 0)) \(request)")
             }
             exit(0)
@@ -358,9 +404,54 @@ enum CommandLineTool {
             // Joe --timetable-import <photo or pdf> ["Day 3"]: reads a timetable and saves timetable.json.
             let file = URL(fileURLWithPath: args[1])
             run { print(await Daybook.importTimetable(from: file, dayToday: args.count > 2 ? args[2] : nil)) }
-        case ("--daybook-preview", 1):
-            // Joe --daybook-preview: the Daybook Joe would build this morning by himself (nothing is written).
-            print(Daybook.localText() ?? "No notes vault set.")
+        case ("--daybook-preview", 1...3):
+            // Joe --daybook-preview [<vault>] [yyyy-mm-dd]: the Daybook Joe would build this morning by
+            // himself, from that vault and for that day (nothing is written).
+            var day = Date()
+            for arg in args.dropFirst() {
+                if let date = IBProjects.isoDate(arg), arg.count == 10 {
+                    if !Calendar.current.isDateInToday(date) { day = Calendar.current.date(bySettingHour: 7, minute: 0, second: 0, of: date) ?? date }
+                } else {
+                    useFolder(arg)
+                }
+            }
+            print(Daybook.localText(day) ?? "No notes vault set.")
+            exit(0)
+        case ("--projects", 1...2):
+            // Joe --projects [<vault or School folder>]: each IB project's progress, and what it adds to today's Daybook.
+            if args.count > 1 { useFolder(args[1]) }
+            print(IBProjects.report())
+            exit(0)
+        case ("--project-new", 2...5):
+            // Joe --project-new <ee|ia|tok-essay|tok-exhibition|io|cas> ["<subject>"] [yyyy-mm-dd] ["<supervisor>"]:
+            // makes the project's note from its template (or finds the one already there).
+            guard let kind = IBProjects.Kind(loose: args[1]) else { fail("Kinds: ee, ia, tok-essay, tok-exhibition, io, cas") }
+            var subject = "", supervisor = ""
+            var finalDate: Date?
+            for arg in args.dropFirst(2) {
+                if let date = IBProjects.isoDate(arg), arg.count == 10 { finalDate = date }
+                else if subject.isEmpty { subject = arg } else { supervisor = arg }
+            }
+            guard let url = IBProjects.create(kind, subject: subject, finalDate: finalDate, supervisor: supervisor),
+                  let text = try? String(contentsOf: url, encoding: .utf8) else { fail("Couldn't make the note: is the notes vault set?") }
+            print(url.path)
+            print(text)
+            exit(0)
+        case ("--week-preview", 1...2):
+            // Joe --week-preview [<vault>]: the week plan Joe would write from today, and what a re-plan
+            // of the saved Week.md would move (nothing is written).
+            if args.count > 1 { useFolder(args[1]) }
+            print(WeekPlan.text(from: Date()))
+            if let url = WeekPlan.url, let saved = try? String(contentsOf: url, encoding: .utf8) {
+                let moves = WeekPlan.replanned(saved)?.moves ?? []
+                print("--- Re-plan of the saved \(url.lastPathComponent): " + (moves.isEmpty ? "nothing to move." : "\n" + moves.joined(separator: "\n")))
+            }
+            exit(0)
+        case ("--week-plan", 1):
+            // Joe --week-plan: writes Daybook/Week.md for the seven days from today (for "plan my week").
+            guard let url = WeekPlan.build(), let text = try? String(contentsOf: url, encoding: .utf8) else { fail("No notes vault set.") }
+            print("Wrote \(url.path)\n")
+            print(text)
             exit(0)
         case ("--look", 1):
             // Shhh --look: for the assistant, a screenshot and the front window's controls.
@@ -389,6 +480,26 @@ enum CommandLineTool {
         default:
             fail(usage)
         }
+    }
+
+    /// Points the Daybook, projects and week plan at a folder given on the command line: a vault (its
+    /// Brain folder is used when it has one), a Brain folder, or a School folder.
+    private static func useFolder(_ path: String) {
+        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true)
+        let manager = FileManager.default
+        let brain = url.appendingPathComponent("Brain", isDirectory: true)
+        if manager.fileExists(atPath: brain.path) {
+            Daybook.rootOverride = brain
+        } else if url.lastPathComponent == "School" {
+            Daybook.rootOverride = url.deletingLastPathComponent()
+        } else {
+            Daybook.rootOverride = url
+            let projects = url.appendingPathComponent("Projects", isDirectory: true)
+            if !manager.fileExists(atPath: url.appendingPathComponent("School").path), manager.fileExists(atPath: projects.path) {
+                IBProjects.folderOverride = projects
+            }
+        }
+        Daybook.timetableChanged()
     }
 
     private static func transcribe(files: [String]) async throws {

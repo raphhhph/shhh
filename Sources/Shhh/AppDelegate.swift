@@ -125,7 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func openStudy(_ request: String) -> Bool {
         guard let mode = Self.studyMode(request) else { return false }
         // "Open the whiteboard" with a quiz going on it: back to that quiz, not a new one.
-        let bare = request.range(of: #"^\W*((hey |ok )?joe,?\s+)?((can you|could you|please)\s+)*((open|show|bring|pull|go|switch)( up| back| to)*\s+)?(the |my )?white ?board( mode)?( again| back( up)?)?( please)?\W*$"#, options: [.regularExpression, .caseInsensitive]) != nil
+        let bare = Self.isBareWhiteboard(request)
         if studyBoard.model.isActive, bare {
             studyBoard.show()
             return true
@@ -161,6 +161,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Whether a request is for the whiteboard, and how: a quiz, an exam question, or their flashcards
     /// ("review my flashcards" is the deck; "make flashcards on…" is the tutor writing them), or Joe
     /// explaining and drawing ("draw me a diagram of…"). Also `--route`.
+    /// Just "open the whiteboard": the running quiz if there is one, else a plain study whiteboard.
+    static func isBareWhiteboard(_ request: String) -> Bool {
+        request.range(of: #"^\W*((hey |ok )?joe,?\s+)?((can you|could you|please)\s+)*((open|show|bring|pull|go|switch)( up| back| to)*\s+)?(the |my )?white ?board( mode)?( again| back( up)?)?( please)?\W*$"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
     static func studyMode(_ request: String) -> StudyBoardModel.Mode? {
         // "Draw me a supply and demand diagram", "explain externalities on the whiteboard": Joe draws while explaining.
         let draw = #"\b(draw|sketch)\b[^.?!]{0,40}\b(diagram|graph|curves?|chart)\b|\b(explain|teach|show)\b[^.?!]{0,60}\b(on|at) (the|a|my) white ?board\b"#

@@ -294,8 +294,13 @@ enum CommandLineTool {
                 var route = MainActor.assumeIsolated { Assistant.needsStrongModel(request) } ? "Claude (Opus)" : "Claude (Haiku)"
                 if AlarmRequest.parse(request) != nil { route = "alarm" }
                 else if let mode = MainActor.assumeIsolated({ AppDelegate.studyMode(request) }) {
-                    let subject = MainActor.assumeIsolated { StudyBoard.subject(in: request) } ?? StudyBuddy.pack(for: request) ?? "last subject"
-                    route = "whiteboard (\(mode.rawValue), \(subject))"
+                    let named = MainActor.assumeIsolated { StudyBoard.subject(in: request) } ?? StudyBuddy.pack(for: request)
+                    // As openStudy does it: no subject named and just the board (or explain) is a plain study whiteboard.
+                    if named == nil, mode == .explain || MainActor.assumeIsolated({ AppDelegate.isBareWhiteboard(request) }) {
+                        route = "whiteboard (explain, no subject)"
+                    } else {
+                        route = "whiteboard (\(mode.rawValue), \(named ?? "last subject"))"
+                    }
                 }
                 else if Spotify.command(in: request) != nil { route = "Spotify" }
                 else if PromptPolish.request(in: request) != nil { route = "prompt rewrite (dictation)" }

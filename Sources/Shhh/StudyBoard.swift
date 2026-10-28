@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The study whiteboard: a window where Joe sets IB questions one at a time, the student answers by
 /// typing (or holding right ⌥ and talking), and Joe marks each answer like an examiner, with what
@@ -94,27 +95,36 @@ final class StudyBoard: NSObject, NSWindowDelegate {
 
 @MainActor
 final class StudyBoardModel: ObservableObject {
-    enum Mode: String { case quiz, exam, cards }
+    /// review: going through a returned test's lost marks; feedback: a draft against the IB criteria.
+    enum Mode: String { case quiz, exam, cards, review, feedback }
 
     enum Item: Identifiable, Equatable {
         case question(n: Int, marks: Int, topic: String, source: String, text: String)
         case answer(text: String, spoken: Bool, image: Data? = nil)
-        case feedback(score: Int, total: Int, text: String, model: String)
+        /// n: the question it marks (its <question n=…>), 0 when the tag gave none; topic: the
+        /// feedback tag's own topic, for a question that never got a <question> tag.
+        case feedback(score: Int, total: Int, text: String, model: String, n: Int = 0, topic: String = "")
         case summary(score: Int, total: Int, text: String)
         /// A short lesson before the questions ("teach me…", or a topic they keep losing marks on).
         case lesson(title: String, text: String)
         /// Definitions to learn word for word, after the summary: saved to their flashcards.
         case cards([Flashcards.Card])
+        /// A returned mark, logged in "School/Marks.md" (mark review).
+        case returned(assessment: String, mark: String, boundary: String)
+        /// One criterion of draft feedback: its mark, band, quoted evidence and what lifts it a band.
+        case criterion(name: String, score: Int, total: Int, band: String, text: String)
         case note(String)
 
         var id: String {
             switch self {
             case let .question(n, _, _, _, text): "q\(n)\(text.prefix(20))"
             case let .answer(text, _, image): "a\(text.hashValue)\(image?.count ?? 0)"
-            case let .feedback(score, total, text, _): "f\(score)/\(total)\(text.prefix(20))"
+            case let .feedback(score, total, text, _, _, _): "f\(score)/\(total)\(text.prefix(20))"
             case let .summary(_, _, text): "s\(text.prefix(20))"
             case let .lesson(title, text): "l\(title)\(text.prefix(20))"
             case let .cards(cards): "c\(cards.count)\(cards.first?.term ?? "")"
+            case let .returned(assessment, mark, _): "r\(assessment)\(mark)"
+            case let .criterion(name, score, _, _, _): "k\(name)\(score)"
             case let .note(text): "n\(text.hashValue)"
             }
         }
@@ -154,6 +164,10 @@ final class StudyBoardModel: ObservableObject {
     private var assistant: Assistant?
     private var reply = ""
     private var startedAt = Date()
+    /// Draft feedback: the items already saved to their notes (each check is saved once).
+    private var savedUpTo = 0
+    /// Mark review: the items already checked for lost questions without a feedback tag.
+    private var nettedUpTo = 0
 
     var isActive: Bool { assistant != nil || (mode == .cards && !deck.isEmpty) }
 
@@ -165,14 +179,15 @@ final class StudyBoardModel: ObservableObject {
     /// Marks so far this session.
     var score: (Int, Int) {
         items.reduce((0, 0)) { total, item in
-            if case let .feedback(score, out, _, _) = item { return (total.0 + score, total.1 + out) }
+            if case let .feedback(score, out, _, _, _, _) = item { return (total.0 + score, total.1 + out) }
             return total
         }
     }
 
     func start(subject: String, request: String?, mode: Mode) {
         end()
-        UserDefaults.standard.set(subject, forKey: "lastStudySubject")
+        // Feedback's "subject" is the project ("Extended Essay"), not a subject to quiz next time.
+        if mode != .feedback { UserDefaults.standard.set(subject, forKey: "lastStudySubject") }
         self.subject = subject
         self.mode = mode
         items = []
@@ -180,17 +195,69 @@ final class StudyBoardModel: ObservableObject {
         draft = ""
         startedAt = Date()
         questionSince = nil
+        savedUpTo = 0
+        nettedUpTo = 0
         if mode == .cards { shuffleDeck(); return }
         let assistant = Assistant()
-        assistant.tutorPrompt = Self.tutorPrompt(subject: subject, mode: mode)
+        assistant.tutorPrompt = mode == .feedback ? Self.feedbackPrompt(project: subject) : Self.tutorPrompt(subject: subject, mode: mode)
         // New or changed past papers are read in the background, for the next session's index.
-        PastPapers.refreshInBackground(pack: StudyBuddy.pack(for: subject))
+        if mode != .feedback { PastPapers.refreshInBackground(pack: StudyBuddy.pack(for: subject)) }
         self.assistant = assistant
         assistant.prepare { [weak self] event in self?.handle(event) }
-        let opening = request ?? (mode == .exam
-            ? "Give me one full exam-style question."
-            : "Start the quiz: five questions, focusing on my weak spots if you know them.")
+        var opening = request ?? { () -> String in
+            switch mode {
+            case .exam: return "Give me one full exam-style question."
+            case .review: return "I've had a marked test back in \(subject). Start the mark review."
+            case .feedback: return "Give me feedback on my \(subject) draft against the IB criteria."
+            default: return "Start the quiz: five questions, focusing on my weak spots if you know them."
+            }
+        }()
+        // The draft named in the project's note (its `doc:` line) comes with the first request.
+        if mode == .feedback, let file = Marks.projectDraft(for: subject),
+           let text = Marks.text(of: file), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            items.append(.answer(text: "Draft from the project note: \(file.lastPathComponent) · \(Marks.words(text)) words", spoken: false))
+            opening += "\n\n" + Self.attachment(name: file.lastPathComponent, text: text)
+        }
         send(opening)
+    }
+
+    // MARK: Files dropped on the board (a marked paper, a draft)
+
+    /// The text of a dropped file as it goes to the tutor, with Joe's word count.
+    private static func attachment(name: String, text: String) -> String {
+        let body = text.count > 60_000 ? String(text.prefix(60_000)) + "\n[… cut at 60,000 characters]" : text
+        return "[Attached file: \(name). Word count (Joe counted it): \(Marks.words(text)).]\n<file>\n\(body)\n</file>"
+    }
+
+    /// A paper or a draft: a photo goes as a picture; Word, Pages, PDF and text files as their text.
+    func attach(_ url: URL) {
+        guard assistant != nil, !isBusy else { return }
+        let name = url.lastPathComponent
+        if Marks.imageTypes.contains(url.pathExtension.lowercased()) {
+            guard let image = Marks.jpeg(of: url) else { items.append(.note("Couldn't open \(name).")); return }
+            items.append(.answer(text: name, spoken: false, image: image))
+            send("[A photo of my paper or draft is attached: \(name). Read it, including any marks and comments written on it.]", image: image)
+            return
+        }
+        isBusy = true
+        status = "Reading \(name)…"
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let text = Marks.text(of: url)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.isBusy = false
+                    self.status = nil
+                    guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        self.items.append(.note("Couldn't read any text in \(name). Try a PDF, a Word or Pages file, or paste the text."))
+                        return
+                    }
+                    self.items.append(.answer(text: "\(name) · \(Marks.words(text)) words", spoken: false))
+                    self.send(Self.attachment(name: name, text: text) + "\n\n" + (self.draft.isEmpty ? "" : self.draft))
+                    self.draft = ""
+                }
+            }
+        }
     }
 
     // MARK: Flashcards
@@ -252,8 +319,12 @@ final class StudyBoardModel: ObservableObject {
         // Said while Joe is still marking: kept in the box to send, not lost.
         if isBusy, spoken, !text.isEmpty { draft = draft.isEmpty ? text : draft + " " + text; return }
         guard !text.isEmpty || image != nil, assistant != nil, !isBusy else { return }
-        items.append(.answer(text: text, spoken: spoken, image: image))
+        // A pasted draft: counted the way a dropped file is, so the word limit is checked on the real count.
+        let pastedWords = mode == .feedback && image == nil ? Marks.words(text) : 0
+        let counted = pastedWords > 150
+        items.append(.answer(text: counted ? text + "\n\n· \(pastedWords) words" : text, spoken: spoken, image: image))
         draft = ""
+        if counted { text = "[Pasted draft. Word count (Joe counted it): \(pastedWords).]\n" + text }
         if image != nil { text = (text.isEmpty ? "" : text + "\n\n") + "[My diagram is attached: mark it as part of my answer.]" }
         send(text, image: image)
     }
@@ -284,6 +355,9 @@ final class StudyBoardModel: ObservableObject {
             approval?.decide(.deny)
         case .turnFinished:
             let parsed = Self.parse(reply)
+            // One summary a session: a later one (a second "end") replaces the earlier card, not a second card.
+            let repeatSummary = mode != .feedback && parsed.contains(where: Self.isSummary) && items.contains(where: Self.isSummary)
+            if repeatSummary { dropSummaries() }
             items += parsed
             // The exam clock: from the new question until it's marked.
             if parsed.contains(where: { if case .question = $0 { return true } else { return false } }) {
@@ -296,7 +370,7 @@ final class StudyBoardModel: ObservableObject {
             live = []
             isBusy = false
             status = nil
-            record(parsed)
+            record(parsed, repeatSummary: repeatSummary)
             if readAloud { speak(Self.spoken(parsed)) }
         case .failed(let message):
             items.append(.note("Something went wrong: \(message)"))
@@ -308,26 +382,83 @@ final class StudyBoardModel: ObservableObject {
         }
     }
 
-    /// Each marked answer goes to the quiz log, like the notch's quizzes.
-    private func record(_ parsed: [Item]) {
+    private nonisolated static func isSummary(_ item: Item) -> Bool {
+        if case .summary = item { return true } else { return false }
+    }
+
+    /// Takes the earlier summary cards off the board, keeping savedUpTo and nettedUpTo on the same items.
+    private func dropSummaries() {
+        for index in items.indices.reversed() where Self.isSummary(items[index]) {
+            items.remove(at: index)
+            if index < savedUpTo { savedUpTo -= 1 }
+            if index < nettedUpTo { nettedUpTo -= 1 }
+        }
+    }
+
+    /// Each marked answer goes to the quiz log, like the notch's quizzes. repeatSummary: this reply's
+    /// summary replaced an earlier one, so questions marked before it aren't logged again.
+    private func record(_ parsed: [Item], repeatSummary: Bool = false) {
+        // The items before this reply (items already holds it).
+        let earlier = items.dropLast(min(parsed.count, items.count))
+        // A returned mark is logged once a session, even when the tag comes again.
+        for case let .returned(assessment, mark, boundary) in parsed {
+            let logged = earlier.contains { item in
+                if case let .returned(a, m, _) = item { return a == assessment && m == mark } else { return false }
+            }
+            if !logged { Marks.log(subject: subject, assessment: assessment, mark: mark, boundary: boundary) }
+        }
+        if mode == .feedback { saveFeedback(); return }
         let date = Date().formatted(.iso8601.year().month().day())
         var lines: [String] = []
-        var topic = items.reversed().compactMap { if case let .question(_, _, topic, _, _) = $0 { return topic } else { return nil } }.first ?? ""
-        var question = items.reversed().compactMap { if case let .question(_, _, _, _, text) = $0 { return text } else { return nil } }.first ?? ""
+        // The questions marked before this reply, by their n.
+        var markedBefore = Set<Int>()
+        for case let .feedback(_, total, _, _, n, _) in earlier where total > 0 && n > 0 { markedBefore.insert(n) }
+        // The questions before this reply: the last one, and each by its n.
+        var topic = earlier.reversed().compactMap { if case let .question(_, _, topic, _, _) = $0 { return topic } else { return nil } }.first ?? ""
+        var question = earlier.reversed().compactMap { if case let .question(_, _, _, _, text) = $0 { return text } else { return nil } }.first ?? ""
+        var byNumber: [Int: (topic: String, text: String)] = [:]
+        for case let .question(n, _, topic, _, text) in earlier where n > 0 { byNumber[n] = (topic: topic, text: text) }
         var lost: [Mistakes.Entry] = []
         for item in parsed {
-            if case let .question(_, _, next, _, text) = item { topic = next; question = text }
-            if case let .feedback(score, total, text, model) = item, total > 0, score < total {
-                lost.append(Mistakes.Entry(date: date, topic: topic, score: score, total: total, question: question,
-                                           missing: Mistakes.missing(in: text), model: model))
+            if case let .question(n, _, next, _, text) = item {
+                topic = next; question = text
+                if n > 0 { byNumber[n] = (topic: next, text: text) }
             }
-            if case let .feedback(score, total, text, _) = item, total > 0 {
+            guard case let .feedback(score, total, text, model, n, ownTopic) = item, total > 0 else { continue }
+            // Repeated with a second summary: it's in the quiz log and the mistake book already.
+            if repeatSummary && n > 0 && markedBefore.contains(n) { continue }
+            // Paired by its n, never with whichever question came last: a lost question that had no
+            // <question> tag (the tutor waited for the paper) is logged as that, not as the one before.
+            var markedTopic = topic, markedQuestion = question
+            if n > 0 {
+                if let asked = byNumber[n] {
+                    markedTopic = asked.topic.isEmpty ? ownTopic : asked.topic
+                    markedQuestion = asked.text
+                } else if mode == .review {
+                    markedTopic = ownTopic
+                    markedQuestion = "Q\(n) (from the paper, wording not given)"
+                }
+            }
+            if score < total {
+                var entry = Mistakes.Entry(date: date, topic: markedTopic, score: score, total: total, question: markedQuestion,
+                                           missing: Mistakes.missing(in: text), model: model)
+                // A returned test's lost marks: why, and fresh redo questions on it in 1, 3 and 7 days.
+                if mode == .review {
+                    entry.cause = text.range(of: #"(?<=\*\*Cause:\*\* )[^\n]+"#, options: .regularExpression).map { String(text[$0]) } ?? ""
+                    entry.redo = StudyReview.redoDates()
+                }
+                lost.append(entry)
+            }
+            do {
                 let missing = text.components(separatedBy: "\n").first { $0.lowercased().contains("missing") || $0.contains("✗") } ?? ""
                 var note = missing.replacingOccurrences(of: #"^[-•*✗\s]+"#, with: "", options: .regularExpression)
                 // Cut at a word, not mid-word ("the price producers rec").
                 if note.count > 90 { note = String(note.prefix(90)).replacingOccurrences(of: #"\s+\S*$"#, with: "", options: .regularExpression) + "…" }
-                lines.append("- \(date) · \(subject) · \(topic) · \(score)/\(total) · \(note)")
+                lines.append("- \(date) · \(subject) · \(markedTopic) · \(score)/\(total) · \(note)")
             }
+        }
+        if mode == .review, parsed.contains(where: { if case .summary = $0 { return true } else { return false } }) {
+            lost += undiscussedLost(date: date)
         }
         Mistakes.record(lost, subject: subject)
         for case let .cards(cards) in parsed { Flashcards.save(cards, subject: subject) }
@@ -338,6 +469,69 @@ final class StudyBoardModel: ObservableObject {
         log += lines.joined(separator: "\n") + "\n"
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? log.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    /// Mark review safety net, at the summary: lost questions that never got a feedback tag (no mark
+    /// given for them) still go in the mistake book, as 0 of their marks with cause "?" and redo dates.
+    private func undiscussedLost(date: String) -> [Mistakes.Entry] {
+        guard nettedUpTo < items.count else { return [] }
+        // Every question asked since the last check, in order; a feedback tag marks the one with its n
+        // (or, with no n, the latest question, as before). A feedback for a question that never got a
+        // <question> tag marks nothing else.
+        var asked: [(n: Int, topic: String, marks: Int, text: String, model: String, marked: Bool)] = []
+        var latest: Int?
+        for item in items[nettedUpTo...] {
+            switch item {
+            case let .question(n, marks, topic, _, text):
+                asked.append((n: n, topic: topic, marks: marks, text: text, model: "", marked: false))
+                latest = asked.count - 1
+            case let .feedback(_, total, _, model, n, _):
+                if total > 0 {
+                    // Marked: it's in the book already.
+                    if n > 0 {
+                        if let index = asked.lastIndex(where: { $0.n == n }) { asked[index].marked = true }
+                    } else if let index = latest {
+                        asked[index].marked = true
+                    }
+                } else if !model.isEmpty, let index = latest {
+                    // A model answer on its own is kept for the entry.
+                    asked[index].model = model
+                }
+            default:
+                break
+            }
+        }
+        var entries: [Mistakes.Entry] = []
+        for question in asked where !question.marked && question.marks > 0 {
+            var entry = Mistakes.Entry(date: date, topic: question.topic, score: 0, total: question.marks, question: question.text,
+                                       missing: ["not discussed in detail"], model: question.model)
+            entry.cause = "?"
+            entry.redo = StudyReview.redoDates()
+            entries.append(entry)
+        }
+        nettedUpTo = items.count
+        return entries
+    }
+
+    /// A finished draft check (its summary has come): the criteria and summary since the last one,
+    /// dated, into the project's note under "## Feedback".
+    private func saveFeedback() {
+        guard savedUpTo < items.count,
+              items[savedUpTo...].contains(where: { if case .summary = $0 { return true } else { return false } }) else { return }
+        var lines: [String] = []
+        for item in items[savedUpTo...] {
+            switch item {
+            case let .criterion(name, score, total, band, text):
+                let mark = total > 0 ? " \(score)/\(total)" : " (not assessed)"
+                lines.append("- **\(name)**\(mark)\(band.isEmpty ? "" : " (band \(band))"): " + text.replacingOccurrences(of: "\n", with: " "))
+            case let .summary(score, total, text):
+                lines.append("\n**Predicted:** \(score)/\(total)\n\n" + text)
+            default: break
+            }
+        }
+        savedUpTo = items.count
+        guard !lines.isEmpty else { return }
+        Marks.saveFeedback(lines.joined(separator: "\n"), project: subject)
     }
 
     /// What's read aloud: the short spoken line and the question.
@@ -365,18 +559,21 @@ final class StudyBoardModel: ObservableObject {
     static func parse(_ text: String) -> [Item] {
         var items: [Item] = []
         var rest = Substring(text)
-        var pendingFeedback: (Int, Int, String)?
+        var pendingFeedback: (score: Int, total: Int, body: String, n: Int, topic: String)?
         func flushFeedback(model: String = "") {
-            if let (score, total, body) = pendingFeedback { items.append(.feedback(score: score, total: total, text: body, model: model)) }
+            if let pending = pendingFeedback {
+                items.append(.feedback(score: pending.score, total: pending.total, text: pending.body, model: model, n: pending.n, topic: pending.topic))
+            }
             pendingFeedback = nil
         }
-        while let open = rest.range(of: #"<(question|feedback|model|summary|lesson|cards|ms)\b[^>]*>"#, options: .regularExpression) {
+        while let open = rest.range(of: #"<(question|feedback|model|summary|lesson|cards|ms|returned|criterion)\b[^>]*>"#, options: .regularExpression) {
             let before = rest[..<open.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
             if !before.isEmpty { flushFeedback(); items.append(.note(before)) }
             let tag = String(rest[open])
             let name = String(tag.dropFirst().prefix { $0.isLetter })
             let after = rest[open.upperBound...]
-            let close = after.range(of: "</\(name)>")
+            // A self-closing tag (<returned … />) has no body.
+            let close: Range<Substring.Index>? = tag.hasSuffix("/>") ? after.startIndex..<after.startIndex : after.range(of: "</\(name)>")
             let body = String(close.map { after[..<$0.lowerBound] } ?? after).trimmingCharacters(in: .whitespacesAndNewlines)
             func attribute(_ key: String) -> String {
                 guard let match = tag.range(of: key + #"="([^"]*)""#, options: .regularExpression) else { return "" }
@@ -391,7 +588,18 @@ final class StudyBoardModel: ObservableObject {
                                        topic: attribute("topic"), source: attribute("source"), text: body))
             case "feedback":
                 flushFeedback()
-                pendingFeedback = (Int(attribute("score")) ?? 0, Int(attribute("total")) ?? 0, body)
+                // Mark review: why the marks went, shown on the card and kept in the mistake book.
+                let cause = attribute("cause")
+                pendingFeedback = (score: Int(attribute("score")) ?? 0, total: Int(attribute("total")) ?? 0,
+                                   body: cause.isEmpty ? body : "**Cause:** \(cause)\n" + body,
+                                   n: Int(attribute("n")) ?? 0, topic: attribute("topic"))
+            case "returned":
+                flushFeedback()
+                items.append(.returned(assessment: attribute("assessment"), mark: attribute("mark"), boundary: attribute("boundary")))
+            case "criterion":
+                flushFeedback()
+                items.append(.criterion(name: attribute("name"), score: Int(attribute("score")) ?? 0, total: Int(attribute("total")) ?? 0,
+                                        band: attribute("band"), text: body))
             case "lesson":
                 flushFeedback()
                 items.append(.lesson(title: attribute("title"), text: body))
@@ -447,9 +655,41 @@ final class StudyBoardModel: ObservableObject {
         }
         let paperIndex = indexed.map { "\n# Their past papers, indexed\n" + $0 } ?? ""
         let mistakes = Mistakes.recent(subject).joined(separator: "\n\n")
+        // Lost marks from a returned test, due for a fresh question today (1, 3 and 7 days after the review).
+        let redos = StudyReview.redos(subject: subject)
+        let redoLines = redos.isEmpty ? "" : "\n\n# Redo questions due (lost marks on a returned test; ask these first, a fresh question on the same point, topic=\"<the same topic>\" so it counts as done)\n"
+            + redos.map { "- \($0.heading) · cause: \($0.cause.isEmpty ? "?" : $0.cause) · redo \($0.step) of \($0.steps)" }.joined(separator: "\n")
         let coverage = StudyReview.coverage(subject: subject)
         let untouched = coverage.untouched.isEmpty ? "" : "\n\n# Never practised yet (\(coverage.done) of \(coverage.total) subtopics done; when nothing is due and they name no topic, mix these in; \"something new\" means these)\n" + coverage.untouched.prefix(20).map { "- " + $0 }.joined(separator: "\n")
         let notes = StudyBuddy.schoolFolder?.appendingPathComponent("Subjects").path
+        let reviewSession = """
+            Mark review: they've had a marked test or paper back ("I got a 4 in maths") and want to sort out the lost marks. \
+            No new quiz: work through their paper.
+            1. If they haven't said, ask in one short line for the assessment's name, their mark (out of what, and the grade if they know it), the \
+            grade boundary if they know it, and the paper: drop it on the whiteboard (a PDF or a photo) or type the questions they lost marks on.
+            2. As soon as you know the mark, log it once: <returned assessment="Unit 3 test" mark="23/40 (4)" boundary="5 from 26/40"></returned> \
+            (boundary always as "<grade> from <mark>", the next grade up and the mark it needs; ask for the grade if they only give a mark; \
+            empty when they don't know; never guess it).
+            3. Then the questions that lost marks, one at a time, most marks lost first: <question n="3" marks="6" topic="<syllabus number and name \
+            from the map>" source="<assessment> Q3">the question as printed</question>, and ask what they wrote and where the marks went. When the \
+            marking is visible on the paper, say what you see and ask them to confirm instead. Every lost-marks question gets its own \
+            <question n=… marks=… topic=…> before its feedback, even when you only have part of the wording (a table or diagram still to \
+            come): give what you have and say "(table on the paper)" or the like; never skip it.
+            4. Then <feedback n="3" topic="<the same topic>" score="<marks they got>" total="<marks available>" cause="didn't know|command term|careless">✓ what earned \
+            marks; ✗ missing: each lost mark point</feedback><model>the answer that gets full marks, using only methods on this subject's \
+            syllabus</model>, then the next lost question. n is always the question's number on the paper, the same as its <question> tag. Give the feedback tag as soon as they've said what they wrote and why the marks went: \
+            if they haven't said the marks they got, estimate the score from the markscheme and say outside the tag that it's an estimate. \
+            ✗ lines are only the lost mark points; caveats and notes go outside the tag. cause: \
+            didn't know = the content wasn't there; command term = they knew it but didn't answer what the command term asks (described when \
+            asked to explain, no judgment on evaluate, too short for the marks); careless = a slip, misread, units, arithmetic, ran out of time. \
+            When you can't tell, ask which it was before the feedback tag. Each feedback tag goes in their mistake book, and a fresh redo \
+            question on it comes back tomorrow, in 3 days and in a week: say so once, and only about questions you gave a feedback tag for.
+            5. The summary comes once a session: when the lost questions are done, or on "end" / "that's all", whichever comes first. \
+            Never a second one: after it, "end" or "that's all" gets one short closing line and no tags. Before it: first a <question> for any lost-marks question that doesn't have one yet, and a \
+            <feedback n=…> (and <model>) for every lost-marks question discussed that doesn't have one yet, then <summary score="<their total>" total="<marks available>">the mark; how the lost \
+            marks split by cause (e.g. 9 didn't know, 4 command term, 3 careless); then **3 things to fix** as a numbered list, each concrete \
+            (a topic to relearn with its syllabus number, a command-term habit, a checking habit)</summary>. No <cards> unless definitions were lost.
+            """
         return """
             You are Joe, an IB Diploma tutor running a practice session on a whiteboard for \(Profile.name.isEmpty ? "a student" : Profile.name). \
             \(Profile.description) Subject: \(subject).
@@ -463,9 +703,10 @@ final class StudyBoardModel: ObservableObject {
             strictly against it, so the same answer always gets the same mark.
             - They can draw: a diagram sent as an image with their answer. Mark what's drawn (axes, labels, curves, shifts, areas) as an examiner would.
             - After they answer: <feedback n="1" score="3" total="4">✓ what earned marks, one bullet each; ✗ missing: what was missing, one bullet each</feedback> \
-            then <model>the answer a markscheme would credit, concise</model>, then the next <question>.
+            then <model>the answer a markscheme would credit, concise, using only methods on this subject's syllabus</model>, then the next <question>. \
+            ✗ lines are only lost mark points; any caveat or note goes outside the tag.
             - Outside the tags, at most one short sentence, said aloud ("Nice, three out of four."). No other chatter.
-            - At the end: <summary score="x" total="y">strengths, the weakest topic, the one thing to revise next</summary>.
+            - At the end, once a session (never a second summary): <summary score="x" total="y">strengths, the weakest topic, the one thing to revise next</summary>.
             - Right after the summary, flashcards of what they must know word for word: <cards>one per line, term :: the definition as the \
             markscheme words it</cards>. One for every define question in the session, plus the key terms they got wrong or left out; at most 12, \
             none when there were none. They're saved to their deck for review. When they ask you to make flashcards on a topic, give the <cards> \
@@ -477,10 +718,10 @@ final class StudyBoardModel: ObservableObject {
 
             \(myp ? "# MYP\nThey're in the MYP (\(Profile.programme)). Name the criterion each question targets, and mark on that criterion's band and level out of 8 (score=\"6\" total=\"8\"), using the descriptors below. No DP papers.\n" : "")
             # The session
-            \(mode == .exam
+            \(mode == .review ? reviewSession : mode == .exam
                 ? "Exam mode: one full question in the style of a real paper for this subject (with parts (a), (b)…, a stimulus or data where the paper has one, marks per part), with time=\"<minutes>\" in the question tag: the time the real paper allows for those marks. Mark it part by part; long parts with markbands. Then the summary, saying whether they'd have finished in time."
                 : "Quiz mode: five questions, easier to harder, IB command terms and marks in brackets, a mix of definitions, application to a short context, calculations where the subject has them, and one exam-style question. Cover the topic they ask for; otherwise the topics due for review below first (they're about to forget them), then their weakest topics from the results. After the fifth, the summary.")
-            - "hint": a hint, not the answer. "skip": the model answer and 0 marks (a feedback tag with score 0), then go on. "end": the summary now. \
+            - "hint": a hint, not the answer. "skip": the model answer and 0 marks (a feedback tag with score 0), then go on. "end": the summary now, unless it's been given (then one short closing line, no second summary). \
             Any other question from them: answer it briefly, then carry on.
             - Mark strictly but fairly, like an IB examiner: the command term sets the depth, partial marks are fine, follow-through for \
             a slip carried correctly. Diagrams: they describe them in words; mark the description.
@@ -497,7 +738,7 @@ final class StudyBoardModel: ObservableObject {
             \(history.isEmpty ? "None yet." : history)
 
             # Their recent mistakes (from their mistake book: re-test these with a fresh question on the same point, never the same wording; "redo my mistakes" means only these)
-            \(mistakes.isEmpty ? "None yet." : mistakes)\(untouched)
+            \(mistakes.isEmpty ? "None yet." : mistakes)\(redoLines)\(untouched)
 
             # Syllabus map
             \(map)
@@ -505,6 +746,42 @@ final class StudyBoardModel: ObservableObject {
             # Command terms and marking
             \(terms)
             \(paperIndex)
+            """
+    }
+
+    /// Draft feedback: the coursework criteria (Rubrics.md) and how to mark a draft against them.
+    static func feedbackPrompt(project: String) -> String {
+        let rubrics = (try? String(contentsOf: StudyBuddy.syllabus.appendingPathComponent("Rubrics.md"), encoding: .utf8)) ?? ""
+        let saved = Marks.feedbackURL(for: project)
+        let earlier = (try? String(contentsOf: saved, encoding: .utf8))
+            .flatMap { $0.components(separatedBy: "### ").dropFirst().last }
+            .map { "\n# Their last feedback on this (say what improved and what didn't)\n### " + String($0.prefix(2500)) } ?? ""
+        return """
+            You are Joe, an IB Diploma coach checking a draft against the IB assessment criteria, like an experienced moderator, \
+            for \(Profile.name.isEmpty ? "a student" : Profile.name). \(Profile.description) Subjects: \(Profile.subjects). The work: \(project).
+
+            # How to write (the whiteboard reads these tags)
+            - Until the draft has come, ask for it in one short line: drop the file on the whiteboard (Word, Pages, PDF or text) or paste it. \
+            Work out which assessment it is (an IA of which subject, the EE and its subject, the TOK essay or exhibition, the IO) from what \
+            they said and the draft; ask only if you can't tell. A dropped file arrives as <file>…</file> with Joe's word count, and a pasted \
+            draft comes with Joe's word count too: use that number, never estimate one.
+            - Then one card per criterion of that assessment, in order: <criterion name="A · Focus and method" score="4" total="6" band="3–4">**Evidence:** \
+            a short quote from the draft in quotation marks (or what's missing)
+            **To lift it a band:** one or two concrete changes</criterion>. TOK essay and exhibition: one holistic criterion out of 10. \
+            Mark honestly against the descriptors below (best fit; most drafts sit mid-band), never inflate. A criterion that can't be assessed \
+            from the draft (EE criterion E needs the RPPF, for instance): score="0" total="0" and say why in the card, or leave it out.
+            - Then <summary score="<predicted total>" total="<maximum>">**Grade:** the grade when the rubric gives bands (the total is shown from score and total, don't repeat it)
+            **Word count:** n of the limit, and what to cut or add when it's over or well under
+            **The three biggest fixes:** a numbered list, most marks first</summary>. Score and total count only the criteria you could assess; \
+            when one was left out, say so in the summary ("on A–D; E needs the RPPF").
+            - Outside the tags, at most one short sentence, said aloud. Quote only their words; never invent quotes.
+            - Academic honesty: give advice, never rewritten paragraphs or text to paste in. Short examples of a structure are fine.
+            - Follow-up questions: answer briefly. A new version of the draft: the whole set of cards again, saying what improved.
+            - The feedback is saved to \(saved.path) with today's date; don't write files yourself. Never use tools to mark.
+            \(earlier)
+
+            # The criteria (Joe's summary of the IB guides)
+            \(rubrics)
             """
     }
 
@@ -578,6 +855,12 @@ private struct StudyBoardView: View {
                 .padding(24)
                 .frame(maxWidth: 820)
                 .frame(maxWidth: .infinity)
+            }
+            // A marked paper or a draft dropped on the board.
+            .dropDestination(for: URL.self) { urls, _ in
+                guard let url = urls.first, url.isFileURL, model.isActive else { return false }
+                model.attach(url)
+                return true
             }
             .onChange(of: model.items.count) { withAnimation { scroll.scrollTo("end", anchor: .bottom) } }
             .onChange(of: model.live) { scroll.scrollTo("end", anchor: .bottom) }
@@ -658,7 +941,10 @@ private struct StudyBoardView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(model.subject.isEmpty ? "Study" : model.subject).font(.system(size: 16, weight: .bold))
                 Text(model.mode == .cards ? "Flashcards" + (model.deck.isEmpty ? "" : " · \(model.deck.count) to go")
-                     : model.mode == .exam ? "Exam question" : "Quiz" + (model.questionCount > 0 ? " · question \(model.questionCount)" : "")).font(.system(size: 11.5)).foregroundStyle(.secondary)
+                     : model.mode == .exam ? "Exam question"
+                     : model.mode == .review ? "Mark review" + (model.questionCount > 0 ? " · question \(model.questionCount)" : "")
+                     : model.mode == .feedback ? "Draft feedback against the IB criteria"
+                     : "Quiz" + (model.questionCount > 0 ? " · question \(model.questionCount)" : "")).font(.system(size: 11.5)).foregroundStyle(.secondary)
             }
             Spacer()
             if model.mode == .exam, let since = model.questionSince {
@@ -691,7 +977,9 @@ private struct StudyBoardView: View {
 
     private var empty: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Pick a subject on the Study page, or say “quiz me on…”.").font(.system(size: 14)).foregroundStyle(.secondary)
+            Text(model.mode == .review || model.mode == .feedback
+                 ? "Drop your \(model.mode == .review ? "marked paper" : "draft") here (PDF, photo, Word, Pages or text), or paste it below."
+                 : "Pick a subject on the Study page, or say “quiz me on…”.").font(.system(size: 14)).foregroundStyle(.secondary)
         }
         .padding(.top, 40)
     }
@@ -732,7 +1020,7 @@ private struct StudyBoardView: View {
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .background(accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
-        case let .feedback(score, total, text, modelAnswer):
+        case let .feedback(score, total, text, modelAnswer, _, _):
             VStack(alignment: .leading, spacing: 10) {
                 if total > 0 {
                     HStack(spacing: 8) {
@@ -758,10 +1046,24 @@ private struct StudyBoardView: View {
             .background(Self.color(score, max(total, 1)).opacity(total > 0 ? 0.07 : 0), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         case let .summary(score, total, text):
             VStack(alignment: .leading, spacing: 8) {
-                Text(total > 0 ? "Session: \(score)/\(total)" : "Session summary").font(.system(size: 16, weight: .bold))
-                BoardText(text, size: 13.5, spacing: 0)
+                let label = model.mode == .review ? "Mark" : model.mode == .feedback ? "Predicted" : "Session"
+                Text(total > 0 ? "\(label): \(score)/\(total)" : model.mode == .feedback ? "Feedback summary" : "\(label) summary").font(.system(size: 16, weight: .bold))
+                BoardText(total > 0 ? Self.withoutScoreLine(text) : text, size: 13.5, spacing: 0)
                 // What next, without typing: the session's own advice, as buttons.
-                if !model.isBusy {
+                if !model.isBusy, model.mode == .review {
+                    HStack(spacing: 8) {
+                        Button("Redo questions now") { model.start(subject: model.subject, request: "Quiz me on the questions I just lost marks on: a fresh question on each point, same topics.", mode: .quiz) }
+                        Button("Mistake book") { Mistakes.open(model.subject) }
+                        Button("Marks log") { NSWorkspace.shared.open(Marks.logURL) }
+                    }
+                    .buttonStyle(.bordered).controlSize(.small).padding(.top, 4)
+                } else if !model.isBusy, model.mode == .feedback {
+                    HStack(spacing: 8) {
+                        Button("Open saved feedback") { NSWorkspace.shared.open(Marks.feedbackURL(for: model.subject)) }
+                        Text("Drop a new version to check it again.").font(.system(size: 12)).foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.bordered).controlSize(.small).padding(.top, 4)
+                } else if !model.isBusy {
                     HStack(spacing: 8) {
                         Button("Another quiz") { model.start(subject: model.subject, request: "Another quiz: five new questions, starting with what I just got wrong.", mode: .quiz) }
                         Button("Teach me my weakest topic") { model.start(subject: model.subject, request: "Teach me the weakest topic from my last session with a short lesson, then test me on it.", mode: .quiz) }
@@ -793,6 +1095,38 @@ private struct StudyBoardView: View {
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        case let .returned(assessment, mark, boundary):
+            HStack(spacing: 12) {
+                Image(systemName: "doc.text.magnifyingglass").font(.system(size: 18)).foregroundStyle(accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text([assessment.isEmpty ? "Returned mark" : assessment, mark].filter { !$0.isEmpty }.joined(separator: " · "))
+                        .font(.system(size: 14, weight: .bold))
+                    Text(boundary.isEmpty ? "Logged in Marks.md" : "Boundary: \(boundary) · logged in Marks.md")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        case let .criterion(name, score, total, band, text):
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text(name.isEmpty ? "Criterion" : name).font(.system(size: 13.5, weight: .bold))
+                    if !band.isEmpty { chip("band \(band)") }
+                    Spacer()
+                    if total > 0 {
+                        Text("\(score)/\(total)").font(.system(size: 17, weight: .bold).monospacedDigit()).foregroundStyle(Self.color(score, total))
+                    } else {
+                        chip("not assessed")
+                    }
+                }
+                BoardText(text, size: 13.5)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(alignment: .leading) { Rectangle().fill(total > 0 ? Self.color(score, total) : Color.secondary.opacity(0.4)).frame(width: 3).padding(.vertical, 12) }
         case let .lesson(title, text):
             VStack(alignment: .leading, spacing: 8) {
                 Label(title.isEmpty ? "Lesson" : title, systemImage: "book.closed.fill")
@@ -840,7 +1174,12 @@ private struct StudyBoardView: View {
                     }
                     Button("Clear") { strokes = [] }
                 }
-                Button("Hint") { model.command("hint") }
+                if model.mode == .review || model.mode == .feedback {
+                    Button { choose() } label: { Label(model.mode == .review ? "Add paper" : "Add draft", systemImage: "paperclip") }
+                        .help("A PDF or photo of the paper, or the draft as Word, Pages, PDF or text. Or drop it on the board.")
+                } else {
+                    Button("Hint") { model.command("hint") }
+                }
                 Button("Skip") { model.command("skip") }
                 Button("End") { model.command("end") }
                 Spacer()
@@ -858,10 +1197,29 @@ private struct StudyBoardView: View {
         .padding(16)
     }
 
+    /// A file for the tutor: the marked paper, or the draft.
+    private func choose() {
+        let panel = NSOpenPanel()
+        let types: [UTType] = [.pdf, .image, .plainText, .rtf, .html, .text]
+        panel.allowedContentTypes = types + ["docx", "doc", "pages", "odt", "md"].compactMap { UTType(filenameExtension: $0) }
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url { model.attach(url) }
+    }
+
     private func chip(_ text: String) -> some View {
         Text(text).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary).lineLimit(1)
             .padding(.horizontal, 8).frame(height: 20)
             .background(Color.primary.opacity(0.06), in: Capsule())
+    }
+
+    /// A summary's body without a first line that repeats the score the title already shows
+    /// ("**Predicted:** 21/34, a B (low)" keeps just "**Grade:** a B (low)").
+    static func withoutScoreLine(_ text: String) -> String {
+        let pattern = #"^\s*\*\*(Predicted|Mark|Score|Total):\*\*\s*\d+\s*/\s*\d+[,.;:]?[ \t]*"#
+        guard let range = text.range(of: pattern, options: .regularExpression) else { return text }
+        let rest = text[range.upperBound...]
+        if rest.isEmpty || rest.hasPrefix("\n") { return rest.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return "**Grade:** " + rest
     }
 
     private static func color(_ score: Int, _ total: Int) -> Color {
@@ -965,8 +1323,9 @@ struct SketchPad: View {
 // MARK: - Preview
 
 extension StudyBoard {
-    /// `Joe --board-preview <file.png> [sketch]`: the whiteboard with a sample question and mark.
-    static func preview(to file: URL, sketch: Bool, deck: Bool = false, done: @escaping () -> Void) {
+    /// `Joe --board-preview <file.png> [sketch|deck|review|feedback]`: the whiteboard with a sample
+    /// question and mark (or a flashcard, a mark review, draft feedback).
+    static func preview(to file: URL, sketch: Bool, deck: Bool = false, sample: String? = nil, done: @escaping () -> Void) {
         let board = StudyBoard()
         board.model.preview(StudyBoardModel.parse("""
             Let's go. <question n="1" marks="4" topic="2.7 Indirect taxes" source="IB-style">**Draw** a diagram to show the effect of a specific tax on a market. [4]</question><ms>hidden</ms>
@@ -983,6 +1342,34 @@ extension StudyBoard {
         if deck {
             board.model.previewDeck([Flashcards.Card(term: "Specific tax", definition: "A fixed amount of tax per unit of a good, shifting supply up by the amount of the tax."),
                                      Flashcards.Card(term: "Tax incidence", definition: "How the burden of a tax is split between consumers and producers.")])
+        }
+        if sample == "review" {
+            board.model.previewSession(StudyBoardModel.parse("""
+                Ouch, let's sort it. <returned assessment="Unit 3 test" mark="23/40 (4)" boundary="5 from 26/40"></returned>
+                <question n="3" marks="6" topic="4.9 Normal distribution" source="Unit 3 test Q3">The masses of apples are normally distributed with mean 150 g and standard deviation 12 g. Find the probability that an apple weighs more than 170 g, and the mass exceeded by 90% of apples. [6]</question>
+                """) + [.answer(text: "I got 0.048 for the first part but used 0.9 instead of 0.1 for the second.", spoken: true)] + StudyBoardModel.parse("""
+                <feedback n="3" score="3" total="6" cause="careless">✓ P(X > 170) = 0.0478, correct with working
+                ✗ missing: inverse normal with the lower tail (0.1), giving 134.6 g
+                ✗ missing: the answer to 3 significant figures</feedback><model>P(X > 170) = 0.0478; invNorm(0.1, 150, 12) = 134.6 g (3 s.f.: 135 g).</model>
+                <summary score="23" total="40">23/40, a 4. Lost 17: 9 didn't know, 5 command term, 3 careless.
+                **3 things to fix**
+                1. Relearn 4.9 inverse normal: sketch the curve and shade before using the calculator.
+                2. "Justify" needs a reason tied to the numbers, not just the answer.
+                3. Check the tail and the rounding on every probability answer.</summary>
+                """), subject: "Mathematics AI", mode: .review)
+        } else if sample == "feedback" {
+            board.model.previewSession([StudyBoardModel.Item.answer(text: "Extended Essay draft.docx · 3,912 words", spoken: false)] + StudyBoardModel.parse("""
+                Here's where it stands. <criterion name="A · Focus and method" score="4" total="6" band="3–4">**Evidence:** "To what extent did the 2015 RMB devaluation affect Shenzhen electronics exporters?" is focused, but the method section only lists sources.
+                **To lift it a band:** say why the firm interviews and the trade data were chosen, and what each can't show.</criterion>
+                <criterion name="C · Critical thinking" score="6" total="12" band="5–8">**Evidence:** sections 3 and 4 describe the export figures ("exports rose by 8%") without weighing other causes.
+                **To lift it a band:** separate the exchange rate effect from demand changes, and evaluate the reliability of the interview data.</criterion>
+                <summary score="21" total="34">**Grade:** a B (low)
+                **Word count:** 3,912 of 4,000, fine
+                **The three biggest fixes:**
+                1. Turn description into analysis in sections 3 and 4.
+                2. Justify the method and its limits in the introduction.
+                3. A conclusion that answers "to what extent" with a clear judgment.</summary>
+                """), subject: "Extended Essay", mode: .feedback)
         }
         // A tax diagram in the three inks: black axes and demand, blue supply, red supply after the tax.
         func line(_ a: CGPoint, _ b: CGPoint, _ color: Color) -> SketchPad.Stroke {
@@ -1015,6 +1402,13 @@ extension StudyBoard {
 extension StudyBoardModel {
     func preview(_ items: [Item], subject: String, sketching: Bool) {
         self.subject = subject
+        self.items = items
+    }
+
+    /// A mark review or draft feedback session: for `--board-preview <png> review|feedback`.
+    func previewSession(_ items: [Item], subject: String, mode: Mode) {
+        self.subject = subject
+        self.mode = mode
         self.items = items
     }
 

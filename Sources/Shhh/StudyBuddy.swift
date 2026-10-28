@@ -11,7 +11,7 @@ enum StudyBuddy {
 
     static var packs: [String] {
         ((try? FileManager.default.contentsOfDirectory(atPath: syllabus.path)) ?? [])
-            .filter { $0.hasSuffix(".md") && $0 != "Command terms.md" }
+            .filter { $0.hasSuffix(".md") && $0 != "Command terms.md" && $0 != "Rubrics.md" }
             .map { String($0.dropLast(3)) }
             .sorted()
     }

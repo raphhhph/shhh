@@ -240,6 +240,10 @@ enum CommandLineTool {
             for topic in due + all.filter({ !$0.isDue }).sorted(by: { $0.due < $1.due }) {
                 print("\(topic.when.padding(toLength: 16, withPad: " ", startingAt: 0)) \(("\(Int((topic.lastScore * 100).rounded()))%").padding(toLength: 5, withPad: " ", startingAt: 0)) \(topic.subject) · \(topic.topic) (\(topic.attempts)×)")
             }
+            // Redo questions from mark reviews (the mistake book's "**Redo:**" lines).
+            for redo in StudyReview.redos() {
+                print("redo \(redo.step) of \(redo.steps)      \(redo.subject) · \(redo.heading)\(redo.cause.isEmpty ? "" : " · " + redo.cause)")
+            }
             exit(0)
         case ("--pdf-text", 3):
             print(Textbook.text(pdf: args[1], pages: args[2]))
@@ -302,7 +306,9 @@ enum CommandLineTool {
         case ("--board-preview", 2...):
             MainActor.assumeIsolated {
                 NSApplication.shared.setActivationPolicy(.accessory)
-                StudyBoard.preview(to: URL(fileURLWithPath: args[1]), sketch: args.dropFirst(2).contains("sketch"), deck: args.dropFirst(2).contains("deck")) { exit(0) }
+                let options = args.dropFirst(2)
+                StudyBoard.preview(to: URL(fileURLWithPath: args[1]), sketch: options.contains("sketch"), deck: options.contains("deck"),
+                                   sample: options.first { $0 == "review" || $0 == "feedback" }) { exit(0) }
             }
             NSApplication.shared.run()
             exit(0)

@@ -1858,6 +1858,9 @@ private struct StudyPage: View {
     /// Read from files in `reload`, not while drawing: typing in the box redraws every subject card.
     @State private var mistakeCounts: [String: Int] = [:]
     @State private var coverages: [String: (total: Int, done: Int, untouched: [String])] = [:]
+    /// Returned marks (latest first) and redo questions due from mark reviews.
+    @State private var marks: [[String]] = []
+    @State private var redos: [StudyReview.Redo] = []
 
     /// Their subjects from Settings, and TOK, which everyone takes.
     private var subjects: [String] {
@@ -1898,8 +1901,8 @@ private struct StudyPage: View {
         }
         .padding(.leading, 4)
         reviewCard
+        marksCard
         flashcardsCard
-        pastPapersCard
 
         let columns = narrow ? 1 : 2
         let rows = stride(from: 0, to: subjects.count, by: columns).map { Array(subjects[$0..<min($0 + columns, subjects.count)]) }
@@ -1911,6 +1914,7 @@ private struct StudyPage: View {
                 }
             }
         }
+        pastPapersCard
 
         if !Profile.programme.uppercased().contains("MYP") { PointsCalculator(subjects: subjects.filter { StudyBuddy.pack(for: $0) != "Theory of Knowledge" }) }
 
@@ -1955,6 +1959,63 @@ private struct StudyPage: View {
         }
         mistakeCounts = mistakesBySubject
         coverages = covered
+        marks = Marks.recent()
+        redos = StudyReview.redos(results: results)
+    }
+
+    /// Marked work back, and drafts: a mark review turns lost marks into mistakes and redo questions;
+    /// draft feedback checks coursework against the IB criteria.
+    private var marksCard: some View {
+        Card(title: redos.isEmpty ? "Marks and drafts" : "Marks and drafts · \(redos.count) redo due", symbol: "checkmark.seal") {
+            Text(marks.isEmpty
+                 ? "Got a test back? Joe goes through the lost marks with you, sorts them into didn't know, command term and careless, and brings each back as a fresh question in 1, 3 and 7 days. Or check a draft against the IB criteria."
+                 : "Returned marks are logged in Marks.md in your notes. Lost marks come back as fresh questions in 1, 3 and 7 days.")
+                .font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            ForEach(Array(marks.enumerated()), id: \.offset) { _, row in
+                HStack(spacing: 10) {
+                    Text(row[3]).font(.system(size: 13, weight: .semibold).monospacedDigit()).lineLimit(1).frame(minWidth: 40, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text([row[1], row[2]].filter { !$0.isEmpty }.joined(separator: " · ")).font(.system(size: 13)).lineLimit(1)
+                        Text(row.count > 4 && !row[4].isEmpty ? "\(row[0]) · boundary \(row[4])" : row[0])
+                            .font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                }
+            }
+            ForEach(Array(redos.prefix(4).enumerated()), id: \.offset) { _, redo in
+                HStack(spacing: 10) {
+                    Text("Redo \(redo.step)/\(redo.steps)").font(.system(size: 12, weight: .semibold)).foregroundStyle(Look.accent)
+                        .frame(minWidth: 60, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(redo.topic.isEmpty ? redo.heading : redo.topic).font(.system(size: 13)).lineLimit(1)
+                        Text([redo.subject, redo.cause].filter { !$0.isEmpty }.joined(separator: " · ")).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                    Button("Redo") { model.actions.ask("Quiz me on \(redo.subject): my redo questions due today, starting with \(redo.topic).") }
+                        .buttonStyle(PillButton(prominent: true))
+                }
+            }
+            HStack(spacing: 14) {
+                Menu("Review a returned mark") {
+                    ForEach(subjects, id: \.self) { subject in
+                        Button(subject) { model.actions.ask("Review a returned mark in \(subject): go through my marked paper.") }
+                    }
+                }
+                Menu("Feedback on a draft") {
+                    Button("Extended Essay") { model.actions.ask("Check my Extended Essay draft against the criteria.") }
+                    Button("TOK essay") { model.actions.ask("Check my TOK essay draft against the criteria.") }
+                    Button("TOK exhibition") { model.actions.ask("Check my TOK exhibition against the criteria.") }
+                    Button("Individual oral (IO)") { model.actions.ask("Check my IO outline against the criteria.") }
+                    Divider()
+                    ForEach(subjects.filter { StudyBuddy.pack(for: $0) != "Theory of Knowledge" }, id: \.self) { subject in
+                        Button("\(subject) IA") { model.actions.ask("Check my \(subject) IA draft against the criteria.") }
+                    }
+                }
+                if !marks.isEmpty { Button("Open Marks.md") { NSWorkspace.shared.open(Marks.logURL) }.buttonStyle(.plain).foregroundStyle(.secondary) }
+            }
+            .menuStyle(.borderlessButton).fixedSize()
+            .font(.system(size: 12.5, weight: .medium))
+        }
     }
 
     /// Their flashcard decks, one per subject: made after each quiz from the definitions it asked.

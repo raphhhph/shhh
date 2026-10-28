@@ -2247,10 +2247,15 @@ private struct WeekPage: View {
     @State private var needs: [String] = []
     @State private var overdue: [StudyToday.Overdue] = []
     @State private var next: StudyToday.Block?
+    /// Days whose classes are shown in full (collapsed to one line by default).
+    @State private var openClasses: Set<Date> = []
 
     struct Day: Identifiable {
         var date: Date
+        /// Deadlines, exams, events and study blocks: what the week is about.
         var entries: [Entry]
+        /// The regular timetable, kept out of the way.
+        var classes: [CalendarFeed.Item]
         var id: Date { date }
     }
 
@@ -2273,7 +2278,7 @@ private struct WeekPage: View {
     }
 
     var body: some View {
-        PageTitle(title: "Week", subtitle: "Classes, events, deadlines and your study blocks for the next seven days.")
+        PageTitle(title: "Week", subtitle: "Deadlines, exams, events and your study blocks for the next seven days. Classes fold into one line; daily routines are left out.")
         HStack(spacing: 8) {
             Button { replan() } label: { Label("Re-plan week", systemImage: "arrow.triangle.2.circlepath") }
                 .buttonStyle(PillButton(prominent: true))
@@ -2326,6 +2331,30 @@ private struct WeekPage: View {
 
     @ViewBuilder private func column(_ day: Day) -> some View {
         VStack(alignment: .leading, spacing: 6) {
+            if let first = day.classes.first, let last = day.classes.last {
+                let open = openClasses.contains(day.date)
+                Button {
+                    if open { openClasses.remove(day.date) } else { openClasses.insert(day.date) }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: open ? "chevron.down" : "chevron.right").font(.system(size: 8.5, weight: .semibold))
+                        Text("\(day.classes.count) \(day.classes.count == 1 ? "class" : "classes") · \(Daybook.hhmm(first.start))–\(Daybook.hhmm(last.end ?? last.start))")
+                            .font(.system(size: 11).monospacedDigit())
+                    }
+                    .foregroundStyle(.secondary)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(open ? "Hide classes" : "Show classes")
+                if open {
+                    ForEach(day.classes, id: \.id) { lesson in
+                        HStack(spacing: 6) {
+                            Text(Daybook.hhmm(lesson.start)).font(.system(size: 10.5).monospacedDigit()).foregroundStyle(.tertiary)
+                            Text(lesson.title).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
+                }
+            }
             if Calendar.current.isDateInToday(day.date) {
                 ForEach(overdue, id: \.line) { item in
                     row(color: Look.deadline, time: "Late", title: item.title, detail: "Overdue since \(item.since)", red: true)
@@ -2338,7 +2367,7 @@ private struct WeekPage: View {
                 }
             }
             if day.entries.isEmpty && !(Calendar.current.isDateInToday(day.date) && !overdue.isEmpty) {
-                Text("Nothing planned").font(.system(size: 11.5)).foregroundStyle(.tertiary)
+                Text("Nothing due").font(.system(size: 11.5)).foregroundStyle(.tertiary)
             }
         }
     }
@@ -2424,14 +2453,32 @@ private struct WeekPage: View {
         let milestones = IBProjects.openMilestoneItems(now, through: end)
             .filter { milestone in !items.contains { $0.kind == .deadline && CalendarFeed.sameThing($0.title, milestone.title) } }
         let week = StudyToday.week()
+        // Routines are left out: wake-up, shower and breakfast events, and any timed event that comes
+        // back at the same time on three or more days this week.
+        let routineWords = #"\b(wake ?up|shower|breakfast|lunch|dinner|bed ?time|sleep|commute|alarm)\b"#
+        var daysAt: [String: Set<Date>] = [:]
+        for item in items where item.kind == .event && !item.allDay {
+            daysAt["\(item.title.lowercased()) \(Daybook.hhmm(item.start))", default: []].insert(calendar.startOfDay(for: item.start))
+        }
+        func isRoutine(_ item: CalendarFeed.Item) -> Bool {
+            guard item.kind == .event, !item.allDay else { return false }
+            return item.title.range(of: routineWords, options: [.regularExpression, .caseInsensitive]) != nil
+                || (daysAt["\(item.title.lowercased()) \(Daybook.hhmm(item.start))"]?.count ?? 0) >= 3
+        }
         days = (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: first) }.map { date in
             var blocks = week.first { calendar.isDate($0.day, inSameDayAs: date) }?.blocks ?? []
             if blocks.isEmpty && calendar.isDateInToday(date) { blocks = StudyToday.blocks(now) }
-            let things = (items + milestones).filter { calendar.isDate($0.start, inSameDayAs: date) }
-            let entries = things.map(Entry.item) + blocks.map(Entry.block)
+            let things = (items + milestones).filter { calendar.isDate($0.start, inSameDayAs: date) && !isRoutine($0) }
+            // A class listed twice (the timetable and the calendar) shows once.
+            var classes: [CalendarFeed.Item] = []
+            for lesson in things.filter({ $0.kind == .lesson }).sorted(by: { $0.start < $1.start })
+            where !classes.contains(where: { $0.start == lesson.start && $0.title == lesson.title }) {
+                classes.append(lesson)
+            }
+            let entries = things.filter { $0.kind != .lesson }.map(Entry.item) + blocks.map(Entry.block)
             return Day(date: date, entries: entries.sorted { a, b in
                 a.allDay != b.allDay ? a.allDay : a.start < b.start
-            })
+            }, classes: classes)
         }
         let text = WeekPlan.url.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
         needs = Daybook.section("Needs you", of: text)

@@ -32,11 +32,8 @@ enum WeekPlan {
         // Every open project milestone due this week or soon after (an overdue one as due today).
         let milestonesEnd = calendar.date(byAdding: .day, value: 14, to: start) ?? start
         let milestones = IBProjects.openMilestoneItems(now, through: milestonesEnd)
-        let work = (deadlines.filter(Assessment.needsStudy) + milestones).filter { $0.start > now || IBProjects.isOverdue($0) }.sorted { a, b in
-            let dayA = calendar.startOfDay(for: a.start), dayB = calendar.startOfDay(for: b.start)
-            if dayA != dayB { return dayA < dayB }
-            return Daybook.isWeighty(a) && !Daybook.isWeighty(b)
-        }
+        let work = (deadlines.filter(Assessment.needsStudy) + milestones).filter { $0.start > now || IBProjects.isOverdue($0) }
+            .sorted(by: Assessment.plannedBefore)
         // Blocks each piece of work wants: three for a test, IA, essay or milestone, one otherwise.
         var wanted: [String: Int] = [:]
         for item in work { wanted[item.id] = Daybook.isWeighty(item) ? 3 : 1 }
@@ -105,8 +102,10 @@ enum WeekPlan {
                 // (two for the most pressing one, then one each). Then a milestone, then
                 // what's due later, in due order, until each has the blocks it wants.
                 let pressing = work.first { !soft($0) && $0.start > block.end && $0.start < horizon }
+                // The double block only when nothing else is due by then: else one each, an exam first.
+                let alone = work.filter { !soft($0) && $0.start > block.end && $0.start < horizon }.count <= 1
                 var pick: CalendarFeed.Item? = soon.first { item in
-                    (today[item.id] ?? 0) < (item.id == pressing?.id ? 2 : 1)
+                    (today[item.id] ?? 0) < (item.id == pressing?.id && alone ? 2 : 1)
                 }
                 if pick == nil { pick = (late + rest).first { (wanted[$0.id] ?? 0) > 0 } }
                 // Everything has its blocks: a free day's first block gets ahead on the nearest one.

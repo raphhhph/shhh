@@ -47,6 +47,19 @@ enum Assessment {
 
     static func isInClass(_ item: CalendarFeed.Item) -> Bool { kind(item) == .inClass }
 
+    /// The plans' order: by due day, then an exam before work handed in that day, then the weightier
+    /// one, then the earlier time.
+    static func plannedBefore(_ a: CalendarFeed.Item, _ b: CalendarFeed.Item) -> Bool {
+        let calendar = Calendar.current
+        let dayA = calendar.startOfDay(for: a.start), dayB = calendar.startOfDay(for: b.start)
+        if dayA != dayB { return dayA < dayB }
+        let examA = isInClass(a), examB = isInClass(b)
+        if examA != examB { return examA }
+        let weightyA = Daybook.isWeighty(a), weightyB = Daybook.isWeighty(b)
+        if weightyA != weightyB { return weightyA }
+        return a.start < b.start
+    }
+
     /// Words for something done, not studied for: a form, a payment, bringing a thing.
     private static let errand = #"\b(form|permission slip|consent|sign|signed|payment|pay|fee|bring|return (the|your)|uniform|photo|ticket|sign[- ]up|register|registration|attendance|meeting|trip|level changes?)\b"#
 

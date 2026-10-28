@@ -84,11 +84,19 @@ enum WeekPlan {
                 let rest: [CalendarFeed.Item] = eligible.filter { !IBProjects.isOverdue($0) && $0.start >= horizon }
                 let candidates = soon + late + rest
                 var ahead = false
-                var pick = candidates.first { (wanted[$0.id] ?? 0) > 0 }
+                // As in the Daybook's plan: what's due today (after this block) or tomorrow gets the
+                // day's blocks first, whether or not it already had its share earlier in the week
+                // (two for the most pressing one, then one each). Then an overdue milestone, then
+                // what's due later, in due order, until each has the blocks it wants.
+                let pressing = work.first { !IBProjects.isOverdue($0) && $0.start > block.end && $0.start < horizon }
+                var pick: CalendarFeed.Item? = soon.first { item in
+                    (today[item.id] ?? 0) < (item.id == pressing?.id ? 2 : 1)
+                }
+                if pick == nil { pick = (late + rest).first { (wanted[$0.id] ?? 0) > 0 } }
                 // Everything has its blocks: a free day's first block gets ahead on the nearest one.
                 if pick == nil, planned == 0, let next = candidates.first(where: { !IBProjects.isOverdue($0) }) { pick = next; ahead = true }
                 guard let item = pick else { continue }
-                if !ahead { wanted[item.id, default: 0] -= 1 }
+                if !ahead { wanted[item.id] = max(0, (wanted[item.id] ?? 0) - 1) }
                 today[item.id, default: 0] += 1
                 let subject = item.subject.map { $0 == "project" ? "" : " · \($0)" } ?? ""
                 // "Get ahead" only before the due day; on the day it's just due today.
@@ -119,14 +127,16 @@ enum WeekPlan {
         return (try? plan.write(to: url, atomically: true, encoding: .utf8)) != nil ? url : nil
     }
 
-    /// On Sunday evening, next week's plan, once.
-    static func buildIfSundayEvening(_ now: Date = Date()) {
+    /// On Sunday evening, next week's plan, once. Returns Week.md when it was just written, so
+    /// Joe can tell the student (and ask its clash questions).
+    @discardableResult
+    static func buildIfSundayEvening(_ now: Date = Date()) -> URL? {
         let calendar = Calendar.current
         guard StudyToday.Settings.sundayPlan, calendar.component(.weekday, from: now) == 1, calendar.component(.hour, from: now) >= 17, let url,
-              let monday = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) else { return }
+              let monday = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) else { return nil }
         let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-        guard !existing.contains("from: \(monday.formatted(.localDay))") else { return }
-        build(from: monday, now: now)
+        guard !existing.contains("from: \(monday.formatted(.localDay))") else { return nil }
+        return build(from: monday, now: now)
     }
 
     // MARK: - Clashes
@@ -158,11 +168,40 @@ enum WeekPlan {
         return String(line[range].dropFirst(6).prefix(5))
     }
 
+    /// When a block line ends on its day ("17:40" in "- [ ] 16:10–17:40 (after school): …").
+    private static func blockEnd(_ line: String, on day: Date) -> Date? {
+        guard let range = line.range(of: #"^- \[[ xX]\] \d{2}:\d{2}–\d{2}:\d{2}"#, options: .regularExpression) else { return nil }
+        let parts = line[range].suffix(5).split(separator: ":").compactMap { Int($0) }
+        guard parts.count == 2 else { return nil }
+        return Calendar.current.date(bySettingHour: parts[0], minute: parts[1], second: 0, of: day)
+    }
+
+    /// A block line's task title, however the line was written: "- [ ] 15:55–17:25 (after school):
+    /// get ahead on Paper 1 Writing · Chinese B — due Thu 29 Oct · moved from Tue 27 Oct 15:55" →
+    /// "Paper 1 Writing". Nil when it isn't a block line.
+    static func blockTitle(_ line: String) -> String? {
+        let plain = line.replacingOccurrences(of: "~~", with: "")
+        guard let colon = plain.range(of: "): ") else { return nil }
+        return title(String(plain[colon.upperBound...]))
+    }
+
+    /// A task title without what a block line adds around it: "get ahead on ", " · moved from …",
+    /// " — due …" and the " · Chinese B" subject. Used on both sides of a match.
+    static func title(_ text: String) -> String {
+        var rest = text.trimmingCharacters(in: .whitespaces)
+        let ahead = "get ahead on "
+        if rest.hasPrefix(ahead) { rest = String(rest.dropFirst(ahead.count)) }
+        rest = rest.replacingOccurrences(of: #" · moved from .*$"#, with: "", options: .regularExpression)
+        let first = rest.components(separatedBy: " — ").first ?? rest
+        return (first.components(separatedBy: " · ").first ?? first).trimmingCharacters(in: .whitespaces)
+    }
+
     /// Re-plans `text` (a Week.md): a block left unticked on a day before today is struck through
     /// and moves to the next free slot this week (before its deadline); "## Moved" says what moved,
     /// and one that fits nowhere becomes a question in Needs you. A block whose task was marked done
-    /// elsewhere is ticked instead. Nil when there's nothing to change.
-    static func replanned(_ text: String, now: Date = Date()) -> (text: String, moves: [String])? {
+    /// elsewhere is ticked instead. Nil when there's nothing to change. `tonight` (the night
+    /// shutdown) also moves today's blocks that are over and still unticked.
+    static func replanned(_ text: String, now: Date = Date(), tonight: Bool = false) -> (text: String, moves: [String])? {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
         var lines = text.components(separatedBy: "\n")
@@ -179,6 +218,12 @@ enum WeekPlan {
         }
         // A plan for a week that's over isn't re-planned: the next one is built instead.
         guard days.contains(where: { $0 >= today }) else { return nil }
+        // A block that slipped: an open one on an earlier day, or (tonight) one today that's over.
+        func slipped(_ index: Int) -> Bool {
+            guard let day = dayOf[index], lines[index].hasPrefix("- [ ] ") else { return false }
+            if day < today { return true }
+            return tonight && day == today && (blockEnd(lines[index], on: day).map { $0 <= now } ?? false)
+        }
 
         let items = CalendarFeed.items(from: today, days: 21)
         let pending = items.filter { $0.kind == .deadline } + IBProjects.openMilestoneItems(now)
@@ -206,18 +251,21 @@ enum WeekPlan {
         var reported: [String] = []
         for index in lines.indices {
             let line = lines[index]
-            guard let day = dayOf[index], day < today, line.hasPrefix("- [ ] "), let time = blockTime(line),
+            guard slipped(index), let day = dayOf[index], let time = blockTime(line),
                   let colon = line.range(of: "): ") else { continue }
             changed = true
             let body = String(line.dropFirst(6)) // after "- [ ] "
             let rest = String(line[colon.upperBound...]).replacingOccurrences(of: #" · moved from .*$"#, with: "", options: .regularExpression)
-            let title = rest.components(separatedBy: " — ")[0].components(separatedBy: " · ")[0]
+            let title = WeekPlan.title(rest)
             if done.contains(where: { Daybook.sameTask($0, title) }) {
                 lines[index] = "- [x] " + body
                 continue
             }
             // An overdue milestone's "due today" is made up: it can move to any slot left this week.
-            let due = pending.first(where: { CalendarFeed.sameThing($0.title, title) })
+            // The closest title first, so "Paper 1 Writing" doesn't take "Paper 2 Reading"'s date.
+            let due = (pending.first(where: { WeekPlan.title($0.title) == title })
+                ?? pending.first(where: { Daybook.sameTask(WeekPlan.title($0.title), title) })
+                ?? pending.first(where: { CalendarFeed.sameThing(WeekPlan.title($0.title), title) }))
                 .flatMap { IBProjects.isOverdue($0) ? nil : $0.start }
             let was = "\(short(day)) \(time)"
             guard let slot = slots.first(where: { slot in
@@ -226,17 +274,14 @@ enum WeekPlan {
                 // Still open in a block from today on: say so instead of asking. Matched on the title
                 // alone (an overdue milestone's due date is made up, so dates can't be compared).
                 let planned = (lines.indices.compactMap { other -> (day: Date, line: String)? in
-                    guard let otherDay = dayOf[other], otherDay >= today else { return nil }
+                    guard let otherDay = dayOf[other], otherDay >= today, !slipped(other) else { return nil }
                     return (day: otherDay, line: lines[other])
                 } + additions.compactMap { addition -> (day: Date, line: String)? in
                     IBProjects.isoDate(addition.heading).map { (day: $0, line: addition.line) }
                 }).compactMap { block -> (day: Date, time: String)? in
                     guard block.line.hasPrefix("- [ ] "), let otherTime = blockTime(block.line),
-                          let otherColon = block.line.range(of: "): ") else { return nil }
-                    let otherTitle = String(block.line[otherColon.upperBound...]).replacingOccurrences(of: "get ahead on ", with: "")
-                        .components(separatedBy: " — ")[0].components(separatedBy: " · ")[0]
-                    let a = otherTitle.trimmingCharacters(in: .whitespaces), b = title.trimmingCharacters(in: .whitespaces)
-                    guard a == b || Daybook.sameTask(a, b) else { return nil }
+                          let otherTitle = blockTitle(block.line) else { return nil }
+                    guard otherTitle.lowercased() == title.lowercased() || Daybook.sameTask(otherTitle, title) else { return nil }
                     return (day: block.day, time: otherTime)
                 }
                 let first = !reported.contains { CalendarFeed.sameThing($0, title) }
@@ -271,11 +316,11 @@ enum WeekPlan {
         return (lines.joined(separator: "\n"), moves + questions)
     }
 
-    /// Re-plans Week.md (at the morning build). Returns what moved.
+    /// Re-plans Week.md (at the morning build; `tonight` at the night shutdown). Returns what moved.
     @discardableResult
-    static func replan(_ now: Date = Date()) -> [String] {
+    static func replan(_ now: Date = Date(), tonight: Bool = false) -> [String] {
         guard let url, let text = try? String(contentsOf: url, encoding: .utf8),
-              let result = replanned(text, now: now) else { return [] }
+              let result = replanned(text, now: now, tonight: tonight) else { return [] }
         try? result.text.write(to: url, atomically: true, encoding: .utf8)
         return result.moves
     }

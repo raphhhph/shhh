@@ -130,11 +130,17 @@ final class RestingNotch {
         panel?.orderOut(nil)
     }
 
-    /// The study plan at a glance, read every 30 s: a block on now (minutes left) or starting
-    /// within the hour (its time) in the right ear, and a red dot on the ✦ when something is overdue.
+    /// The study plan at a glance, read every 30 s: a running focus block ("Paper 2 · 24m"), else a
+    /// block on now (minutes left) or starting within the hour (its time) in the right ear, and a red dot on the ✦ when something is overdue.
     private var studyRead = Date.distantPast
 
     func updateStudy(_ now: Date = Date()) {
+        // A running focus block counts down in the ear every second instead.
+        if let focus = FocusSession.shared.chip {
+            if model.chip != focus { model.chip = focus }
+            studyRead = .distantPast
+            return
+        }
         guard now.timeIntervalSince(studyRead) > 30 else { return }
         studyRead = now
         let next = StudyToday.next(now).flatMap { $0.start.timeIntervalSince(now) < 3600 ? $0 : nil }
@@ -196,6 +202,7 @@ private struct RestingView: View {
                     HStack(spacing: 3) {
                         Image(systemName: "book.closed.fill").font(.system(size: 8.5))
                         Text(chip).font(.system(size: 10.5, weight: .semibold).monospacedDigit())
+                            .lineLimit(1).truncationMode(.head) // a long title gives way, the minutes stay
                     }
                     .foregroundStyle(.white.opacity(0.85))
                     .frame(width: RestingNotch.ear)

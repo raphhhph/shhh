@@ -326,7 +326,7 @@ private struct OverviewView: View {
                     Text(block.title).font(.system(size: 13, weight: .semibold)).lineLimit(2)
                     Text("\(Daybook.hhmm(block.start))–\(Daybook.hhmm(block.end))" + (block.subject.map { " · \($0)" } ?? ""))
                         .font(.system(size: 11)).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
-                    Button { ask(block.startRequest) } label: {
+                    Button { FocusSession.startPlannedBlock() } label: {
                         Label("Start", systemImage: "play.fill").font(.system(size: 11.5, weight: .semibold))
                             .padding(.horizontal, 10).frame(height: 22)
                             .background(Color.orange.opacity(0.9), in: Capsule())

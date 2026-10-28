@@ -469,16 +469,21 @@ enum Daybook {
     /// The last day's ticked tasks go in Done.md, which outlasts the day, so a deadline that was
     /// handed in isn't raised as overdue tomorrow.
     private static func recordDone(from last: String) {
-        guard let doneURL else { return }
         let ticked = last.components(separatedBy: "\n").filter { $0.lowercased().hasPrefix("- [x]") }.map(taskTitle).filter { !$0.isEmpty }
         guard !ticked.isEmpty else { return }
+        let date = last.components(separatedBy: "\n").prefix(12).first { $0.hasPrefix("date:") }
+            .map { $0.dropFirst(5).trimmingCharacters(in: .whitespaces) } ?? day(Date())
+        addDone(ticked, date: date)
+    }
+
+    /// Adds "- yyyy-mm-dd · <title>" to Done.md for each title not there yet.
+    static func addDone(_ titles: [String], date: String) {
+        guard let doneURL else { return }
         var log = (try? String(contentsOf: doneURL, encoding: .utf8))
             ?? "---\nsummary: \"What they've finished, one line each, so it isn't raised as overdue again.\"\n---\n# Done\n\n"
         let known = log.components(separatedBy: "\n")
-        let date = last.components(separatedBy: "\n").prefix(12).first { $0.hasPrefix("date:") }
-            .map { $0.dropFirst(5).trimmingCharacters(in: .whitespaces) } ?? day(Date())
         var changed = false
-        for title in Set(ticked) where !known.contains(where: { $0.hasSuffix(" · " + title) }) {
+        for title in Set(titles) where !known.contains(where: { $0.hasSuffix(" · " + title) }) {
             if !log.hasSuffix("\n") { log += "\n" }
             log += "- \(date) · \(title)\n"
             changed = true
@@ -782,8 +787,9 @@ enum Daybook {
             - "overdue since …" lines have one action each. "Email the teacher": find the class's teacher (their notes, \
             past school mail), write a short, polite email in their voice saying it's late and when they'll hand it in, \
             and save it as a draft (Gmail draft, or a Mail draft): never send it. "Upload it": open the line's ManageBac link.
-            - "Mark it done" / "I handed in X": tick it ([x]) everywhere it appears (Today's five, Backlog, \(relative(weekURL)), a \
-            project's milestone) and add "- yyyy-mm-dd · <title>" to \(relative(doneURL)), so it isn't raised as overdue again.
+            - "Mark it done" / "I handed in X": run "\(exe)" --mark-done "<title as written in the Daybook>": it ticks it ([x]) \
+            everywhere (Today's five, Backlog, \(relative(weekURL)), a project's milestone) and adds it to \(relative(doneURL)), so \
+            it isn't raised as overdue again. Several things: one run each.
             - "decide: do, schedule or drop": do → keep it in Today's five; schedule → give it a day (a date in the line, or a \
             block in \(relative(weekURL))); drop → move the line under ## Dropped (never delete it).
             Week: for "plan my week", run "\(exe)" --week-plan (it writes \(relative(weekURL)): study blocks around classes and \

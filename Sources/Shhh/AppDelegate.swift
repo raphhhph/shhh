@@ -163,10 +163,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if has(draw), !has(#"\bscreen\b"#), !has(#"\b(quiz|test) me\b"#) { return .explain }
         // "Review chinese", "revise econ for tomorrow", "teach me a lesson on business": studying a
         // subject they name, so not "review my essay" or "teach me to cook".
-        let studying = has(#"^\W*((hey |ok )?joe,?\s+)?((can you|could you|let'?s|i want to|help me)\s+)?(review|revise|study|practi[cs]e|go over)\b|\bteach me\b|\b(a |the )?lesson (on|about)\b"#)
+        let studying = has(#"^\W*((hey |ok )?joe,?\s+)?((can you|could you|let'?s|i want to|help me)\s+)?(review|revise|study|practi[cs]e|go over)\b|\bteach me\b|\b(a |the )?lesson (on|about)\b|\bexplain\b[^.?!]{0,40}\bto me\b"#)
             && (StudyBoard.subject(in: request) != nil
                 || StudyBuddy.pack(for: request).map { request.range(of: $0, options: .caseInsensitive) != nil } == true)
         guard has(quiz) || studying else { return nil }
+        // "Teach me elasticity", "explain externalities to me": a lesson on the board, said aloud, not a quiz.
+        if studying, has(#"\bteach me\b|\b(a |the )?lesson (on|about)\b|\bexplain\b"#), !has(#"\b(quiz|test) me\b|\bflash ?cards?\b"#) { return .explain }
         if has(#"\bflash ?cards?\b"#), !has(#"\b(make|create|generate|write)\b[^.?!]{0,20}\bflash ?cards?\b"#), !has(#"\b(quiz|test) me\b"#) { return .cards }
         return has(#"\bexam\b"#) ? .exam : .quiz
     }

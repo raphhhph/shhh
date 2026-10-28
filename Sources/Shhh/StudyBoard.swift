@@ -356,7 +356,7 @@ final class StudyBoardModel: ObservableObject {
             isBusy = false
             status = nil
             record(parsed)
-            if readAloud { speak(Self.spoken(parsed)) }
+            if readAloud { speak(Self.spoken(parsed, teaching: mode == .explain)) }
         case .failed(let message):
             items.append(.note("Something went wrong: \(message)"))
             live = []
@@ -400,21 +400,50 @@ final class StudyBoardModel: ObservableObject {
     }
 
     /// What's read aloud: the short spoken line and the question.
-    private static func spoken(_ parsed: [Item]) -> String {
+    /// What's read aloud: the short spoken line, and the question when it's short enough to take in
+    /// by ear (a long one, a table or a worked maths question is only on the board: "Question 3 is
+    /// on the board, for 6 marks"). When teaching, the whole lesson is said, like a teacher would.
+    static func spoken(_ parsed: [Item], teaching: Bool = false) -> String {
         var parts: [String] = []
         for item in parsed {
             switch item {
             case let .note(text): parts.append(BoardMath.speakable(text))
             case let .lesson(title, text):
-                // The title and the first sentence; the rest is for reading.
-                let first = text.components(separatedBy: CharacterSet(charactersIn: ".!?\n")).first ?? ""
-                parts.append(BoardMath.speakable(title + ". " + first + "."))
-            case let .question(_, marks, _, _, text):
-                parts.append(BoardMath.speakable(text).replacingOccurrences(of: #"\|.*\|"#, with: "", options: .regularExpression) + " For \(marks) mark\(marks == 1 ? "" : "s").")
+                if teaching {
+                    parts.append(plain(title) + ". " + plain(text))
+                } else {
+                    // The title and the first sentence; the rest is for reading.
+                    let first = text.components(separatedBy: CharacterSet(charactersIn: ".!?\n")).first ?? ""
+                    parts.append(plain(title + ". " + first + "."))
+                }
+            case let .question(n, marks, _, _, text):
+                let forMarks = marks > 0 ? " For \(marks) mark\(marks == 1 ? "" : "s")." : ""
+                if isShort(text) {
+                    parts.append(plain(text) + forMarks)
+                } else {
+                    parts.append("Question\(n > 0 ? " \(n)" : "") is on the board" + (marks > 0 ? ", for \(marks) mark\(marks == 1 ? "" : "s")." : "."))
+                }
             default: break
             }
         }
         return parts.joined(separator: " ")
+    }
+
+    /// Short enough to say: one or two sentences, no table, no displayed maths, no parts (a), (b).
+    static func isShort(_ text: String) -> Bool {
+        let words = text.split(whereSeparator: { $0.isWhitespace }).count
+        return words <= 30 && !text.contains("|") && !text.contains("\\[") && !text.contains("$$")
+            && text.range(of: #"(^|\n)\s*\(?[a-d]\)"#, options: .regularExpression) == nil
+            && text.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.count <= 2
+    }
+
+    /// Markdown and LaTeX as words: no #, *, bullets or table rules read out.
+    private static func plain(_ text: String) -> String {
+        BoardMath.speakable(text)
+            .replacingOccurrences(of: #"(?m)^\s*(#+|[-*•]|\d+\.)\s+"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\*\*|__|`|\|"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\n+"#, with: ". ", options: .regularExpression)
+            .replacingOccurrences(of: #"\.\s*\."#, with: ".", options: .regularExpression)
     }
 
     // MARK: Parsing the tags
@@ -579,7 +608,7 @@ final class StudyBoardModel: ObservableObject {
             \(myp ? "# MYP\nThey're in the MYP (\(Profile.programme)). Name the criterion each question targets, and mark on that criterion's band and level out of 8 (score=\"6\" total=\"8\"), using the descriptors below. No DP papers.\n" : "")
             # The session
             \(mode == .explain
-                ? "Explain mode: no quiz. They ask questions, by voice or typing, and you answer like a teacher at a whiteboard: first the <diagram> when one helps (always for an economics diagram), then <lesson title=\"…\">the explanation in Markdown: definitions word for word, the steps of the diagram, what to write in an exam to get the marks</lesson>. Before it, at most two short sentences outside the tags, said aloud. Follow-ups build on what's on the board (\"now add a subsidy\": draw the whole diagram again with it). When they say \"quiz me\", switch to quiz mode: " + quizRules
+                ? "Explain mode: no quiz. They ask questions, by voice or typing, and you answer like a teacher at a whiteboard: first the <diagram> when one helps (always for an economics diagram), then <lesson title=\"…\">the explanation in Markdown: definitions word for word, the steps of the diagram, what to write in an exam to get the marks</lesson>. Before it, at most two short sentences outside the tags, said aloud. Follow-ups build on what's on the board (\"now add a subsidy\": draw the whole diagram again with it). When they ask you to teach a concept (\"teach me elasticity\"): teach it step by step in the lesson, written to be heard, since it's read aloud in full: what it is (the definition word for word), how it works (the diagram first when there is one, then its steps), a real example, and the mistake that loses marks; short sentences, no tables, under about 200 words. Then one short check question in a <question> tag (one line, 1 or 2 marks) and mark their answer. When they say \"quiz me\", switch to quiz mode: " + quizRules
                 : mode == .exam
                 ? "Exam mode: one full question in the style of a real paper for this subject (with parts (a), (b)…, a stimulus or data where the paper has one, marks per part), with time=\"<minutes>\" in the question tag: the time the real paper allows for those marks. Mark it part by part; long parts with markbands. Then the summary, saying whether they'd have finished in time."
                 : quizRules)

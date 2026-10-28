@@ -104,7 +104,11 @@ enum Flashcards {
         let definition = trimmed[separator.upperBound...].trimmingCharacters(in: .whitespaces)
         guard !term.isEmpty, !definition.isEmpty, term.count <= 80 else { return nil }
         var card = Card(term: term, definition: definition)
-        if let (due, interval, ease) = schedule { card.due = due; card.interval = interval; card.ease = ease }
+        if let schedule {
+            card.due = schedule.0
+            card.interval = schedule.1
+            card.ease = schedule.2
+        }
         return card
     }
 

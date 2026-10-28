@@ -12,6 +12,15 @@ enum FileCommands {
     enum Verdict: Equatable {
         case look, change
         case blocked(String)
+        /// A change big enough to show first: moving folders or many files. The text lists them.
+        case confirm(String)
+
+        var changes: Bool {
+            switch self {
+            case .change, .confirm: true
+            default: false
+            }
+        }
     }
 
     private static let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
@@ -36,6 +45,7 @@ enum FileCommands {
         guard let commands = split(command) else { return nil }
         var cwd = cwd.standardizedFileURL.path
         var changes = false
+        var moved: [String] = []
         for words in commands {
             guard let first = words.first else { continue }
             let program = (first as NSString).lastPathComponent
@@ -65,6 +75,14 @@ enum FileCommands {
                 continue
             }
             guard changers.contains(program), !paths.isEmpty else { return nil }
+            if program == "mv" {
+                // What's moved, wildcards expanded: never code, the School folder or Joe's own
+                // folders, and folders or a pile of files are shown before they go.
+                for source in paths.dropLast().flatMap({ expand($0, cwd: cwd) }) {
+                    if let reason = protected(source) { return .blocked(reason) }
+                    moved.append(source)
+                }
+            }
             for (index, path) in paths.enumerated() {
                 let resolved = resolve(path, cwd: cwd)
                 let isDestination = program == "mv" && index == paths.count - 1
@@ -74,7 +92,52 @@ enum FileCommands {
             }
             changes = true
         }
+        let folders = moved.filter { var isFolder: ObjCBool = false
+            return FileManager.default.fileExists(atPath: $0, isDirectory: &isFolder) && isFolder.boolValue }
+        if !folders.isEmpty || moved.count >= 5 {
+            let names = moved.map { ($0 as NSString).lastPathComponent }
+            return .confirm("Move \(names.count == 1 ? names[0] : "\(names.count) items: " + names.prefix(12).joined(separator: ", ") + (names.count > 12 ? "…" : ""))")
+        }
         return changes ? .change : .look
+    }
+
+    /// Why a path must stay where it is, or nil. Code (a folder with .git or Package.swift, or
+    /// holding such folders, like ~/Desktop/Code), the School folder, and folders Joe uses (the
+    /// notes vault), or anything holding them. Moving these broke Joe's own build on 28 Oct.
+    static func protected(_ path: String) -> String? {
+        let name = (path as NSString).lastPathComponent
+        if name.lowercased() == "school" { return "Joe doesn't move the School folder: other features read it there. Leave it and tell the user." }
+        let joe = [Assistant.vaultURL?.resolvingSymlinksInPath().path, log.deletingLastPathComponent().path].compactMap { $0 }
+        if let used = joe.first(where: { $0 == path || $0.hasPrefix(path + "/") }) {
+            return "Joe doesn't move \(name): Joe uses \(used == path ? "it" : "a folder inside it"). Leave it and tell the user."
+        }
+        if isCode(path) { return "Joe doesn't move \(name): it holds code (a git repository or Swift package), and moving it breaks builds. Leave it and tell the user." }
+        return nil
+    }
+
+    /// A code project, or a folder of them (one level down).
+    private static func isCode(_ path: String) -> Bool {
+        let markers = [".git", "Package.swift"]
+        let manager = FileManager.default
+        if markers.contains(where: { manager.fileExists(atPath: path + "/" + $0) }) { return true }
+        if (path as NSString).pathExtension == "xcodeproj" { return true }
+        let children = (try? manager.contentsOfDirectory(atPath: path)) ?? []
+        return children.prefix(200).contains { child in
+            markers.contains { manager.fileExists(atPath: path + "/" + child + "/" + $0) } || child.hasSuffix(".xcodeproj")
+        }
+    }
+
+    /// The paths a word names, with wildcards expanded the way the shell would.
+    private static func expand(_ word: String, cwd: String) -> [String] {
+        var pattern = word
+        if pattern == "~" || pattern.hasPrefix("~/") { pattern = home + pattern.dropFirst() }
+        if !pattern.hasPrefix("/") { pattern = cwd + "/" + pattern }
+        guard pattern.contains(where: { "*?[".contains($0) }) else { return [resolve(word, cwd: cwd)] }
+        var matches = glob_t()
+        defer { globfree(&matches) }
+        guard glob(pattern, 0, nil, &matches) == 0 else { return [] }
+        return (0..<Int(matches.gl_pathc)).compactMap { matches.gl_pathv[$0].map { String(cString: $0) } }
+            .map { URL(fileURLWithPath: $0).standardizedFileURL.path }
     }
 
     /// `open`: an app by name (open -a Calculator), a folder or file in their folders, or a web,

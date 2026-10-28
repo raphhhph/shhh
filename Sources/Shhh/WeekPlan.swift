@@ -75,8 +75,10 @@ enum WeekPlan {
             }
             var planned = 0
             var today: [String: Int] = [:]
-            // What's really due by the end of the next day comes before an overdue milestone.
+            // What's really due by the end of the next day comes before a milestone that's overdue
+            // or due by then (its date is the student's own).
             let horizon = calendar.date(byAdding: .day, value: 2, to: day) ?? day
+            let soft = { (item: CalendarFeed.Item) in IBProjects.yields(item, before: horizon) }
             var evenings = 0
             for free in Daybook.freeBlocks(on: day, busy: busy) where free.end > now {
                 var block = free
@@ -89,21 +91,20 @@ enum WeekPlan {
                     if evening, isWeekday(day), evenings >= 1 { continue }
                 }
                 // At most two blocks a day for one thing, so a test gets spread over the days before it;
-                // an overdue milestone gets one a day at most, on any day (it's already late).
+                // a milestone due by tomorrow gets one a day at most, an overdue one on any day (it's already late).
                 let eligible = work.filter { item in
-                    let overdue = IBProjects.isOverdue(item)
-                    return (overdue || item.start > block.end) && (today[item.id] ?? 0) < (overdue ? 1 : 2)
+                    (IBProjects.isOverdue(item) || item.start > block.end) && (today[item.id] ?? 0) < (soft(item) ? 1 : 2)
                 }
-                let soon: [CalendarFeed.Item] = eligible.filter { !IBProjects.isOverdue($0) && $0.start < horizon }
-                let late: [CalendarFeed.Item] = eligible.filter { IBProjects.isOverdue($0) }
-                let rest: [CalendarFeed.Item] = eligible.filter { !IBProjects.isOverdue($0) && $0.start >= horizon }
+                let soon: [CalendarFeed.Item] = eligible.filter { !soft($0) && $0.start < horizon }
+                let late: [CalendarFeed.Item] = eligible.filter { soft($0) }
+                let rest: [CalendarFeed.Item] = eligible.filter { !soft($0) && $0.start >= horizon }
                 let candidates = soon + late + rest
                 var ahead = false
                 // As in the Daybook's plan: what's due today (after this block) or tomorrow gets the
                 // day's blocks first, whether or not it already had its share earlier in the week
-                // (two for the most pressing one, then one each). Then an overdue milestone, then
+                // (two for the most pressing one, then one each). Then a milestone, then
                 // what's due later, in due order, until each has the blocks it wants.
-                let pressing = work.first { !IBProjects.isOverdue($0) && $0.start > block.end && $0.start < horizon }
+                let pressing = work.first { !soft($0) && $0.start > block.end && $0.start < horizon }
                 var pick: CalendarFeed.Item? = soon.first { item in
                     (today[item.id] ?? 0) < (item.id == pressing?.id ? 2 : 1)
                 }

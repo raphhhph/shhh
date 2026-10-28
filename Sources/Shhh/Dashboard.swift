@@ -1854,7 +1854,7 @@ private struct StudyPage: View {
     @State private var papers: [String: (papers: Int, questions: Int, marked: Int)] = [:]
     @State private var paperNote: String?
     /// Flashcards per subject, and how many they pressed "Again" on last time.
-    @State private var decks: [String: (cards: Int, missed: Int)] = [:]
+    @State private var decks: [String: Flashcards.Stats] = [:]
     /// Read from files in `reload`, not while drawing: typing in the box redraws every subject card.
     @State private var mistakeCounts: [String: Int] = [:]
     @State private var coverages: [String: (total: Int, done: Int, untouched: [String])] = [:]
@@ -1945,8 +1945,8 @@ private struct StudyPage: View {
         var counts: [String: (papers: Int, questions: Int, marked: Int)] = [:]
         for pack in Set(subjects.compactMap(StudyBuddy.pack(for:))) { counts[pack] = PastPapers.summary(pack) }
         papers = counts
-        var cards: [String: (cards: Int, missed: Int)] = [:]
-        for subject in subjects { cards[subject] = (cards: Flashcards.cards(subject).count, missed: Flashcards.missed(subject).count) }
+        var cards: [String: Flashcards.Stats] = [:]
+        for subject in subjects { cards[subject] = Flashcards.stats(subject) }
         decks = cards
         var mistakesBySubject: [String: Int] = [:], covered: [String: (total: Int, done: Int, untouched: [String])] = [:]
         for subject in subjects {
@@ -1957,27 +1957,47 @@ private struct StudyPage: View {
         coverages = covered
     }
 
-    /// Their flashcard decks, one per subject: made after each quiz from the definitions it asked.
+    /// Their flashcard decks, one per subject: made after each quiz from the definitions it asked,
+    /// each card on its own spaced-repetition schedule.
     private var flashcardsCard: some View {
-        let total = decks.values.reduce(0) { $0 + $1.cards }
-        return Card(title: total == 0 ? "Flashcards" : "Flashcards · \(total)", symbol: "rectangle.on.rectangle.angled") {
-            Text(total == 0
-                 ? "After each quiz Joe makes a card for every definition it asked you and every key term you missed. Or make a deck now: Joe writes the definitions you need word for word."
-                 : "Definitions word for word, from your quizzes. The ones you got wrong last time come first.")
-                .font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        let total = decks.values.reduce(0) { $0 + $1.total }
+        let today = decks.values.reduce(0) { $0 + $1.due + $1.new }
+        return Card(title: today > 0 ? "Flashcards · \(today) to review" : "Flashcards", symbol: "rectangle.on.rectangle.angled") {
+            if total == 0 {
+                Text("After each quiz Joe makes a card for every definition it asked you and every key term you missed. Or make a deck now.")
+                    .font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             // A row per deck; subjects without one are in the menu, so the card stays short.
-            ForEach(subjects.filter { (decks[$0]?.cards ?? 0) > 0 }, id: \.self) { subject in
-                let deck = decks[subject] ?? (cards: 0, missed: 0)
+            ForEach(subjects.filter { (decks[$0]?.total ?? 0) > 0 }, id: \.self) { subject in
+                let deck = decks[subject] ?? Flashcards.Stats()
+                let waiting = deck.due + deck.new
                 HStack(spacing: 10) {
-                    Text(subject).font(.system(size: 13, weight: .medium))
-                    Text("\(deck.cards) card\(deck.cards == 1 ? "" : "s")" + (deck.missed > 0 ? " · \(deck.missed) to relearn" : ""))
-                        .font(.system(size: 12)).foregroundStyle(deck.missed > 0 ? Look.accent : .secondary).lineLimit(1)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(subject).font(.system(size: 13, weight: .medium))
+                        Text("\(deck.total) cards · \(deck.learned) learned" + (deck.due > 0 ? " · \(deck.due) due" : "") + (deck.new > 0 ? " · \(deck.new) new" : ""))
+                            .font(.system(size: 11.5).monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
+                        // Progress: how much of the deck is learned, a thin line.
+                        GeometryReader { geometry in
+                            ZStack(alignment: .leading) {
+                                Rectangle().fill(Color.primary.opacity(0.08))
+                                Rectangle().fill(Color.primary.opacity(0.45)).frame(width: geometry.size.width * Double(deck.learned) / Double(max(1, deck.total)))
+                            }
+                        }
+                        .frame(maxWidth: 220).frame(height: 2)
+                    }
                     Spacer()
-                    Button("Open file") { Flashcards.open(subject) }.buttonStyle(PillButton())
-                    Button("Review") { model.actions.ask("Review my \(subject) flashcards.") }.buttonStyle(PillButton(prominent: true))
+                    if waiting > 0 {
+                        Button("Review \(waiting)") { model.actions.ask("Review my \(subject) flashcards.") }.buttonStyle(PillButton(prominent: true))
+                    } else {
+                        Button("Practise") { model.actions.ask("Practise all my \(subject) flashcards.") }.buttonStyle(PillButton())
+                    }
+                }
+                .contextMenu {
+                    Button("Open the deck file") { Flashcards.open(subject) }
+                    Button("Practise all") { model.actions.ask("Practise all my \(subject) flashcards.") }
                 }
             }
-            let empty = subjects.filter { (decks[$0]?.cards ?? 0) == 0 }
+            let empty = subjects.filter { (decks[$0]?.total ?? 0) == 0 }
             if !empty.isEmpty {
                 Menu("Make a deck for…") {
                     ForEach(empty, id: \.self) { subject in
@@ -2137,7 +2157,7 @@ private struct StudyPage: View {
                 }
             }
             let mistakes = mistakeCounts[subject] ?? 0
-            let cards = decks[subject]?.cards ?? 0
+            let cards = decks[subject]?.total ?? 0
             if mistakes > 0 || cards > 0 {
                 HStack(spacing: 12) {
                     if cards > 0 { Button("Flashcards (\(cards))") { model.actions.ask("Review my \(subject) flashcards.") } }

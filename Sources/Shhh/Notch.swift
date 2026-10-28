@@ -153,7 +153,7 @@ final class RestingNotch {
         studyRead = now
         let next = StudyToday.next(now).flatMap { $0.start.timeIntervalSince(now) < 3600 ? $0 : nil }
         let chip = next.map { block in
-            RestingModel.Chip(title: block.title, time: block.start <= now
+            RestingModel.Chip(title: block.exam ? "Exam · \(block.title)" : block.title, time: block.start <= now
                 ? "\(max(1, Int(block.end.timeIntervalSince(now) / 60)))m left" : "at \(Daybook.hhmm(block.start))")
         }
         if model.chip != chip { model.chip = chip }

@@ -895,7 +895,7 @@ private struct StudyStrip: View {
                     HStack(spacing: 12) {
                         RoundedRectangle(cornerRadius: 2.5).fill(color(block)).frame(width: 5, height: 40)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(now ? "NOW" : "NEXT BLOCK").font(.system(size: 10.5, weight: .bold)).foregroundStyle(color(block))
+                            Text((now ? "NOW" : "NEXT BLOCK") + (block.exam ? " · EXAM REVISION" : "")).font(.system(size: 10.5, weight: .bold)).foregroundStyle(color(block))
                             Text(block.title).font(.system(size: 15, weight: .semibold)).lineLimit(1)
                             Text(["\(Daybook.hhmm(block.start))–\(Daybook.hhmm(block.end))", block.subject ?? "", block.due]
                                 .filter { !$0.isEmpty }.joined(separator: " · "))
@@ -2369,6 +2369,9 @@ private struct WeekPage: View {
                     VStack(alignment: .leading, spacing: 1) {
                         Text("\(Daybook.hhmm(block.start))–\(Daybook.hhmm(block.end))")
                             .font(.system(size: 10.5, weight: .semibold).monospacedDigit()).foregroundStyle(.secondary)
+                        if block.exam {
+                            Text("EXAM").font(.system(size: 9, weight: .bold)).foregroundStyle(Look.deadline)
+                        }
                         Text(block.title).font(.system(size: 12, weight: .semibold)).lineLimit(2)
                             .strikethrough(block.done).foregroundStyle(block.done ? .secondary : .primary)
                         Text([block.subject ?? "", block.due].filter { !$0.isEmpty }.joined(separator: " · "))

@@ -25,9 +25,11 @@ enum StudyToday {
         var label: String
         var title: String
         var subject: String?
-        /// "due Fri 31 Oct", "due today", "overdue".
+        /// "due Fri 31 Oct", "due today", "overdue", or "exam tomorrow" for revision before an in-class exam.
         var due: String
         var done = false
+        /// Revision for an exam, not work towards an assignment.
+        var exam: Bool { due.hasPrefix("exam") }
 
         var minutes: Int { max(0, Int(end.timeIntervalSince(start) / 60)) }
         /// "Paper 2 · 40m", for the notch chip.
@@ -67,7 +69,7 @@ enum StudyToday {
             subject = String(title[dot.upperBound...])
             title = String(title[..<dot.lowerBound])
         }
-        if title.hasPrefix("get ahead on ") { title = String(title.dropFirst(13)) }
+        for prefix in ["get ahead on ", "revise for "] where title.hasPrefix(prefix) { title = String(title.dropFirst(prefix.count)) }
         return Block(start: start, end: end, label: label, title: title, subject: subject, due: due,
                      done: (group(2) ?? " ").lowercased() == "x")
     }

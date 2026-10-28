@@ -295,7 +295,8 @@ enum Daybook {
 
         // A past deadline that isn't done: one task, with the one thing to do about it.
         let manageBac = CalendarFeed.manageBacHome
-        let overdue = all.filter { $0.kind == .deadline && $0.start < start && !isDone($0.title) }.map { item -> (title: String, line: String) in
+        // An exam that's been sat isn't overdue: its mark comes back instead.
+        let overdue = all.filter { $0.kind == .deadline && $0.start < start && !isDone($0.title) && !Assessment.isInClass($0) }.map { item -> (title: String, line: String) in
             let since = item.start.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
             let link = (item.url ?? manageBac).map { " ([Open ManageBac](\($0)))" } ?? ""
             return (item.title, "- [ ] \(item.title) — overdue since \(since) · upload it\(link) / email the teacher / mark done"
@@ -307,12 +308,14 @@ enum Daybook {
         let openMilestones = IBProjects.openLabels()
         let carried = section("Today's five", of: last).filter { $0.hasPrefix("- [ ]") && !isOverdue($0) }
             .filter { line in !line.contains("· project") || openMilestones.contains { sameTask($0, taskTitle(line)) } }
+            // An exam that's been sat goes: there's nothing left to do for it.
+            .filter { line in !all.contains { $0.start < start && Assessment.isInClass($0) && sameTask($0.title, taskTitle(line)) } }
             .map(carriedAgain)
             .map { line -> String in
                 // "due tomorrow" from yesterday is "due today" now: re-read it from the calendar.
                 guard let item = all.first(where: { $0.kind == .deadline && sameTask($0.title, taskTitle(line)) }),
-                      let range = line.range(of: #"— due [^·—]+"#, options: .regularExpression) else { return line }
-                return line.replacingCharacters(in: range, with: "— due \(when(item, now)) ")
+                      let range = line.range(of: #"— (due|exam) [^·—,]+"#, options: .regularExpression) else { return line }
+                return line.replacingCharacters(in: range, with: "— \(Assessment.due(item, now)) ")
             }
         let inbox = section("Inbox", of: last).filter { $0.hasPrefix("- ") }
 
@@ -340,7 +343,7 @@ enum Daybook {
         // Due today or tomorrow, unless it's already a task: those come first.
         let urgent = deadlines.filter { $0.start < tomorrowEnd && !isDone($0.title) }
             .filter { item in !carried.contains { CalendarFeed.sameThing($0, item.title) } }
-            .map { "- [ ] \($0.title) — due \(when($0, now))" + ($0.subject.map { " · \($0)" } ?? "") }
+            .map { "- [ ] \($0.title) — \(Assessment.due($0, now))" + (Assessment.isInClass($0) ? ", revise" : "") + ($0.subject.map { " · \($0)" } ?? "") }
         var tasks = urgent + overdue.prefix(3).map { $0.line } + projectTasks + carried + stale
         let lateRest = overdue.dropFirst(3).map { $0.line }
         // Never an empty list while the backlog has things in it: at least three, project lines and the oldest first.
@@ -499,7 +502,7 @@ enum Daybook {
         for item in items where !text.contains(item.title) {
             let subject = item.subject.map { " · \($0)" } ?? ""
             insert("- \(when(item, now)) — \(item.title)\(subject)", under: "Deadlines", in: &lines)
-            let task = "- [ ] \(item.title) — due \(when(item, now))\(subject) · new"
+            let task = "- [ ] \(item.title) — \(Assessment.due(item, now))\(subject) · new"
             let five = section("Today's five", of: lines.joined(separator: "\n")).filter { $0.hasPrefix("- [") }.count
             insert(task, under: item.start < soon && five < 5 ? "Today's five" : "Backlog", in: &lines)
             text = lines.joined(separator: "\n")
@@ -527,7 +530,7 @@ enum Daybook {
     private static func studyPlan(_ deadlines: [CalendarFeed.Item], _ now: Date, busy: [(Date, Date)] = []) -> [String] {
         let calendar = Calendar.current
         guard let fortnight = calendar.date(byAdding: .day, value: 14, to: now) else { return [] }
-        let sorted = deadlines.filter { $0.start > now && $0.start < fortnight }.sorted { a, b in
+        let sorted = deadlines.filter { $0.start > now && $0.start < fortnight && Assessment.needsStudy($0) }.sorted { a, b in
             let dayA = calendar.startOfDay(for: a.start), dayB = calendar.startOfDay(for: b.start)
             if dayA != dayB { return dayA < dayB }
             return isWeighty(a) && !isWeighty(b)
@@ -552,8 +555,9 @@ enum Daybook {
                       return (given[candidate.id] ?? 0) < cap
                   }) else { return nil }
             given[item.id, default: 0] += 1
-            let due: String = IBProjects.isOverdue(item) ? "overdue" : "due \(when(item, now))"
-            return "- \(hhmm(block.start))–\(hhmm(block.end)) (\(block.label)): \(item.title)"
+            let due: String = IBProjects.isOverdue(item) ? "overdue" : Assessment.due(item, now)
+            let revise = Assessment.isInClass(item) ? Assessment.revise : ""
+            return "- \(hhmm(block.start))–\(hhmm(block.end)) (\(block.label)): \(revise)\(item.title)"
                 + (item.subject.map { " · \($0)" } ?? "") + " — \(due)"
         }
     }

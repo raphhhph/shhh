@@ -371,6 +371,15 @@ enum CommandLineTool {
             }
             print(Daybook.localText(day) ?? "No notes vault set.")
             exit(0)
+        case ("--classify", 1...2):
+            // Joe --classify [<vault>]: each deadline of the next two weeks as an exam (sat in class,
+            // gets revision blocks), take-home (gets work blocks) or an errand (gets none).
+            if args.count > 1 { useFolder(args[1]) }
+            for item in CalendarFeed.items(from: Calendar.current.startOfDay(for: Date()), days: 14) where item.kind == .deadline {
+                let kind = Assessment.needsStudy(item) ? Assessment.kind(item).rawValue : "errand"
+                print("\(kind.padding(toLength: 9, withPad: " ", startingAt: 0)) \(Daybook.when(item, Date())) · \(item.title)" + (item.subject.map { " · \($0)" } ?? ""))
+            }
+            exit(0)
         case ("--projects", 1...2):
             // Joe --projects [<vault or School folder>]: each IB project's progress, and what it adds to today's Daybook.
             if args.count > 1 { useFolder(args[1]) }

@@ -9,10 +9,11 @@ The dashboard window: pages Home, Week, Calendar, Study, History, Routines, Alar
 - `Dashboard.swift`: `Dashboard` (window), `DashboardModel` (data, `reload()` every 2 s; History.json decoded only when it changes), `DashboardView` (sidebar groups + page), each page struct, `Card`, `PageTitle`, `PillButton`, `ChipButton`, `Choice`, `SubjectGroup` (IB group colours), `Look` (tokens), `Theme`, `AppAppearance`, `PointsCalculator`, snapshot code (`Dashboard.snapshot`).
 
 ## Design system (keep it consistent)
+- **Calm style (28 Oct 2026, Raph: "less AI, more streamlined")**: one accent only for the main action and selection; no gradients, glows or shadows; card titles are plain text (no icon); 24 pt page titles; 12 pt cards, 7 pt buttons and fields, no capsules except switches and the notch; red only for late. Full rules: /mnt/project-files/design/joe-calm-style.md. The shared components below already follow it.
 - Tokens in `Look`: accent, sidebar, card, page, line, deadline, personal, `titleDesign`. Four **themes** (Settings → General → Style): Classic (orange), Midnight (navy + gold, forces dark), Paper (warm, serif titles), Ocean (blue, rounded). `.id(theme)` on the root redraws on change.
 - Controls: `Choice` (pill menu), `PillButton`, `JoeSwitch` (on/off, accent capsule with a springy knob; every Settings switch), `Segmented` (soft tray with the current option raised; Settings tabs, History, Usage, Alarms, Notes, points calculator; no stock `.pickerStyle(.segmented)` left), `SettingsRow` (hover highlight). Use these rather than stock controls.
-- Pages start 56 pt from the top, clear of the window buttons and level with Joe in the sidebar (46 pt plus the title bar).
-- Cards: 16 pt continuous corners, 1 pt line, 18 pt padding; side-by-side cards use `stretch: true` + `.fixedSize(horizontal: false, vertical: true)` to end level.
+- Page titles 24 pt semibold. Pages start 56 pt from the top, clear of the window buttons and level with Joe in the sidebar (46 pt plus the title bar).
+- Cards: 12 pt continuous corners, 1 pt line (6%), 16 pt padding, title as plain text; side-by-side cards use `stretch: true` + `.fixedSize(horizontal: false, vertical: true)` to end level.
 - IB subject colours (`SubjectGroup`): language blue, acquisition teal, societies gold, sciences green, maths violet, arts pink, core slate; personal events orange; deadlines red.
 - Calendar: tinted blocks with a coloured edge, weekends hidden when empty, alarms as a small line, right rail (details, Due soon, subject key) when wide.
 - Usage: a slider under the title picks 7, 14, 30 or 90 days (`usageRange`); charts cover whole days from midnight and are clipped, so no bar sits outside the plot.

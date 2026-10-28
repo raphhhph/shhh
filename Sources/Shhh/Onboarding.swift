@@ -122,8 +122,7 @@ private struct OnboardingView: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(colors: [Color(red: 0.05, green: 0.06, blue: 0.08), Color(red: 0.09, green: 0.1, blue: 0.13)],
-                           startPoint: .top, endPoint: .bottom)
+            Color(red: 0.07, green: 0.08, blue: 0.1)
                 .ignoresSafeArea()
             VStack(spacing: 18) {
                 ZStack {
@@ -174,25 +173,15 @@ private struct OnboardingView: View {
 
 // MARK: - Pieces
 
-/// Joe's star, glowing and turning slowly.
+/// Joe's star: one flat colour, still. No glow or wobble (the calm style, docs/handoff/05).
 private struct Star: View {
     var size: CGFloat = 96
 
     var body: some View {
-        TimelineView(.animation) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
-            ZStack {
-                Circle()
-                    .fill(RadialGradient(colors: [Tint.glow.opacity(0.55), .clear], center: .center, startRadius: 0, endRadius: size * 1.4))
-                    .frame(width: size * 2.8, height: size * 2.8)
-                    .scaleEffect(1 + 0.08 * sin(t * 1.6))
-                Image(systemName: "sparkle")
-                    .font(.system(size: size, weight: .semibold))
-                    .foregroundStyle(LinearGradient(colors: [Color(red: 1, green: 0.75, blue: 0.35), Tint.accent], startPoint: .top, endPoint: .bottom))
-                    .rotationEffect(.degrees(sin(t * 0.8) * 8))
-                    .scaleEffect(1 + 0.04 * sin(t * 2.2))
-            }
-        }
+        Image(systemName: "sparkle")
+            .font(.system(size: size * 0.7, weight: .semibold))
+            .foregroundStyle(Tint.accent)
+            .frame(width: size * 1.6, height: size * 1.6)
     }
 }
 

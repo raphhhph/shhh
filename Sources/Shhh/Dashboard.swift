@@ -389,7 +389,7 @@ private enum Look {
         default: .default
         }
     }
-    static let line = Color.primary.opacity(0.08)
+    static let line = Color.primary.opacity(0.06)
 
     private static func dynamic(light: (Double, Double, Double), dark: (Double, Double, Double)) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in
@@ -410,19 +410,19 @@ private struct Card<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        // The calm style: a plain title, no icon (`symbol` is kept for callers but not drawn).
+        VStack(alignment: .leading, spacing: 10) {
             if let title {
-                Label(title, systemImage: symbol ?? "circle")
-                    .font(.system(size: 13, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 12.5, weight: .semibold))
                     .foregroundStyle(.secondary)
-                    .labelStyle(TitleIconLabel())
             }
             content
         }
-        .padding(18)
+        .padding(16)
         .frame(maxWidth: .infinity, maxHeight: stretch ? .infinity : nil, alignment: .topLeading)
-        .background(Look.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Look.line))
+        .background(Look.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Look.line))
     }
 }
 
@@ -441,8 +441,8 @@ private struct PageTitle: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.system(size: 28, weight: .bold, design: Look.titleDesign))
-            if let subtitle { Text(subtitle).font(.system(size: 14)).foregroundStyle(.secondary) }
+            Text(title).font(.system(size: 24, weight: .semibold, design: Look.titleDesign))
+            if let subtitle { Text(subtitle).font(.system(size: 13)).foregroundStyle(.secondary) }
         }
         .padding(.bottom, 6)
     }
@@ -577,7 +577,7 @@ private struct DashboardView: View {
         return Button { model.page = page; model.reload() } label: {
             HStack(spacing: 9) {
                 Image(systemName: page.symbol).font(.system(size: 13, weight: current ? .semibold : .regular)).frame(width: 18)
-                    .foregroundStyle(current ? Look.accent : .secondary)
+                    .foregroundStyle(current ? .primary : .secondary)
                 if !compact {
                     Text(page.title)
                     Spacer()
@@ -3255,11 +3255,10 @@ private struct Choice<Value: Hashable>: View {
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 12)
-            .frame(height: 28)
-            .background(Color.primary.opacity(0.06), in: Capsule())
-            .overlay(Capsule().strokeBorder(Look.line))
-            .contentShape(Capsule())
+            .padding(.horizontal, 10)
+            .frame(height: 26)
+            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
@@ -3275,14 +3274,13 @@ private struct PillButton: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 13, weight: .medium))
+            .font(.system(size: 12.5, weight: .medium))
             .foregroundStyle(prominent ? Color.white : destructive ? Color.red : Color.primary)
-            .padding(.horizontal, 14)
-            .frame(height: 28)
-            .background(prominent ? Look.accent : Color.primary.opacity(0.06), in: Capsule())
-            .overlay(Capsule().strokeBorder(prominent ? Color.clear : Look.line))
+            .padding(.horizontal, 12)
+            .frame(height: 26)
+            .background(prominent ? Look.accent : Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             .opacity(configuration.isPressed ? 0.7 : 1)
-            .contentShape(Capsule())
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 }
 
@@ -3291,10 +3289,10 @@ private extension View {
     func joeField() -> some View {
         textFieldStyle(.plain)
             .font(.system(size: 13))
-            .padding(.horizontal, 12)
-            .frame(height: 30)
-            .background(Color.primary.opacity(0.06), in: Capsule())
-            .overlay(Capsule().strokeBorder(Look.line))
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(Look.line))
     }
 }
 
@@ -3406,7 +3404,7 @@ private struct Segmented<Value: Hashable>: View {
                 let current = option.value == selection
                 Button { withAnimation(.easeOut(duration: 0.18)) { selection = option.value } } label: {
                     HStack(spacing: 6) {
-                        if index < symbols.count { Image(systemName: symbols[index]).foregroundStyle(current ? Look.accent : .secondary) }
+                        if index < symbols.count { Image(systemName: symbols[index]) }
                         Text(option.title)
                     }
                     .font(.system(size: large ? 13 : 12.5, weight: current ? .semibold : .medium))
@@ -3419,7 +3417,6 @@ private struct Segmented<Value: Hashable>: View {
                             RoundedRectangle(cornerRadius: large ? 8 : 6, style: .continuous)
                                 .fill(Look.card)
                                 .overlay(RoundedRectangle(cornerRadius: large ? 8 : 6, style: .continuous).strokeBorder(Look.line))
-                                .shadow(color: .black.opacity(0.06), radius: 2, y: 1)
                                 .matchedGeometryEffect(id: "raised", in: raised)
                         }
                     }

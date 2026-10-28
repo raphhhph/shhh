@@ -28,8 +28,9 @@ enum StudyToday {
         /// "due Fri 31 Oct", "due today", "overdue", or "exam tomorrow" for revision before an in-class exam.
         var due: String
         var done = false
-        /// Revision for an exam, not work towards an assignment.
-        var exam: Bool { due.hasPrefix("exam") }
+        /// Revision for an exam sat in class, not work towards an assignment: the line says
+        /// "revise for …" or "— exam tomorrow" (the planners' `Assessment` wording).
+        var exam = false
 
         var minutes: Int { max(0, Int(end.timeIntervalSince(start) / 60)) }
         /// "Paper 2 · 40m", for the notch chip.
@@ -69,9 +70,11 @@ enum StudyToday {
             subject = String(title[dot.upperBound...])
             title = String(title[..<dot.lowerBound])
         }
-        for prefix in ["get ahead on ", "revise for "] where title.hasPrefix(prefix) { title = String(title.dropFirst(prefix.count)) }
+        let revise = title.lowercased().hasPrefix("revise for ")
+        for prefix in ["get ahead on ", "revise for "] where title.lowercased().hasPrefix(prefix) { title = String(title.dropFirst(prefix.count)) }
+        let exam = revise || due.lowercased().hasPrefix("exam")
         return Block(start: start, end: end, label: label, title: title, subject: subject, due: due,
-                     done: (group(2) ?? " ").lowercased() == "x")
+                     done: (group(2) ?? " ").lowercased() == "x", exam: exam)
     }
 
     private static func time(_ text: String, on day: Date) -> Date? {

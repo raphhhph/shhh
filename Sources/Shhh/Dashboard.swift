@@ -2241,7 +2241,8 @@ private struct ProjectsCard: View {
 /// starts focus mode. Week.md's clash questions sit on top, and Re-plan rebuilds the plan.
 private struct WeekPage: View {
     @ObservedObject var model: DashboardModel
-    @Environment(\.narrow) private var narrow
+    /// Seven columns need the room (about 140 pt each); below that the days stack.
+    @Environment(\.wide) private var wide
     @State private var days: [Day] = []
     @State private var needs: [String] = []
     @State private var overdue: [StudyToday.Overdue] = []
@@ -2294,7 +2295,7 @@ private struct WeekPage: View {
                 }
             }
         }
-        if narrow {
+        if !wide {
             ForEach(days) { day in
                 Card(title: heading(day.date), symbol: Calendar.current.isDateInToday(day.date) ? "sun.max" : "calendar") {
                     column(day)
@@ -2372,7 +2373,8 @@ private struct WeekPage: View {
                         if block.exam {
                             Text("EXAM").font(.system(size: 9, weight: .bold)).foregroundStyle(Look.deadline)
                         }
-                        Text(block.title).font(.system(size: 12, weight: .semibold)).lineLimit(2)
+                        Text(block.title).font(.system(size: 12, weight: .semibold)).lineLimit(3)
+                            .fixedSize(horizontal: false, vertical: true)
                             .strikethrough(block.done).foregroundStyle(block.done ? .secondary : .primary)
                         Text([block.subject ?? "", block.due].filter { !$0.isEmpty }.joined(separator: " · "))
                             .font(.system(size: 10.5)).foregroundStyle(block.due.contains("overdue") ? Look.deadline : .secondary).lineLimit(2)
@@ -2384,7 +2386,7 @@ private struct WeekPage: View {
             .buttonStyle(.plain)
             .help(block.done ? "Done" : "Mark this block done")
             if isNext && !block.done {
-                Button { FocusSession.startPlannedBlock() } label: { Label("Start", systemImage: "play.fill") }
+                Button { FocusSession.startPlannedBlock() } label: { Label("Start", systemImage: "play.fill").fixedSize() }
                     .buttonStyle(PillButton(prominent: true))
             }
         }
@@ -2398,7 +2400,7 @@ private struct WeekPage: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(time).font(.system(size: 10.5, weight: .semibold).monospacedDigit())
                     .foregroundStyle(red ? Look.deadline : .secondary)
-                Text(title).font(.system(size: 12)).lineLimit(2)
+                Text(title).font(.system(size: 12)).lineLimit(3)
                 if !detail.isEmpty {
                     Text(detail).font(.system(size: 10.5)).foregroundStyle(red ? Look.deadline : .secondary).lineLimit(1)
                 }

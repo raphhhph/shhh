@@ -107,12 +107,15 @@ enum StudyToday {
         blocks(now).first { !$0.done && $0.end > now }
     }
 
-    /// Today's five's overdue lines, not ticked yet.
+    /// Overdue lines anywhere in today's Daybook (Today's five, and Backlog when the five were full),
+    /// boxed or plain, not ticked yet.
     static func overdue() -> [Overdue] {
         guard Daybook.isCurrent, let url = Daybook.url, let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
         return text.components(separatedBy: "\n").compactMap { line -> Overdue? in
-            guard line.hasPrefix("- [ ]"), let mark = line.range(of: " — overdue since ") else { return nil }
-            let title = String(line[line.index(line.startIndex, offsetBy: 6)..<mark.lowerBound])
+            guard line.hasPrefix("- "), !line.lowercased().hasPrefix("- [x]"),
+                  let mark = line.range(of: #"\s[—–-]\s*overdue since "#, options: [.regularExpression, .caseInsensitive]) else { return nil }
+            var title = String(line[line.index(line.startIndex, offsetBy: 2)..<mark.lowerBound])
+            if title.hasPrefix("[ ] ") { title = String(title.dropFirst(4)) }
             let rest = line[mark.upperBound...]
             let since = rest.components(separatedBy: " · ").first ?? ""
             var link: URL?
@@ -121,5 +124,19 @@ enum StudyToday {
             }
             return Overdue(line: line, title: title, since: since, link: link)
         }
+        .reduce(into: [Overdue]()) { found, item in
+            if !found.contains(where: { Daybook.sameTask($0.title, item.title) }) { found.append(item) } // in the five and Backlog once
+        }
+    }
+
+    /// "May 2028": the exam session onboarding suggests (IBSetup, PR #27): the next May for DP2,
+    /// the May after for DP1. A copy of that rule until the two branches meet.
+    static func suggestedExamSession(programme: String, now: Date = Date()) -> String {
+        let calendar = Calendar.current
+        let year = calendar.component(.year, from: now), month = calendar.component(.month, from: now)
+        let nextMay = month < 5 ? year : year + 1 // as IBSetup.sessions: this May only before May
+        let lower = programme.lowercased()
+        let second = lower.contains("dp2") || lower.contains("year 2")
+        return "May \(second ? nextMay : nextMay + 1)"
     }
 }

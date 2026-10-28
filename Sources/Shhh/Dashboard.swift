@@ -255,7 +255,10 @@ final class DashboardModel: ObservableObject {
     func toggle(_ line: String) {
         guard let url = Daybook.url, var text = try? String(contentsOf: url, encoding: .utf8),
               let range = text.range(of: line) else { return }
-        let flipped = line.hasPrefix("- [ ]") ? "- [x]" + line.dropFirst(5) : "- [ ]" + line.dropFirst(5)
+        // A plain Backlog line ("- ESS Topic 2.2 — overdue since …") gets a ticked box.
+        let flipped = line.hasPrefix("- [ ]") ? "- [x]" + line.dropFirst(5)
+            : line.lowercased().hasPrefix("- [x]") ? "- [ ]" + line.dropFirst(5)
+            : "- [x] " + line.dropFirst(2)
         text.replaceSubrange(range, with: flipped)
         try? text.write(to: url, atomically: true, encoding: .utf8)
         loadDaybook()
@@ -3653,7 +3656,7 @@ private struct SettingsPage: View {
     @ViewBuilder private var school: some View {
         section("Your IB", "graduationcap") {
             profileRow("Programme", "IB Diploma, year 1 (DP1), or MYP", $profileProgramme, "IB Diploma, year 1")
-            profileRow("Exam session", "When your final exams are", $examSession, "May 2027")
+            profileRow("Exam session", "When your final exams are", $examSession, StudyToday.suggestedExamSession(programme: profileProgramme))
             profileRow("Subjects", "With HL or SL: Joe’s quizzes, plans and daily question use these", $profileSubjects, "Math AI HL, ESS SL…", last: true)
         }
         section("School calendar", "calendar") {

@@ -38,13 +38,30 @@ enum Vocabulary {
                 terms.append(line)
             }
         }
-        var text = text
+        var text = ibTerms(text)
         for (heard, written) in swaps {
             let pattern = #"(?<![\w])"# + NSRegularExpression.escapedPattern(for: heard) + #"(?![\w])"#
             text = text.replacingOccurrences(of: pattern, with: NSRegularExpression.escapedTemplate(for: written),
                                              options: [.regularExpression, .caseInsensitive])
         }
         return terms.isEmpty ? text : fix(text, terms: terms)
+    }
+
+    /// IB words the speech model hears as ordinary ones: "cast entry" is a CAS entry, "manage back"
+    /// is ManageBac. Words like "cast" are only changed next to an IB word, so "cast a spell" stays.
+    private static let ibSwaps: [(pattern: String, written: String)] = [
+        (#"\bcast(\s+(?:entry|entries|reflections?|experiences?|projects?|hours?|activity|activities|portfolio|coordinator|advisor|log|evidence|journal|outcomes?|requirements?|interviews?|stuff|form|page)\b)"#, "CAS$1"),
+        (#"\b(my|for|on|the|a|in|of|and|do|doing|did)\s+cast(\s+(?:on|in)\s+manage ?ba(?:c|ck|g)\b)"#, "$1 CAS$2"),
+        (#"\bmanage ?ba(?:c|ck|g)\b"#, "ManageBac"),
+        (#"\b(my|the|an|our|bio|chem|physics|math|maths|econ|history|english|science)\s+(?:ia|i\.a\.)(?=[^\w]|$)"#, "$1 IA"),
+        (#"\b(?:tok|t\.o\.k\.)(\s+(?:essay|exhibition|class|lesson|prompt|presentation|teacher|title)\b)"#, "TOK$1"),
+        (#"\bee(\s+(?:draft|supervisor|deadline|topic|research|question|meeting)\b)"#, "EE$1"),
+    ]
+
+    private static func ibTerms(_ text: String) -> String {
+        ibSwaps.reduce(text) { text, swap in
+            text.replacingOccurrences(of: swap.pattern, with: swap.written, options: [.regularExpression, .caseInsensitive])
+        }
     }
 
     /// Replaces runs of one to three words that sound like a term: the same letters give or take one

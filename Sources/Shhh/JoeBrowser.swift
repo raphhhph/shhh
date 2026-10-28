@@ -128,29 +128,34 @@ enum JoeBrowser {
     /// checked against its published hash), chrome-devtools-mcp (about 30 MB) and, without Chrome,
     /// Brave or Edge, Chrome for Testing (about 150 MB download). One line back.
     static func prepare() async -> String {
-        if node != nil, script != nil, browsersCLI != nil, chrome != nil { return "Joe's browser is ready." + (isEnabled ? "" : " It's off in Settings.") }
+        if node != nil, script != nil, chrome != nil { return "Joe's browser is ready." + (isEnabled ? "" : " It's off in Settings.") }
         if node == nil || npmScript == nil, let failure = await downloadNode() { return failure }
         guard let node, let npm = npmScript else { return "Couldn't set up Node for Joe's browser." }
         try? FileManager.default.createDirectory(at: prefix, withIntermediateDirectories: true)
-        if script == nil || browsersCLI == nil {
+        if script == nil {
             let (ok, output) = shell(node, [npm, "install", "--silent", "--no-fund", "--no-audit", "--prefix", prefix.path,
-                                            "chrome-devtools-mcp@latest", "@puppeteer/browsers@latest"])
+                                            "chrome-devtools-mcp@latest"])
             guard ok, script != nil else { return "Couldn't install chrome-devtools-mcp:\n\(output.suffix(600))" }
         }
         if chrome == nil {
             // No Chrome, Brave or Edge: Google's Chrome for Testing, kept inside Joe's folder.
-            // Google's servers are blocked in mainland China, so its mirror is tried as well.
-            guard let cli = browsersCLI else { return "Couldn't install the Chrome downloader." }
+            // Google's servers are blocked or slow in mainland China, so npmmirror's copy is tried
+            // first. The download resumes where the last try stopped, so running setup again continues it.
             let versions = await chromeVersions()
             guard !versions.isEmpty else { return "Couldn't find out which Chrome to download (no answer from Google or its China mirror)." }
             var output = ""
-            for version in versions {
-                for base in chromeMirrors where chrome == nil {
-                    let result = shell(node, [cli, "install", "chrome@\(version)", "--base-url", base, "--path", ownChrome.path], timeout: 900)
-                    output += "\(version) from \(base): \(result.output.suffix(300))\n"
+            search: for version in versions {
+                for base in chromeMirrors {
+                    let url = "\(base)/\(version)/\(chromePlatform)/chrome-\(chromePlatform).zip"
+                    guard exists(url) else { output += "\(version) isn't on \(base).\n"; continue }
+                    if let failure = downloadChrome(url, version: version) {
+                        output += "\(version) from \(base): \(failure)\n"
+                        continue
+                    }
+                    break search
                 }
             }
-            guard chrome != nil else { return "Couldn't download Chrome for Joe's browser:\n\(output.suffix(900))" }
+            guard chrome != nil else { return "Couldn't download Chrome for Joe's browser (run setup again to continue):\n\(output.prefix(900))" }
         }
         // The first version's profile was Vivaldi's, which hangs when hidden: to the Trash.
         if FileManager.default.fileExists(atPath: oldProfile.appendingPathComponent("Default/AdBlockRules").path) {
@@ -163,6 +168,45 @@ enum JoeBrowser {
     /// Raph is), then Google's own.
     private static let chromeMirrors = ["https://cdn.npmmirror.com/binaries/chrome-for-testing",
                                         "https://storage.googleapis.com/chrome-for-testing-public"]
+
+    private static var chromePlatform: String {
+        #if arch(arm64)
+        "mac-arm64"
+        #else
+        "mac-x64"
+        #endif
+    }
+
+    /// Whether a download is there (a HEAD request, 15 s).
+    private static func exists(_ url: String) -> Bool {
+        shell("/usr/bin/curl", ["-sfIL", "--max-time", "15", "-o", "/dev/null", url], timeout: 20).ok
+    }
+
+    /// Downloads a Chrome for Testing zip with curl, resuming a partial file and retrying a dropped
+    /// connection, then unpacks it into Joe's folder. nil when it worked, otherwise why not.
+    private static func downloadChrome(_ url: String, version: String) -> String? {
+        let partial = prefix.appendingPathComponent("chrome-\(version)-\(chromePlatform).zip")
+        let (ok, output) = shell("/usr/bin/curl", ["-fL", "-sS", "--retry", "30", "--retry-delay", "3", "--retry-all-errors",
+                                                   "--speed-limit", "1000", "--speed-time", "60", "-C", "-", "-o", partial.path, url],
+                                 timeout: 3 * 3600)
+        // Stopped part way: kept for the next try. (A file that was already whole makes curl fail
+        // too, so it's unpacked anyway when it's big enough.)
+        let size = (try? FileManager.default.attributesOfItem(atPath: partial.path)[.size] as? Int) ?? 0
+        guard ok || size > 100_000_000 else {
+            return "download stopped at \(size / 1_000_000) MB (\(output.trimmingCharacters(in: .whitespacesAndNewlines).prefix(300)))"
+        }
+        let folder = ownChrome.appendingPathComponent(version, isDirectory: true)
+        try? FileManager.default.removeItem(at: folder)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let unzip = shell("/usr/bin/ditto", ["-x", "-k", partial.path, folder.path], timeout: 600)
+        guard unzip.ok, chrome != nil else {
+            if ok { try? FileManager.default.removeItem(at: partial) } // whole but broken: start over next time
+            try? FileManager.default.removeItem(at: folder)
+            return "the download didn't unpack (\(unzip.output.prefix(300)))"
+        }
+        try? FileManager.default.removeItem(at: partial)
+        return nil
+    }
 
     /// Chrome for Testing versions to try: Google's current stable, then the newest on npmmirror
     /// (which may lag Google's by a day). 15 s each.
@@ -186,12 +230,6 @@ enum JoeBrowser {
         return found
     }
 
-    /// Puppeteer's browser downloader, with npm's .bin link resolved.
-    private static var browsersCLI: String? {
-        let link = prefix.appendingPathComponent("node_modules/.bin/browsers").path
-        guard FileManager.default.fileExists(atPath: link) else { return nil }
-        return URL(fileURLWithPath: link).resolvingSymlinksInPath().path
-    }
 
     /// Downloads and unpacks Joe's own Node, or says why it couldn't.
     private static func downloadNode() async -> String? {

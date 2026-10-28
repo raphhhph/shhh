@@ -123,6 +123,8 @@ enum IBSetup {
         case .tokExhibition: 330
         case .io: 150
         case .cas: 30
+        // Kinds added later (uni applications): a deadline months before the exams.
+        default: 120
         }
     }
 

@@ -23,6 +23,7 @@ Alarms, timers and reminders, the wake-up challenge, routines (spoken phrases th
 - A snoozed alarm is a one-off copy, even when the original repeats.
 - Wake-up streak (`AlarmClock.countWakeUp`, `wakeStreak`/`wakeStreakDay` in UserDefaults): mornings in a row the challenge was passed without a snooze; a toast from 2 on. A snooze or a challenge left to ring out resets it; a day with no alarm (weekend) doesn't.
 - Stopping a "Focus…" timer starts a 5-minute break: a gentle "Break over: back to it" reminder (the Focus wrap-up in AppDelegate still asks what got done).
+- An alarm with "question(s)" or "quiz" in its title ("Wake up: school questions") is stopped only by questions from their subjects, two right answers in a row (`AlarmClock.wantsQuestions`). Set for Raph's volleyball tournament, 29 to 31 Oct 2026, at 7:05.
 - After a snooze, the challenge is always a question (answering beats reading half asleep).
 - Reading check: Chinese characters count one by one, and only when the recogniser wrote Chinese; otherwise only the English words of a fact are checked.
 - Night shutdown's default routine checks there's a wake-up alarm for tomorrow and offers one about an hour before the first class.

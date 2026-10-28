@@ -355,6 +355,16 @@ final class AlarmClock {
         guard let challenge = model.challenge else { return false }
         model.heard = heard
         if challenge.check(heard) {
+            // A "questions" alarm wants two right answers before it stops.
+            if questionsLeft > 1 {
+                questionsLeft -= 1
+                model.challenge = challenge.another()
+                model.feedback = "Right. One more."
+                model.heard = nil
+                DispatchQueue.main.async { [weak self] in self?.fitPanel() }
+                quiet(false)
+                return false
+            }
             model.challenge = nil
             let streak = Self.countWakeUp(snoozed: snoozedThisMorning)
             stop()
@@ -372,6 +382,14 @@ final class AlarmClock {
     }
 
     private var misses = 0
+    /// Right answers still needed before the ringing challenge stops it.
+    private var questionsLeft = 0
+
+    /// An alarm titled with "questions" ("Wake up: school questions") is stopped only by answering
+    /// questions from their subjects, two of them, never by reading a verse or a fact.
+    static func wantsQuestions(_ alarm: Alarm) -> Bool {
+        alarm.title.range(of: #"\bquestions?\b|\bquiz\b"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
 
     /// Mornings in a row the challenge was passed without a snooze (a snooze starts it again).
     /// Counted once a morning; a day with no wake-up alarm doesn't break it (weekends).
@@ -478,11 +496,14 @@ final class AlarmClock {
         if challenge {
             let seed = WakeChallenge.nextRing()
             var next = WakeChallenge.today(seed: seed)
-            // Back from a snooze: a question to answer, not something to read half asleep.
-            for extra in 1...2 where snoozedThisMorning && next.kind != .question { next = WakeChallenge.today(seed: seed + extra) }
+            // Back from a snooze, or a "questions" alarm: a question to answer, not something to read half asleep.
+            let questions = Self.wantsQuestions(alarm)
+            for extra in 1...2 where (snoozedThisMorning || questions) && next.kind != .question { next = WakeChallenge.today(seed: seed + extra) }
             model.challenge = next
+            questionsLeft = questions ? 2 : 1
         } else {
             model.challenge = nil
+            questionsLeft = 0
         }
         model.feedback = nil
         model.heard = nil

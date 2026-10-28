@@ -315,7 +315,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         overview.start()
         // ManageBac and Google calendar links: read at launch and every half hour.
         Task { await CalendarFeed.refreshLinks() }
-        let calendarLinks = Timer(timeInterval: 1800, repeats: true) { _ in Task { await CalendarFeed.refreshLinks() } }
+        let calendarLinks = Timer(timeInterval: 1800, repeats: true) { _ in
+            Task {
+                await CalendarFeed.refreshLinks()
+                WeekPlan.buildIfSundayEvening() // next week's plan, once, on Sunday evening
+            }
+        }
         RunLoop.main.add(calendarLinks, forMode: .common)
         let alarmTicks = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {

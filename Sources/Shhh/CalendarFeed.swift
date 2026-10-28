@@ -16,6 +16,8 @@ enum CalendarFeed {
         var kind: Kind
         /// For a deadline: the class it's for ("Economics HL"), when Joe can tell.
         var subject: String?
+        /// For a deadline from a link: its page (ManageBac's task), when the feed gives one.
+        var url: String?
         var id: String { "\(kind.rawValue) \(start.timeIntervalSince1970) \(title)" }
     }
 
@@ -230,8 +232,21 @@ extension CalendarFeed {
             return Item(title: title, detail: entry["detail"] ?? "", start: start, end: entry["end"].flatMap(icsDate),
                         allDay: startText.count == 8, kind: deadline ? .deadline : .event,
                         subject: deadline && subjects ? subject(of: title, notes: entry["notes"] ?? "", category: entry["category"] ?? "",
-                                                                at: startText.count == 8 ? nil : start) : nil)
+                                                                at: startText.count == 8 ? nil : start) : nil,
+                        url: entry["url"] ?? link(in: entry["notes"] ?? ""))
         }
+    }
+
+    /// The first web link in a feed item's notes, if any.
+    private static func link(in notes: String) -> String? {
+        notes.range(of: #"https?://[^\s<>"]+"#, options: .regularExpression).map { String(notes[$0]) }
+    }
+
+    /// The ManageBac site from their link ("https://swis.managebac.cn"), for "Open ManageBac".
+    static var manageBacHome: String? {
+        links.lazy.compactMap { URL(string: $0.replacingOccurrences(of: "webcal://", with: "https://"))?.host }
+            .first(where: { $0.contains("managebac") })
+            .map { "https://\($0)" }
     }
 
     /// VEVENTs from an iCal file: title, start, end, where, notes; ManageBac's are deadlines, and so
@@ -270,6 +285,7 @@ extension CalendarFeed {
             case "DESCRIPTION": if !value.isEmpty { current?["notes"] = String(value.prefix(300)) }
             case "CATEGORIES": if !value.isEmpty { current?["category"] = value }
             case "UID": current?["uid"] = value
+            case "URL": if value.hasPrefix("http") { current?["url"] = value }
             case "STATUS": current?["status"] = value.uppercased()
             case "RRULE": current?["rrule"] = value
             case "RECURRENCE-ID": current?["recurrence"] = normalized(raw, zone: zone)
@@ -290,7 +306,7 @@ extension CalendarFeed {
             guard event["status"] != "CANCELLED", let title = event["title"], let start = event["start"], let first = icsDate(start) else { continue }
             let allDay = start.count == 8
             let length = event["end"].flatMap(icsDate).map { $0.timeIntervalSince(first) }
-            var item = event.filter { ["title", "detail", "notes", "category"].contains($0.key) }
+            var item = event.filter { ["title", "detail", "notes", "category", "url"].contains($0.key) }
             item["kind"] = deadlines || title.range(of: due, options: [.regularExpression, .caseInsensitive]) != nil ? "deadline" : "event"
             if !source.isEmpty { item["source"] = source }
             guard let rule = event["rrule"] else {

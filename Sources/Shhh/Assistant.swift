@@ -102,6 +102,12 @@ final class Assistant {
         set { UserDefaults.standard.set(newValue, forKey: "joeHype") }
     }
 
+    /// The Claude in Chrome tools, when Joe's own browser isn't set up.
+    nonisolated static let chromeToolsNote = """
+        - Their Chrome browser (the Claude in Chrome tools), where they're already signed in to their \
+        sites. Read pages with get_page_text or find rather than screenshots: it's faster.
+        """
+
     /// Joe's hidden browser (JoeBrowser), when it's set up.
     nonisolated static var joeBrowserNotes: String { """
 
@@ -113,8 +119,8 @@ final class Assistant {
         times out, take_snapshot anyway: it's usually loaded enough. If the page is \
         already open in their browser, or Joe's browser fails, use --tab read/fill/click there instead. If a page asks them to \
         log in, stop and tell them to run "\(Bundle.main.executablePath ?? "Joe") --browser signin" once \
-        (or run it for them): it opens that browser to sign in, then they quit it. Use their Chrome (the \
-        Claude in Chrome tools) only when they want to see it happen or the task is in a tab they have open.
+        (or run it for them): it opens that browser to sign in, then they quit it. Never ask them to \
+        approve each click: clicking and typing there is free; only sending, submitting or deleting asks.
         """ }
 
     /// Their school's rules on AI, so Joe helps instead of refusing on their behalf.
@@ -488,7 +494,12 @@ final class Session {
             "--system-prompt", Self.systemPrompt(effort, autonomy: autonomy, instructions: instructions.text, vault: vault),
         ]
         // Joe's hidden browser, for web errands that shouldn't take over their screen.
-        if let browser = JoeBrowser.mcpConfig { process.arguments! += ["--mcp-config", browser] }
+        // With it, the Claude in Chrome tools go: Raph's browser is Vivaldi, so they only ever asked
+        // to connect, and Joe's own browser or --tab does the job.
+        if let browser = JoeBrowser.mcpConfig {
+            process.arguments! += ["--mcp-config", browser]
+            process.arguments!.removeAll { $0 == "--chrome" }
+        }
         if let tutor {
             // Tutoring: their notes and Joe's PDF tools only, nothing else loaded.
             process.arguments = [
@@ -1150,9 +1161,7 @@ final class Session {
         You can use:
         - The web (WebSearch, WebFetch).
         - Their connected accounts, such as Gmail, Google Calendar, Google Drive and Docs, and their \
-        notes vault if one is connected. Load these tools with ToolSearch.
-        - Their Chrome browser (the Claude in Chrome tools), where they're already signed in to their \
-        sites. Read pages with get_page_text or find rather than screenshots: it's faster.
+        notes vault if one is connected. Load these tools with ToolSearch.\(JoeBrowser.isReady ? "" : "\n" + Assistant.chromeToolsNote)
         - Their browser's tabs, without touching the screen: "\(Bundle.main.executablePath ?? "Joe")" --tab open <url> [<url>…] \
         opens pages in their browser in the background (they keep working in the app in front), --tab find "<words>" \
         and --tab list read the open tabs' titles and addresses, --tab show "<words>" makes that tab the current one. \
@@ -1309,8 +1318,8 @@ struct ToolPolicy {
         return Action(key: "chrome:\(level)", verdict: .allow, title: title)
     }
 
-    /// `Joe --tab fill|click "<tab>" <uid>`: typing is free in Hands-off; a click is judged by the
-    /// element `--tab read` named, like a click in Joe's browser.
+    /// `Joe --tab fill|click "<tab>" <uid>`: judged by the element `--tab read` named, like a click
+    /// in Joe's browser.
     private func tabAction(_ words: [String]) -> Action {
         let typing = words[2] == "fill"
         let label = JoeBrowser.element(words.count > 4 ? words[4] : nil).trimmingCharacters(in: .whitespaces)
@@ -1318,11 +1327,13 @@ struct ToolPolicy {
             return Action(key: "tab:money", verdict: .block, title: "Spend money in the browser")
         }
         let title = (typing ? "Type in your browser" : "Click in your browser") + (label.isEmpty ? "" : ": \(label)")
-        guard autonomy == .handsOff else { return Action(key: "tab:\(words[2])", verdict: .ask, title: title) }
+        // Like Joe's own browser: filling and clicking are free in any mode; sending, submitting,
+        // deleting, and adding or saving on a graded ManageBac page ask.
         let pattern = typing ? Self.submitPattern : Self.outwardPattern
-        if (!typing && label.isEmpty) || label.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
-            || (!typing && label.range(of: #"\b(add|save|post|create|done|finish|ok)\b"#, options: [.regularExpression, .caseInsensitive]) != nil && label.hasPrefix("button")) {
-            let page = JoeBrowser.page(words.count > 4 ? words[4] : nil)
+        let page = JoeBrowser.page(words.count > 4 ? words[4] : nil)
+        let gradedPage = page.lowercased().contains("managebac") && !JoeBrowser.isUngraded(page)
+        if label.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+            || (!typing && (gradedPage || page.isEmpty) && label.range(of: #"\b(add|save|create|done|finish)\b"#, options: [.regularExpression, .caseInsensitive]) != nil && label.hasPrefix("button")) {
             if !label.isEmpty, Self.mayFileAlone(label, on: page) {
                 return Action(key: "tab:ungraded", verdict: .allow, title: "\(title) (not graded, so Joe files it)")
             }
@@ -1381,12 +1392,14 @@ struct ToolPolicy {
         }
         let what = target.trimmingCharacters(in: .whitespaces)
         let title = (typing ? "Type in Joe's browser" : "Click in Joe's browser") + (what.isEmpty ? "" : ": \(what)")
-        guard autonomy == .handsOff else { return Action(key: "joe-browser:\(tool)", verdict: .ask, title: title) }
+        // Joe's browser is its own, out of sight, so clicking and typing there never ask, in any
+        // mode (Raph, 29 Oct: the cards defeated the point). Only what leaves the user's hands asks:
+        // sending, submitting, deleting, and adding or saving on a graded ManageBac page.
         let pattern = typing ? Self.submitPattern : Self.outwardPattern
-        // A click on an element no snapshot named can't be judged, so it asks.
-        if (!typing && what.isEmpty) || target.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
-            || (!typing && target.range(of: #"\b(add|save|post|create)\b"#, options: [.regularExpression, .caseInsensitive]) != nil && what.hasPrefix("button")) {
-            let page = JoeBrowser.page(input["uid"]).isEmpty ? JoeBrowser.currentPage : JoeBrowser.page(input["uid"])
+        let page = JoeBrowser.page(input["uid"]).isEmpty ? JoeBrowser.currentPage : JoeBrowser.page(input["uid"])
+        let gradedPage = page.lowercased().contains("managebac") && !JoeBrowser.isUngraded(page)
+        if target.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+            || (!typing && gradedPage && target.range(of: #"\b(add|save|create|done|finish)\b"#, options: [.regularExpression, .caseInsensitive]) != nil && what.hasPrefix("button")) {
             if !what.isEmpty, Self.mayFileAlone(what, on: page) {
                 return Action(key: "joe-browser:ungraded", verdict: .allow, title: "\(title) (not graded, so Joe files it)")
             }
@@ -1395,7 +1408,7 @@ struct ToolPolicy {
         return Action(key: "joe-browser:\(tool)", verdict: .allow, title: title)
     }
 
-    /// Submitting on a page where it isn't graded (a CAS reflection), in Hands-off: Joe goes ahead.
+    /// Submitting on a page where it isn't graded (a CAS reflection): Joe goes ahead.
     /// Deleting, sharing or messaging people still asks there.
     private static func mayFileAlone(_ label: String, on page: String) -> Bool {
         JoeBrowser.isUngraded(page) && label.range(of: #"\b(delete|deletes|remove|removes|trash|unsubscribe|sign out|log out|share|shares|invite|invites|send|sends|email|message|reply|forward|decline)\b"#,

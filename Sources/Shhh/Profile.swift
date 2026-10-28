@@ -23,6 +23,11 @@ enum Profile {
         get { defaults.string(forKey: "profileSubjects") ?? "" }
         set { defaults.set(newValue, forKey: "profileSubjects") }
     }
+    /// The IB exam session they sit, "May 2028" or "Nov 2027" (the welcome's Your IB step), or "".
+    static var examSession: String {
+        get { defaults.string(forKey: "profileExamSession") ?? "" }
+        set { defaults.set(newValue, forKey: "profileExamSession") }
+    }
     /// A business, club or project of theirs that matters to their days ("WellPrepped"), or "".
     static var project: String {
         get { defaults.string(forKey: "profileProject") ?? "" }
@@ -40,6 +45,7 @@ enum Profile {
         let who = [programme, school.isEmpty ? "" : "at \(school)"].filter { !$0.isEmpty }.joined(separator: " ")
         parts.append(who.isEmpty ? "They're a student." : "They're a student: \(who).")
         if !subjects.isEmpty { parts.append("Their subjects: \(subjects).") }
+        if !examSession.isEmpty { parts.append("They sit their IB exams in \(examSession).") }
         if !project.isEmpty { parts.append("Outside class they run \(project).") }
         return parts.joined(separator: " ")
     }

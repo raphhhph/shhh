@@ -68,7 +68,12 @@ final class Onboarding: NSObject, NSWindowDelegate {
 @MainActor
 final class OnboardingModel: ObservableObject {
     // The ManageBac link comes before School, so the subjects are already filled in from it.
-    enum Step: Int, CaseIterable { case hello, name, models, tour, connect, school, notes, morning, permissions, claude, tryIt, done }
+    // "Your IB" (exam session, EE, IAs, TOK) follows School, which it reads; MYP students skip it.
+    enum Step: Int, CaseIterable {
+        case hello, name, models, tour, connect, school
+        case yourIB
+        case notes, morning, permissions, claude, tryIt, done
+    }
 
     /// The step a first setup reached, so quitting halfway doesn't mean clicking through it all again.
     static var savedStep: Step {
@@ -78,12 +83,15 @@ final class OnboardingModel: ObservableObject {
 
     @Published var step: Step = .hello
     @Published var heard: String?
+    /// The tour's first page (the snapshot command draws the others with "tour2"…"tour4").
+    var tourPage = 0
     let actions: Onboarding.Actions
 
     init(actions: Onboarding.Actions) { self.actions = actions }
 
     func next() {
-        guard let following = Step(rawValue: step.rawValue + 1) else { return }
+        guard var following = Step(rawValue: step.rawValue + 1) else { return }
+        if following == .yourIB, !IBSetup.applies, let after = Step(rawValue: following.rawValue + 1) { following = after }
         if step == .tour { actions.narrate("", "") } // moving on: he stops mid-sentence
         withAnimation(.easeInOut(duration: 0.35)) { step = following }
         Self.savedStep = following
@@ -91,13 +99,16 @@ final class OnboardingModel: ObservableObject {
     }
 
     func back() {
-        guard let previous = Step(rawValue: step.rawValue - 1) else { return }
+        guard var previous = Step(rawValue: step.rawValue - 1) else { return }
+        if previous == .yourIB, !IBSetup.applies, let before = Step(rawValue: previous.rawValue - 1) { previous = before }
         withAnimation(.easeInOut(duration: 0.35)) { step = previous }
         Self.savedStep = previous
     }
 
     /// What Joe says at the notch as each step comes up.
     private func arrived() {
+        // The project notes chosen in Your IB, once there's a notes folder to put them in.
+        if step.rawValue > Step.notes.rawValue { IBSetup.createPendingProjects() }
         let name = Profile.name
         switch step {
         case .tryIt: actions.greet("Your turn", "Hold the right Option key and ask me something.")
@@ -133,6 +144,7 @@ private struct OnboardingView: View {
                     case .name: NameStep(model: model)
                     case .tour: TourStep(model: model)
                     case .school: SchoolStep(model: model)
+                    case .yourIB: IBStep(model: model)
                     case .notes: NotesStep(model: model)
                     case .morning: MorningStep(model: model)
                     case .connect: ConnectStep(model: model)
@@ -324,25 +336,31 @@ private struct NameStep: View {
     private var trimmed: String { name.trimmingCharacters(in: .whitespaces) }
 }
 
-/// Four things Joe does, each a short looping animation; they advance by themselves.
+/// "The IB, built into your Mac": four things Joe does, voice first, each a short looping
+/// animation; they advance by themselves as Joe talks over them.
 private struct TourStep: View {
     @ObservedObject var model: OnboardingModel
-    @State private var page = 0
+    @State private var page: Int
+
+    init(model: OnboardingModel) {
+        _model = ObservedObject(wrappedValue: model)
+        _page = State(initialValue: model.tourPage)
+    }
     /// What Joe says over each page: the feature, in his words.
     private var commentary: [String] {
         let name = Profile.name.isEmpty ? "" : ", \(Profile.name)"
         return [
-            "Nice to meet you\(name). First trick: hold right Command and just talk. Whatever you say lands wherever you're typing, punctuation and all. Essays, emails, the group chat. Your keyboard's about to get jealous.",
-            "This one's my favourite. Hold right Option and ask me anything. What's due tomorrow, find that worksheet, reply to your teacher. I answer up here at the notch, and if it's a job, I just do it.",
-            "Every morning I build your day for you: your classes, what's due on ManageBac, and the emails that actually need you. No more checking five apps before first period.",
-            "And the big stuff, like a formative or a slide deck, I take into the background and work through while you get on with your evening. I'll tell you when it's done.",
+            "Nice to meet you\(name). I'm built for the IB. First trick: hold right Command and just talk. Your words land wherever you're typing, punctuation and all. Talk your IA through out loud, then tidy it up. Your keyboard's about to get jealous.",
+            "This one's my favourite. Hold right Option and ask me anything. What's due tomorrow, find that Econ worksheet, email Ms Li about my EE. I answer up here at the notch, and if it's a job, I just do it.",
+            "Every morning I build your day: your classes, what's due on ManageBac, anything that slipped yesterday, and study blocks spread across the week, so no deadline sneaks up on you.",
+            "And the big ones: your Extended Essay, your IAs and TOK. I keep each on track with the IB's milestones, give you feedback on your drafts against the real criteria, and go through your marks with you. Just ask me how your EE is going.",
         ]
     }
     private let pages = [
-        ("Write with your voice", "Hold right ⌘ and talk. Your words appear wherever you’re typing, punctuated.", "command"),
-        ("Ask me anything", "Hold right ⌥ and ask. I answer at the notch, and I can do it for you.", "option"),
-        ("I run your day", "Every morning: your classes, what’s due, and the emails that need you.", "sun.max"),
-        ("Big jobs, in the background", "Hand me a formative or a deck. I work through it while you keep going.", "checklist"),
+        ("Talk, and it’s written", "Hold right ⌘ and talk: your IA, an email to your supervisor, the group chat. It lands where you’re typing, punctuated.", "command"),
+        ("Ask, and it’s done", "Hold right ⌥ and ask. What’s due, find that worksheet, plan my week: I answer at the notch, and I can do it for you.", "option"),
+        ("Your day, your deadlines", "Every morning: your classes, ManageBac deadlines, what’s overdue, and study blocks across the week.", "sun.max"),
+        ("Your EE and IAs, coached", "Each project from idea to submission: milestones, feedback on your drafts against the criteria, and mark reviews.", "graduationcap"),
     ]
 
     var body: some View {
@@ -361,6 +379,10 @@ private struct TourStep: View {
                     }
                     .id(page)
                     .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                }
+                .overlay(alignment: .topLeading) {
+                    Text("The IB, built into your Mac").font(.system(size: 11.5, weight: .semibold)).foregroundStyle(Tint.accent)
+                        .padding(.horizontal, 16).padding(.top, 13)
                 }
                 .frame(height: 300)
                 HStack(spacing: 8) {
@@ -412,7 +434,7 @@ private struct DictationDemo: View {
     var body: some View {
         TimelineView(.animation) { context in
             let t = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 4.5)
-            let sentence = "Dear Ms Marquardt, Tuesday works for me. Thank you!"
+            let sentence = "My IA asks how far the sugar tax changed what students drink."
             let typed = t < 0.6 ? 0 : min(sentence.count, Int((t - 0.6) * 22))
             HStack(spacing: 40) {
                 VStack(spacing: 16) {
@@ -426,7 +448,7 @@ private struct DictationDemo: View {
                     .frame(height: 34)
                 }
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Mail").font(.system(size: 12, weight: .semibold)).foregroundStyle(Tint.soft)
+                    Text("Economics IA.docx").font(.system(size: 12, weight: .semibold)).foregroundStyle(Tint.soft)
                     Text(sentence.prefix(typed) + (typed < sentence.count ? "▍" : ""))
                         .font(.system(size: 19)).frame(width: 340, height: 96, alignment: .topLeading)
                 }
@@ -446,8 +468,8 @@ private struct AskDemo: View {
                 // The top of a screen, with the notch dropping an answer.
                 VStack(alignment: .leading, spacing: 6) {
                     if open {
-                        Text("Econ quiz is Thursday").font(.system(size: 14, weight: .semibold))
-                        Text("Chapter 4 elasticity. I’ve added a 30-minute review to tomorrow.")
+                        Text("EE outline is due Friday").font(.system(size: 14, weight: .semibold))
+                        Text("Ms Li wants a narrower question. I’ve put 45 minutes on it tomorrow at 16:00.")
                             .font(.system(size: 12.5)).foregroundStyle(Tint.soft)
                     }
                 }
@@ -458,7 +480,7 @@ private struct AskDemo: View {
                 Spacer()
                 HStack(spacing: 14) {
                     KeyCap(label: "⌥", pressed: t > 0.2 && t < 1.2)
-                    Text(t < 1.2 ? "“When’s my Econ quiz?”" : " ").font(.system(size: 16)).foregroundStyle(Tint.soft)
+                    Text(t < 1.2 ? "“What’s next for my EE?”" : " ").font(.system(size: 16)).foregroundStyle(Tint.soft)
                 }
                 .padding(.bottom, 28)
             }
@@ -470,9 +492,9 @@ private struct DaybookDemo: View {
     var body: some View {
         TimelineView(.animation) { context in
             let t = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 4.5)
-            let tasks = ["Math AI homework, due 14:25", "Reply to Ms Marquardt", "ESS formative draft", "Volleyball, leave 15:00"]
+            let tasks = ["Overdue: ESS lab write-up", "Math AI homework, due 14:25", "Study block 16:00 · Econ Paper 1", "EE: Outline, due Friday"]
             VStack(alignment: .leading, spacing: 12) {
-                Text("Good morning · Monday, 3 classes").font(.system(size: 15, weight: .semibold))
+                Text("Good morning · Tuesday, 4 classes").font(.system(size: 15, weight: .semibold))
                 ForEach(Array(tasks.enumerated()), id: \.offset) { index, task in
                     let done = t > 1 + Double(index) * 0.8
                     HStack(spacing: 10) {
@@ -495,12 +517,12 @@ private struct ChecklistDemo: View {
     var body: some View {
         TimelineView(.animation) { context in
             let t = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 4.5)
-            let steps = ["Read the ESS task", "Answer questions 1–4", "Draw the food web", "Save it as a new doc"]
+            let steps = ["Read your EE draft, 3,412 words", "Check it against criteria A–E", "Find the weakest argument", "Feedback in your EE note"]
             let current = min(steps.count, Int(t / 1.0))
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     ProgressView().controlSize(.small).tint(Tint.accent)
-                    Text("\(min(current, steps.count))/\(steps.count) · \(steps[min(current, steps.count - 1)])")
+                    Text("\(min(current + 1, steps.count))/\(steps.count) · \(steps[min(current, steps.count - 1)])")
                         .font(.system(size: 13, weight: .semibold))
                 }
                 .padding(.horizontal, 14).frame(height: 34)
@@ -699,6 +721,198 @@ private struct SchoolStep: View {
 
     private func setLevel(_ subject: String, _ level: String) {
         save(chosen.map { $0.0 == subject ? ($0.0, level) : $0 })
+    }
+}
+
+/// "Your IB": the exam session, HL/SL (the School step's own list, `profileSubjects`), the EE, the
+/// IAs and IOs in progress, and TOK. On the way forward Joe makes a project note for each one not
+/// already tracked (`IBSetup`), dated from ManageBac where a deadline matches, else from the exam
+/// session. Skipped for MYP.
+private struct IBStep: View {
+    @ObservedObject var model: OnboardingModel
+    @AppStorage("profileSubjects") private var subjects = ""
+    @AppStorage("profileExamSession") private var session = ""
+    @AppStorage("ibTrackEE") private var trackEE = true
+    @AppStorage("ibEESubject") private var eeSubject = ""
+    @AppStorage("ibEESupervisor") private var supervisor = ""
+    @AppStorage("ibIASubjects") private var iaSubjects = ""
+    @AppStorage("ibTOKEssay") private var tokEssay = true
+    @AppStorage("ibTOKExhibition") private var tokExhibition = true
+    /// Project notes already in their folder: shown as tracked, never made again.
+    @State private var existing: [IBProjects.Project] = []
+
+    var body: some View {
+        StepFrame(model: model, title: "Your IB",
+                  subtitle: "Set up once: I’ll track your EE, IAs and TOK with the IB’s milestones, dated from your ManageBac deadlines.") {
+            HStack(alignment: .top, spacing: 14) {
+                VStack(alignment: .leading, spacing: 12) {
+                    box("calendar", "Exam session") {
+                        HStack(spacing: 10) {
+                            menu(session.isEmpty ? "Choose" : session, IBSetup.sessions()) { session = $0 }.frame(width: 150)
+                            Text("When you sit your final exams").font(.system(size: 12)).foregroundStyle(Tint.soft)
+                        }
+                    }
+                    box("books.vertical", "HL or SL") {
+                        let list = IBSetup.levels(subjects)
+                        if list.isEmpty {
+                            Text("No subjects yet: go back to Your school to pick them.").font(.system(size: 12.5)).foregroundStyle(Tint.soft)
+                        }
+                        ForEach(list, id: \.0) { item in
+                            HStack(spacing: 6) {
+                                Text(item.subject).font(.system(size: 12.5)).lineLimit(1)
+                                Spacer(minLength: 4)
+                                levelSwitch(item.subject, item.level)
+                            }
+                            .frame(height: 26)
+                        }
+                        if !list.isEmpty {
+                            let hl = list.filter { $0.level == "HL" }.count
+                            Text("\(hl) HL · \(list.count - hl) SL").font(.system(size: 11.5).monospacedDigit())
+                                .foregroundStyle((3...4).contains(hl) ? .green : Tint.soft)
+                        }
+                    }
+                }
+                .frame(width: 330)
+                VStack(alignment: .leading, spacing: 12) {
+                    box("doc.text", "Extended Essay") {
+                        if IBSetup.tracked(.ee, subject: "", in: existing) {
+                            tracked("Already tracked in your notes")
+                        } else {
+                            Toggle("Track my EE", isOn: $trackEE).font(.system(size: 13)).tint(Tint.accent)
+                            HStack(spacing: 10) {
+                                menu(eeSubject.isEmpty ? "Subject: not chosen yet" : eeSubject, ["Not chosen yet"] + names) {
+                                    eeSubject = $0 == "Not chosen yet" ? "" : $0
+                                }
+                                TextField("Supervisor (optional)", text: $supervisor)
+                                    .textFieldStyle(.plain).font(.system(size: 13))
+                                    .padding(.horizontal, 12).frame(height: 34)
+                                    .background(Tint.card, in: RoundedRectangle(cornerRadius: 9))
+                                    .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Tint.line))
+                            }
+                            .disabled(!trackEE)
+                            .opacity(trackEE ? 1 : 0.4)
+                        }
+                    }
+                    box("checklist", "In progress now") {
+                        if !names.isEmpty {
+                            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                                ForEach(names, id: \.self) { subject in courseworkChip(subject) }
+                            }
+                        }
+                        HStack(spacing: 8) {
+                            chip("TOK essay", on: tokEssay, done: IBSetup.tracked(.tokEssay, subject: "", in: existing)) { tokEssay.toggle() }
+                            chip("TOK exhibition", on: tokExhibition, done: IBSetup.tracked(.tokExhibition, subject: "", in: existing)) { tokExhibition.toggle() }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .onAppear {
+            existing = IBProjects.all()
+            if session.isEmpty { session = IBSetup.defaultSession() }
+            // First time here: the IAs and IOs ManageBac already has deadlines for.
+            if UserDefaults.standard.object(forKey: "ibIASubjects") == nil {
+                iaSubjects = IBSetup.suggestedIAs(names).joined(separator: "|")
+            }
+        }
+        .onDisappear(perform: save)
+    }
+
+    /// The subject names, without HL/SL.
+    private var names: [String] { IBSetup.levels(subjects).map { $0.subject } }
+
+    private var inProgress: [String] { iaSubjects.split(separator: "|").map(String.init) }
+
+    /// On the way forward only: the notes are made now, or after the Notes step when there's no folder yet.
+    private func save() {
+        guard model.step.rawValue > OnboardingModel.Step.yourIB.rawValue else { return }
+        if session.isEmpty { session = IBSetup.defaultSession() }
+        // Subjects removed on the School step since: not theirs any more.
+        iaSubjects = inProgress.filter { names.contains($0) }.joined(separator: "|")
+        if !eeSubject.isEmpty, !names.contains(eeSubject) { eeSubject = "" }
+        IBSetup.pending = true
+        IBSetup.createPendingProjects()
+    }
+
+    private func courseworkChip(_ subject: String) -> some View {
+        let kind = IBSetup.courseworkKind(subject)
+        let on = inProgress.contains(subject)
+        return chip("\(kind == .io ? "IO" : "IA") · \(subject)", on: on, done: IBSetup.tracked(kind, subject: subject, in: existing)) {
+            var list = inProgress
+            if on { list.removeAll { $0 == subject } } else { list.append(subject) }
+            iaSubjects = list.joined(separator: "|")
+        }
+    }
+
+    /// A toggle as a chip; a project already in their notes shows ticked and can't be switched off here.
+    private func chip(_ title: String, on: Bool, done: Bool, _ toggle: @escaping () -> Void) -> some View {
+        let lit = on || done
+        return Button { withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) { toggle() } } label: {
+            HStack(spacing: 6) {
+                Image(systemName: done ? "checkmark.circle.fill" : lit ? "checkmark" : "plus").font(.system(size: 11, weight: .bold))
+                Text(title).font(.system(size: 12.5, weight: lit ? .semibold : .regular)).lineLimit(1).minimumScaleFactor(0.8)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12).frame(height: 32)
+            .background(lit ? Tint.accent.opacity(0.2) : Tint.card, in: RoundedRectangle(cornerRadius: 9))
+            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(lit ? Tint.accent : Tint.line))
+            .foregroundStyle(done ? Color.green : lit ? Tint.accent : Color.white)
+        }
+        .buttonStyle(.plain)
+        .disabled(done)
+        .help(done ? "Already tracked in your notes" : "")
+    }
+
+    private func tracked(_ text: String) -> some View {
+        Label(text, systemImage: "checkmark.circle.fill").font(.system(size: 13)).foregroundStyle(.green)
+    }
+
+    private func levelSwitch(_ subject: String, _ level: String) -> some View {
+        HStack(spacing: 0) {
+            ForEach(["SL", "HL"], id: \.self) { option in
+                Button {
+                    subjects = IBSetup.joined(IBSetup.levels(subjects).map { item -> (subject: String, level: String) in
+                        item.subject == subject ? (item.subject, option) : item
+                    })
+                } label: {
+                    Text(option).font(.system(size: 10.5, weight: .bold))
+                        .frame(width: 28, height: 20)
+                        .background(level == option ? Tint.accent : .clear, in: RoundedRectangle(cornerRadius: 5))
+                        .foregroundStyle(level == option ? Color.black : Tint.soft)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(2)
+        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+    }
+
+    private func menu(_ label: String, _ options: [String], _ pick: @escaping (String) -> Void) -> some View {
+        Menu {
+            ForEach(options, id: \.self) { option in Button(option) { pick(option) } }
+        } label: {
+            HStack {
+                Text(label).font(.system(size: 13)).lineLimit(1)
+                Spacer()
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .bold)).foregroundStyle(Tint.soft)
+            }
+            .padding(.horizontal, 12).frame(height: 34)
+            .background(Tint.card, in: RoundedRectangle(cornerRadius: 9))
+            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Tint.line))
+        }
+        .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+    }
+
+    private func box<Content: View>(_ icon: String, _ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(title, systemImage: icon).font(.system(size: 13.5, weight: .semibold))
+            content()
+        }
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Tint.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Tint.line))
     }
 }
 
@@ -998,6 +1212,8 @@ private struct NotesStep: View {
         .onDisappear {
             // Moving on without choosing: the Joe folder, so notes and the Daybook work anyway.
             if Assistant.vaultURL == nil, model.step.rawValue > OnboardingModel.Step.notes.rawValue { makeFolder() }
+            // Now there's a folder: the EE, IA and TOK notes chosen in Your IB.
+            if model.step.rawValue > OnboardingModel.Step.notes.rawValue { IBSetup.createPendingProjects() }
         }
     }
 
@@ -1374,7 +1590,7 @@ private struct DoneStep: View {
 
     private var ready: [(String, Bool)] {
         let timetable = Daybook.timetableURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
-        return [
+        var list: [(String, Bool)] = [
             ("Speech recognition", ModelGuard.status(.speech) == .ready),
             ("My voice", ModelGuard.status(.voice) == .ready),
             ("ManageBac deadlines and events", !CalendarFeed.links.isEmpty),
@@ -1384,6 +1600,8 @@ private struct DoneStep: View {
             ("Notes folder", Assistant.vaultURL != nil),
             ("Gmail", ClaudeConnectors.has("gmail")),
         ]
+        if IBSetup.applies { list.insert(("EE, IA and TOK trackers", !IBProjects.all().isEmpty), at: 4) }
+        return list
     }
 }
 
@@ -1394,7 +1612,13 @@ extension Onboarding {
     @MainActor static func snapshot(step: String, to file: URL, done: @escaping () -> Void) {
         let model = OnboardingModel(actions: .init(greet: { _, _ in }, narrate: { _, _ in }, isSpeaking: { false },
                                                    prepareVoice: {}, download: { _ in }, chooseVault: {}, finished: {}))
-        model.step = OnboardingModel.Step.allCases.first { "\($0)" == step } ?? .hello
+        // "tour2"…"tour4": a later page of the tour (it only moves on by itself after Joe speaks).
+        var name = step
+        if step.hasPrefix("tour"), let page = Int(step.dropFirst(4)), (1...4).contains(page) {
+            model.tourPage = page - 1
+            name = "tour"
+        }
+        model.step = OnboardingModel.Step.allCases.first { "\($0)" == name } ?? .hello
         let view = NSHostingView(rootView: OnboardingView(model: model).environment(\.colorScheme, .dark))
         let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 960, height: 660), styleMask: [.borderless], backing: .buffered, defer: false)
         window.backgroundColor = NSColor(red: 0.055, green: 0.063, blue: 0.086, alpha: 1)

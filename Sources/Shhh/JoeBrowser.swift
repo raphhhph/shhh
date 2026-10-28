@@ -16,7 +16,9 @@ enum JoeBrowser {
     /// Where `npm install` puts chrome-devtools-mcp.
     private static var prefix: URL { support.appendingPathComponent("browser", isDirectory: true) }
     /// The browser's own profile: its cookies and sign-ins, apart from the user's own browser.
-    static var profile: URL { support.appendingPathComponent("Browser profile", isDirectory: true) }
+    static var profile: URL { support.appendingPathComponent("Joe browser profile", isDirectory: true) }
+    /// The first version's profile, made by Vivaldi (which hangs when hidden, so it's no longer used).
+    private static var oldProfile: URL { support.appendingPathComponent("Browser profile", isDirectory: true) }
 
     /// Node: Homebrew's, or Joe's own copy (a fresh Mac has neither Homebrew nor Node).
     private static var node: String? {
@@ -48,15 +50,24 @@ enum JoeBrowser {
         return URL(fileURLWithPath: link).resolvingSymlinksInPath().path
     }
 
-    /// Chromium browsers the server can drive (Chrome first: it's what it's tested with).
+    /// Chromium browsers the server can drive. Not Vivaldi: hidden, it never loads a page (28 Oct:
+    /// 40 s and nothing, where curl took 0.7 s). Without one of these, Joe uses its own Chrome
+    /// for Testing, which `prepare()` downloads.
     private static let browsers = [
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
         "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
         "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-        "/Applications/Vivaldi.app/Contents/MacOS/Vivaldi",
     ]
-    private static var chrome: String? { browsers.first(where: FileManager.default.isExecutableFile) }
-    /// A browser it can drive is installed (onboarding offers to get Chrome otherwise).
+    /// Where Joe's own Chrome for Testing goes (about 300 MB unpacked).
+    private static var ownChrome: URL { prefix.appendingPathComponent("chrome", isDirectory: true) }
+    private static var chrome: String? {
+        if let installed = browsers.first(where: FileManager.default.isExecutableFile) { return installed }
+        let found = FileManager.default.enumerator(at: ownChrome, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])?
+            .compactMap { $0 as? URL }
+            .first { $0.path.hasSuffix("Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing") }
+        return found?.path
+    }
+    /// A browser it can drive is ready (if not, `prepare()` downloads one).
     static var hasChrome: Bool { chrome != nil }
 
     /// Off in Settings, or until `Joe --browser setup` has installed the server.
@@ -105,8 +116,7 @@ enum JoeBrowser {
 
     private static func status() -> String {
         if !isEnabled { return "Joe's browser is off (Settings)." }
-        if chrome == nil { return "Joe's browser needs Google Chrome (or Brave, Edge or Vivaldi) in Applications." }
-        if node == nil || script == nil { return "Not set up yet: run Joe --browser setup." }
+        if chrome == nil || node == nil || script == nil { return "Not set up yet: run Joe --browser setup." }
         let signedIn = ["Default/Cookies", "Default/Network/Cookies"].contains {
             FileManager.default.fileExists(atPath: profile.appendingPathComponent($0).path)
         }
@@ -115,16 +125,36 @@ enum JoeBrowser {
     }
 
     /// Gets everything the hidden browser needs, if it's missing: Node (from nodejs.org, about 45 MB,
-    /// checked against its published hash) and chrome-devtools-mcp (about 30 MB). One line back.
+    /// checked against its published hash), chrome-devtools-mcp (about 30 MB) and, without Chrome,
+    /// Brave or Edge, Chrome for Testing (about 150 MB download). One line back.
     static func prepare() async -> String {
-        guard hasChrome else { return "Joe's browser needs Google Chrome (or Brave, Edge or Vivaldi): install it, then try again." }
-        if node != nil, script != nil { return "Joe's browser is ready." + (isEnabled ? "" : " It's off in Settings.") }
+        if node != nil, script != nil, browsersCLI != nil, chrome != nil { return "Joe's browser is ready." + (isEnabled ? "" : " It's off in Settings.") }
         if node == nil || npmScript == nil, let failure = await downloadNode() { return failure }
         guard let node, let npm = npmScript else { return "Couldn't set up Node for Joe's browser." }
         try? FileManager.default.createDirectory(at: prefix, withIntermediateDirectories: true)
-        let (ok, output) = shell(node, [npm, "install", "--silent", "--no-fund", "--no-audit", "--prefix", prefix.path, "chrome-devtools-mcp@latest"])
-        guard ok, script != nil else { return "Couldn't install chrome-devtools-mcp:\n\(output.suffix(600))" }
+        if script == nil || browsersCLI == nil {
+            let (ok, output) = shell(node, [npm, "install", "--silent", "--no-fund", "--no-audit", "--prefix", prefix.path,
+                                            "chrome-devtools-mcp@latest", "@puppeteer/browsers@latest"])
+            guard ok, script != nil else { return "Couldn't install chrome-devtools-mcp:\n\(output.suffix(600))" }
+        }
+        if chrome == nil {
+            // No Chrome, Brave or Edge: Google's Chrome for Testing, kept inside Joe's folder.
+            guard let cli = browsersCLI else { return "Couldn't install the Chrome downloader." }
+            let (ok, output) = shell(node, [cli, "install", "chrome@stable", "--path", ownChrome.path])
+            guard ok, chrome != nil else { return "Couldn't download Chrome for Joe's browser:\n\(output.suffix(600))" }
+        }
+        // The first version's profile was Vivaldi's, which hangs when hidden: to the Trash.
+        if FileManager.default.fileExists(atPath: oldProfile.appendingPathComponent("Default/AdBlockRules").path) {
+            try? FileManager.default.trashItem(at: oldProfile, resultingItemURL: nil)
+        }
         return "Joe's browser is set up." + (isEnabled ? "" : " It's off in Settings.")
+    }
+
+    /// Puppeteer's browser downloader, with npm's .bin link resolved.
+    private static var browsersCLI: String? {
+        let link = prefix.appendingPathComponent("node_modules/.bin/browsers").path
+        guard FileManager.default.fileExists(atPath: link) else { return nil }
+        return URL(fileURLWithPath: link).resolvingSymlinksInPath().path
     }
 
     /// Downloads and unpacks Joe's own Node, or says why it couldn't.

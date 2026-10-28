@@ -75,11 +75,12 @@ final class Dashboard: NSObject, NSWindowDelegate {
 @MainActor
 final class DashboardModel: ObservableObject {
     enum Page: String, CaseIterable, Identifiable {
-        case home, calendar, study, projects, history, routines, alarms, notes, dictionary, music, usage, settings
+        case home, week, calendar, study, projects, history, routines, alarms, notes, dictionary, music, usage, settings
         var id: String { rawValue }
         var title: String {
             switch self {
             case .home: "Home"
+            case .week: "Week"
             case .calendar: "Calendar"
             case .study: "Study"
             case .projects: "Projects"
@@ -96,6 +97,7 @@ final class DashboardModel: ObservableObject {
         var symbol: String {
             switch self {
             case .home: "house"
+            case .week: "calendar.day.timeline.left"
             case .calendar: "calendar"
             case .study: "graduationcap"
             case .projects: "flag.checkered"
@@ -465,6 +467,7 @@ private struct DashboardView: View {
                     LazyVStack(alignment: .leading, spacing: 18) {
                         switch model.page {
                         case .home: HomePage(model: model)
+                        case .week: WeekPage(model: model)
                         case .calendar: CalendarPage(model: model)
                         case .study: StudyPage(model: model)
                         case .projects: ProjectsPage(model: model)
@@ -483,7 +486,7 @@ private struct DashboardView: View {
                     .padding(.horizontal, content < 820 ? 24 : 40)
                     .padding(.top, 56) // clear of the window buttons, level with Joe in the sidebar
                     .padding(.bottom, 36)
-                    .frame(maxWidth: model.page == .calendar ? 1500 : 1060, alignment: .leading)
+                    .frame(maxWidth: model.page == .calendar || model.page == .week ? 1500 : 1060, alignment: .leading)
                     .frame(maxWidth: .infinity)
                 }
                 .ignoresSafeArea(.container, edges: .top) // or the title bar's height is added on top of the padding
@@ -498,7 +501,7 @@ private struct DashboardView: View {
     /// The pages in groups, like Linear's sidebar: your day, Joe's tools, and the app.
     /// What a student opens every day first; the rest folds under More.
     private static let groups: [(title: String?, pages: [DashboardModel.Page])] = [
-        (nil, [.home, .study, .projects, .calendar, .notes]),
+        (nil, [.home, .week, .study, .projects, .calendar, .notes]),
         ("More", [.routines, .alarms, .music, .dictionary, .history, .usage]),
     ]
     @AppStorage("sidebarMoreOpen") private var moreOpen = false
@@ -935,13 +938,13 @@ private struct StudyStrip: View {
         }
     }
 
-    /// Seven days from today, a dot per study block (filled once ticked). Opens Week.md.
+    /// Seven days from today, a dot per study block (filled once ticked). Opens the Week page.
     private var weekRow: some View {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
         let days = (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: today) }
         return Button {
-            if let url = WeekPlan.url { model.openInObsidian(url) }
+            model.page = .week
         } label: {
             HStack(spacing: 6) {
                 ForEach(days, id: \.self) { day in
@@ -966,7 +969,7 @@ private struct StudyStrip: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Open this week's plan")
+        .help("Open the week")
     }
 
     private func color(_ block: StudyToday.Block) -> Color {
@@ -2233,6 +2236,208 @@ private struct ProjectsCard: View {
 
 /// Every IB project (EE, IAs, TOK, IO, CAS) on one page: the list with progress and Start a
 /// project, then a card each with its milestones, supervisor meetings and next step.
+/// The week in Joe: seven days from today, each with its classes, events, deadlines, project
+/// milestones and Week.md's study blocks in time order. A block ticks when clicked; today's next one
+/// starts focus mode. Week.md's clash questions sit on top, and Re-plan rebuilds the plan.
+private struct WeekPage: View {
+    @ObservedObject var model: DashboardModel
+    @Environment(\.narrow) private var narrow
+    @State private var days: [Day] = []
+    @State private var needs: [String] = []
+    @State private var overdue: [StudyToday.Overdue] = []
+    @State private var next: StudyToday.Block?
+
+    struct Day: Identifiable {
+        var date: Date
+        var entries: [Entry]
+        var id: Date { date }
+    }
+
+    enum Entry: Identifiable {
+        case item(CalendarFeed.Item)
+        case block(StudyToday.Block)
+        var start: Date {
+            switch self { case let .item(item): item.start; case let .block(block): block.start }
+        }
+        var id: String {
+            switch self {
+            case let .item(item): item.id
+            case let .block(block): "block \(block.start.timeIntervalSince1970) \(block.title)"
+            }
+        }
+        /// All-day things (deadlines, milestones) first, then by time.
+        var allDay: Bool {
+            switch self { case let .item(item): item.allDay; case .block: false }
+        }
+    }
+
+    var body: some View {
+        PageTitle(title: "Week", subtitle: "Classes, events, deadlines and your study blocks for the next seven days.")
+        HStack(spacing: 8) {
+            Button { replan() } label: { Label("Re-plan week", systemImage: "arrow.triangle.2.circlepath") }
+                .buttonStyle(PillButton(prominent: true))
+            if let url = WeekPlan.url {
+                Button("Open in Obsidian") { model.openInObsidian(url) }.buttonStyle(PillButton())
+            }
+            Spacer()
+        }
+        .onAppear(perform: load)
+        if !needs.isEmpty {
+            Card(title: "Needs you", symbol: "questionmark.bubble") {
+                ForEach(needs, id: \.self) { line in
+                    HStack(spacing: 10) {
+                        Text(line).font(.system(size: 13)).lineLimit(3)
+                        Spacer(minLength: 8)
+                        Button("Settle") { model.actions.ask("Help me settle this in my week plan: \(line)") }
+                            .buttonStyle(PillButton())
+                    }
+                }
+            }
+        }
+        if narrow {
+            ForEach(days) { day in
+                Card(title: heading(day.date), symbol: Calendar.current.isDateInToday(day.date) ? "sun.max" : "calendar") {
+                    column(day)
+                }
+            }
+        } else {
+            HStack(alignment: .top, spacing: 8) {
+                ForEach(days) { day in
+                    let today = Calendar.current.isDateInToday(day.date)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(heading(day.date)).font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(today ? Look.accent : .secondary)
+                        column(day)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, minHeight: 320, alignment: .topLeading)
+                    .background(today ? Look.accent.opacity(0.06) : Look.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Look.line))
+                }
+            }
+        }
+    }
+
+    private func heading(_ date: Date) -> String {
+        Calendar.current.isDateInToday(date) ? "Today" : date.formatted(.dateTime.weekday(.abbreviated).day())
+    }
+
+    @ViewBuilder private func column(_ day: Day) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if Calendar.current.isDateInToday(day.date) {
+                ForEach(overdue, id: \.line) { item in
+                    row(color: Look.deadline, time: "Late", title: item.title, detail: "Overdue since \(item.since)", red: true)
+                }
+            }
+            ForEach(day.entries) { entry in
+                switch entry {
+                case let .item(item): itemRow(item)
+                case let .block(block): blockRow(block)
+                }
+            }
+            if day.entries.isEmpty && !(Calendar.current.isDateInToday(day.date) && !overdue.isEmpty) {
+                Text("Nothing planned").font(.system(size: 11.5)).foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private func itemRow(_ item: CalendarFeed.Item) -> some View {
+        let late = item.kind == .deadline && (IBProjects.isOverdue(item) || item.start < Date() && !item.allDay)
+        let color: Color = switch item.kind {
+        case .deadline: Look.deadline
+        case .lesson: SubjectGroup.of(item.title)?.color ?? .secondary
+        default: Look.personal
+        }
+        let time = item.allDay ? (item.kind == .deadline ? "Due" : "All day") : Daybook.hhmm(item.start)
+        let detail = item.kind == .lesson ? item.detail : (item.subject == "project" ? "Project" : item.subject ?? "")
+        return row(color: color, time: time, title: item.title, detail: late ? "Overdue" : detail, red: late || item.kind == .deadline)
+    }
+
+    private func blockRow(_ block: StudyToday.Block) -> some View {
+        let color = block.subject.flatMap { SubjectGroup.of($0)?.color } ?? SubjectGroup.of(block.title)?.color ?? Look.accent
+        let isNext = next.map { $0.start == block.start && $0.title == block.title } ?? false
+        return VStack(alignment: .leading, spacing: 5) {
+            Button {
+                guard !block.done else { return }
+                StudyLoop.markDone(block.title)
+                load()
+            } label: {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: block.done ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 12)).foregroundStyle(color)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("\(Daybook.hhmm(block.start))–\(Daybook.hhmm(block.end))")
+                            .font(.system(size: 10.5, weight: .semibold).monospacedDigit()).foregroundStyle(.secondary)
+                        Text(block.title).font(.system(size: 12, weight: .semibold)).lineLimit(2)
+                            .strikethrough(block.done).foregroundStyle(block.done ? .secondary : .primary)
+                        Text([block.subject ?? "", block.due].filter { !$0.isEmpty }.joined(separator: " · "))
+                            .font(.system(size: 10.5)).foregroundStyle(block.due.contains("overdue") ? Look.deadline : .secondary).lineLimit(2)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(block.done ? "Done" : "Mark this block done")
+            if isNext && !block.done {
+                Button { FocusSession.startPlannedBlock() } label: { Label("Start", systemImage: "play.fill") }
+                    .buttonStyle(PillButton(prominent: true))
+            }
+        }
+        .padding(7)
+        .background(color.opacity(block.done ? 0.05 : 0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func row(color: Color, time: String, title: String, detail: String, red: Bool) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            RoundedRectangle(cornerRadius: 1.5).fill(color).frame(width: 3)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(time).font(.system(size: 10.5, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(red ? Look.deadline : .secondary)
+                Text(title).font(.system(size: 12)).lineLimit(2)
+                if !detail.isEmpty {
+                    Text(detail).font(.system(size: 10.5)).foregroundStyle(red ? Look.deadline : .secondary).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func replan() {
+        WeekPlan.build()
+        load()
+    }
+
+    private func load() {
+        let calendar = Calendar.current
+        let now = Date()
+        let first = calendar.startOfDay(for: now)
+        guard let end = calendar.date(byAdding: .day, value: 7, to: first) else { return }
+        let items = CalendarFeed.items(from: first, days: 7).filter { $0.kind != .alarm }
+        let milestones = IBProjects.openMilestoneItems(now, through: end)
+            .filter { milestone in !items.contains { $0.kind == .deadline && CalendarFeed.sameThing($0.title, milestone.title) } }
+        let week = StudyToday.week()
+        days = (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: first) }.map { date in
+            var blocks = week.first { calendar.isDate($0.day, inSameDayAs: date) }?.blocks ?? []
+            if blocks.isEmpty && calendar.isDateInToday(date) { blocks = StudyToday.blocks(now) }
+            let things = (items + milestones).filter { calendar.isDate($0.start, inSameDayAs: date) }
+            let entries = things.map(Entry.item) + blocks.map(Entry.block)
+            return Day(date: date, entries: entries.sorted { a, b in
+                a.allDay != b.allDay ? a.allDay : a.start < b.start
+            })
+        }
+        let text = WeekPlan.url.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+        needs = Daybook.section("Needs you", of: text)
+            .map { $0.hasPrefix("- ") ? String($0.dropFirst(2)) : $0 }
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && $0 != "Nothing to settle." }
+        overdue = StudyToday.overdue()
+        next = StudyToday.next(now)
+    }
+}
+
 private struct ProjectsPage: View {
     @ObservedObject var model: DashboardModel
     @State private var projects: [IBProjects.Project] = []

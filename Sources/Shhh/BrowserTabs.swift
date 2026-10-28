@@ -18,7 +18,7 @@ enum BrowserTabs {
         case "find" where arguments.count >= 2: return find(arguments.dropFirst().joined(separator: " "))
         case "show" where arguments.count >= 2: return show(arguments.dropFirst().joined(separator: " "))
         case "read" where arguments.count >= 2: return read(arguments[1])
-        case "fill" where arguments.count >= 4: return fill(arguments[1], arguments[2], arguments[3...].joined(separator: " "))
+        case "fill" where arguments.count >= 4: return fill(arguments[1], arguments[2], arguments[3...].joined(separator: " ").replacingOccurrences(of: "\\n", with: "\n")) // "\n" typed in a shell argument
         case "click" where arguments.count >= 3: return click(arguments[1], arguments[2])
         case "allow-js": return allowJavaScriptByRestart(arguments.count >= 2 ? arguments[1...].joined(separator: " ") : "Vivaldi")
         default: return "Use: --tab open <url>… | list | find \"<words>\" | show \"<words>\" | read \"<words>\" | fill \"<words>\" <uid> \"<text>\" | click \"<words>\" <uid>"

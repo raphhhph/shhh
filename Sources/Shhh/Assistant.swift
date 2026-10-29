@@ -459,6 +459,8 @@ final class Session {
     private var calls: [String: String] = [:]
     private var lastAction: String?
     private let policy: ToolPolicy
+    /// The steps of the task in hand, so what finally worked is kept (`Lessons`).
+    private var trail = Lessons.Trail()
 
     var isRunning: Bool { !stopped && process.isRunning }
 
@@ -558,6 +560,7 @@ final class Session {
         turnStarted = Date()
         requestsSent += 1
         lastSent = request
+        trail.request(request)
         // The time it's sent, to the second: the system prompt is written once per conversation,
         // so a time there goes stale with every follow-up.
         let sent = Date().formatted(.dateTime.weekday(.wide).day().month(.wide).year().hour().minute().second())
@@ -735,6 +738,7 @@ final class Session {
         pending = []
         // A quiz mark in the reply goes to the quiz log (it's already hidden from the card).
         if answer.contains("<mark") { _ = StudyBuddy.record(answer) }
+        trail.finished()
         ScreenControl.shared.ended()
         onEvent(.approval(nil))
         onEvent(.status(nil))
@@ -768,17 +772,20 @@ final class Session {
             case "tool_use":
                 if let id = block["id"] as? String, let name = block["name"] as? String {
                     calls[id] = name
+                    trail.call(id: id, tool: name, input: block["input"] as? [String: Any] ?? [:])
                     if CreatedItems.isCreation(name) { creating[id] = name }
                 }
             case "tool_result":
-                guard let id = block["tool_use_id"] as? String, block["is_error"] as? Bool != true else { continue }
-                let name = calls.removeValue(forKey: id)
-                if let name, let action = Self.actionLabel(name) { lastAction = action }
+                guard let id = block["tool_use_id"] as? String else { continue }
                 let text: String = switch block["content"] {
                 case let string as String: string
                 case let parts as [[String: Any]]: parts.compactMap { $0["text"] as? String }.joined(separator: "\n")
                 default: ""
                 }
+                trail.result(id: id, text: text, isError: block["is_error"] as? Bool == true)
+                guard block["is_error"] as? Bool != true else { continue }
+                let name = calls.removeValue(forKey: id)
+                if let name, let action = Self.actionLabel(name) { lastAction = action }
                 if name?.hasPrefix("mcp__\(JoeBrowser.server)__") == true { JoeBrowser.remember(text) }
                 // `Joe --tab read`: its element lines (the page's own text is quoted with "| ").
                 if name == "Bash", text.contains("\nuid=t") {
@@ -1175,7 +1182,7 @@ final class Session {
         reflection: open it with --tab open if it isn't open, read, fill, tick, then click the save button. On \
         ManageBac CAS pages (not graded) Joe files it without asking in Hands-off; graded tasks always ask. If it says the browser doesn't let Joe work in pages yet, run --tab allow-js with that \
         browser (Joe asks them first) and carry on. Don't give up and offer a note instead: if one route fails, use this one.\(JoeBrowser.isReady ? Assistant.joeBrowserNotes : "")
-        When a connected account and the browser can both do something, use the account: it's much faster.\(ScreenControl.isEnabled ? Assistant.controlRules : "")\(music)\(alarms)\(messages)\(slides)\(Assistant.schoolWork)\(StudyBuddy.instructions)\(files)\(memory)\(habits)\(Assistant.personality)
+        When a connected account and the browser can both do something, use the account: it's much faster.\(ScreenControl.isEnabled ? Assistant.controlRules : "")\(music)\(alarms)\(messages)\(slides)\(Assistant.schoolWork)\(StudyBuddy.instructions)\(Lessons.instructions)\(files)\(memory)\(habits)\(Assistant.personality)
 
         \(permissions) If they decline, don't retry it. Write emails as Gmail drafts unless they clearly \
         ask you to send, and say the draft is in Gmail. Never spend money: no buying, paying, \
@@ -1488,7 +1495,7 @@ struct ToolPolicy {
             // Quits and reopens their browser: always asks.
             return Action(key: "tab:allow-js", verdict: .ask, title: "Restart your browser once so Joe can fill in pages (your tabs come back)")
         case "Bash" where Self.shellWords(input["command"] as? String ?? "").map({
-            $0.count >= 2 && $0[0] == Bundle.main.executablePath && ["--pdf-find", "--pdf-text", "--prereading", "--tab", "--browser", "--workspace", "--workspace-reset", "--spotify", "--alarm", "--slides", "--recap", "--plan", "--math-pdf", "--whatsapp", "--calendar-link"].contains($0[1]) }) == true:
+            $0.count >= 2 && $0[0] == Bundle.main.executablePath && ["--pdf-find", "--pdf-text", "--prereading", "--tab", "--browser", "--workspace", "--workspace-reset", "--spotify", "--alarm", "--slides", "--recap", "--plan", "--math-pdf", "--whatsapp", "--calendar-link", "--learn"].contains($0[1]) }) == true:
             return Action(key: "shhh-tools", verdict: .allow, title: "Use Joe's tools")
         case "Bash" where FileCommands.judge(input["command"] as? String ?? "",
                                              cwd: vault ?? FileManager.default.temporaryDirectory) != nil:
